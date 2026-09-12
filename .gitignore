@@ -1,0 +1,35 @@
+# 本地环境配置与凭据；保留可提交的配置模板
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# 编辑器与操作系统生成文件
+.idea/
+.vscode/
+.DS_Store
+._*
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# 前端依赖、构建产物与缓存
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Go 编译产物与临时目录，避免忽略 backend/cmd/server 源码
+/backend/bin/
+/backend/tmp/
+/backend/server
+/backend/server.exe
+*.test
+
+# 测试覆盖率、日志与进程文件
+coverage/
+/backend/coverage.out
+*.log
+*.pid
+*.pid.lock
