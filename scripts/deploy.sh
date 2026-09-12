@@ -34,13 +34,10 @@ if ! "$CHECK_ONLY" && ! "$SKIP_PULL"; then
 fi
 
 # 与本地启动保持相同顺序，backend/.env 覆盖根目录配置。
+# shellcheck source=scripts/load-env.sh
+source "$ROOT_DIR/scripts/load-env.sh"
 for env_file in "$ROOT_DIR/.env" "$ROOT_DIR/backend/.env"; do
-  if [ -f "$env_file" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$env_file"
-    set +a
-  fi
+  load_env_file "$env_file"
 done
 
 BUILD_CPU_COUNT="${BUILD_CPU_COUNT:-1}"

@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/load-env.sh
+source "$ROOT_DIR/scripts/load-env.sh"
 for env_file in "$ROOT_DIR/.env" "$ROOT_DIR/backend/.env"; do
-  if [ -f "$env_file" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$env_file"
-    set +a
-  fi
+  load_env_file "$env_file"
 done
 FRONTEND_PORT="${FRONTEND_PORT:-15680}"
 BACKEND_PORT="${BACKEND_PORT:-15681}"
