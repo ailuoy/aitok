@@ -8,6 +8,6 @@ ENV VITE_API_URL=/api
 RUN npm run build
 
 FROM nginx:1.29-alpine
-COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /build/dist /usr/share/nginx/html
 EXPOSE 80

@@ -27,7 +27,7 @@ bash scripts/deploy.sh --skip-pull
 
 部署只使用 `docker-compose.deploy.yml` 中的 `frontend`、`backend` 两个服务，不调用 `run-dev.sh`，不创建、启动、停止、迁移或备份数据库，也不操作数据库卷。现有数据库及表结构由外部准备。`DATABASE_URL` 必须是容器可访问的地址；如果数据库在宿主机上，可使用 `host.docker.internal`，不要用容器内的 `localhost`。脚本提供宿主机地址映射，但不会修改数据库监听或访问权限。
 
-前端默认发布 `15680`，Nginx 提供静态文件、页面路由回退以及 `/api/` 到后端的代理；浏览器始终使用同域 `/api`。Nginx 配置位于 `deploy/nginx.conf`，构建前端镜像时复制到容器的 `/etc/nginx/conf.d/default.conf`。后端默认发布到 `127.0.0.1:15681`，通过 `BACKEND_BIND_HOST` 调整绑定地址。已有域名反向代理指向前端 `15680` 即可，Stripe Webhook 仍使用 `https://你的域名/api/stripe/webhook`。开发服务和部署服务使用相同默认端口，不应同时占用这些端口。
+前端默认发布 `15680`，Web 容器的 Nginx 提供静态文件、页面路由回退以及 `/api/` 到后端的代理；浏览器始终使用同域 `/api`。Linux 宿主机的域名配置位于 `deploy/nginx.conf`，监听 `toktopup.com` 的 HTTP 80 端口并转发到本机 `15680`，安装方式见 [域名反向代理说明](deploy/README.md)。后端默认发布到 `127.0.0.1:15681`，通过 `BACKEND_BIND_HOST` 调整绑定地址。Stripe Webhook 使用 `https://toktopup.com/api/stripe/webhook`。开发服务和部署服务使用相同默认端口，不应同时占用这些端口。
 
 默认 `BUILD_CPU_COUNT=1`、`COMPOSE_PARALLEL_LIMIT=1`，BuildKit 内部串行执行构建任务。可在 `.env` 中调整，CPU 数变化时默认使用对应的新构建器。镜像构建成功后才更新容器，容器配置自动重启及日志轮转。脚本等待两项服务健康检查通过后报告成功，默认等待 120 秒，可通过 `DEPLOY_WAIT_TIMEOUT` 调整；健康检查只验证 HTTP 服务，不检查数据库表结构。启动失败时返回非零退出码，不自动回滚。
 
