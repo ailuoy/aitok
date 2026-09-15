@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,12 +82,16 @@ func walletTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	db.SetMaxOpenConns(1)
-	for _, file := range []string{"../../migrations/schema.sql", "../../migrations/001_wallet_and_renewals.sql", "../../migrations/002_payment_quantity_and_history.sql", "../../migrations/003_addresses.sql", "../../migrations/004_account_groups_and_login.sql", "../../migrations/005_bank_cards_and_address_owners.sql", "../../migrations/006_address_full_name.sql", "../../migrations/007_address_source_data.sql", "../../migrations/008_bank_card_platform_and_notes.sql"} {
+	files, err := filepath.Glob("../../migrations/[0-9][0-9][0-9]_*.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatal("未找到编号迁移", err)
+	}
+	for _, file := range files {
 		body, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
 		}
-		query := strings.ReplaceAll(string(body), "CREATE TABLE IF NOT EXISTS", "CREATE TEMP TABLE IF NOT EXISTS")
+		query := temporarySchemaSQL(string(body))
 		if _, err = db.Exec(query); err != nil {
 			t.Fatal(err)
 		}

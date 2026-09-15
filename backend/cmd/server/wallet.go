@@ -49,12 +49,12 @@ func (s *Server) walletDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var balance int64
-	if err = s.db.QueryRowContext(r.Context(), `SELECT balance FROM wallets WHERE user_id=$1`, id).Scan(&balance); err != nil {
+	if err = s.db.QueryRowContext(r.Context(), `SELECT balance FROM wallets WHERE user_id=$1 AND deleted_at IS NULL`, id).Scan(&balance); err != nil {
 		reply(w, map[string]string{"error": "读取余额失败"}, 500)
 		return
 	}
 	ledger := []ledgerEntry{}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT id,amount,balance_after,kind,description,created_at FROM wallet_ledger WHERE user_id=$1 ORDER BY id DESC LIMIT 100`, id)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT id,amount,balance_after,kind,description,created_at FROM wallet_ledger WHERE user_id=$1 AND deleted_at IS NULL ORDER BY id DESC LIMIT 100`, id)
 	if err != nil {
 		reply(w, map[string]string{"error": "读取钱包流水失败"}, 500)
 		return
@@ -73,7 +73,7 @@ func (s *Server) walletDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orders := []topupOrder{}
-	rows, err = s.db.QueryContext(r.Context(), `SELECT order_no,amount_minor,tokens,status,created_at,quantity,COALESCE(unit_amount_minor,amount_minor) FROM topup_orders WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100`, id)
+	rows, err = s.db.QueryContext(r.Context(), `SELECT order_no,amount_minor,tokens,status,created_at,quantity,COALESCE(unit_amount_minor,amount_minor) FROM topup_orders WHERE user_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100`, id)
 	if err != nil {
 		reply(w, map[string]string{"error": "读取充值订单失败"}, 500)
 		return
@@ -92,7 +92,7 @@ func (s *Server) walletDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	renewals := []renewalRecord{}
-	rows, err = s.db.QueryContext(r.Context(), `SELECT r.account_id,COALESCE(r.account_label,a.label,'已删除账号 #'||r.account_id::text),r.tokens,r.months,r.renewal_date::text,r.created_at,l.balance_after FROM account_renewals r LEFT JOIN chatgpt_accounts a ON a.id=r.account_id LEFT JOIN wallet_ledger l ON l.reference='renewal:'||r.user_id::text||':'||r.request_key WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 100`, id)
+	rows, err = s.db.QueryContext(r.Context(), `SELECT r.account_id,COALESCE(r.account_label,a.label,'已删除账号 #'||r.account_id::text),r.tokens,r.months,r.renewal_date::text,r.created_at,l.balance_after FROM account_renewals r LEFT JOIN chatgpt_accounts a ON a.id=r.account_id AND a.deleted_at IS NULL LEFT JOIN wallet_ledger l ON l.reference='renewal:'||r.user_id::text||':'||r.request_key AND l.deleted_at IS NULL WHERE r.deleted_at IS NULL AND r.user_id=$1 ORDER BY r.created_at DESC LIMIT 100`, id)
 	if err != nil {
 		reply(w, map[string]string{"error": "读取账号扣款记录失败"}, 500)
 		return

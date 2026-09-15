@@ -49,7 +49,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var exists bool
-	if err = s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chatgpt_accounts WHERE id=$1 AND user_id=$2)`, account, user).Scan(&exists); err != nil || !exists {
+	if err = s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND user_id=$2 AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL))`, account, user).Scan(&exists); err != nil || !exists {
 		unauthorized()
 		return
 	}
@@ -59,7 +59,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		c, err := s.readCard(r, user, id)
+		c, err := s.readCard(r, user, id, false)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -72,7 +72,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cards := []BankCard{}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards WHERE user_id=$1 ORDER BY id DESC LIMIT 500`, user)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards WHERE deleted_at IS NULL AND user_id=$1 ORDER BY id DESC LIMIT 500`, user)
 	if err != nil {
 		cardError(w, err)
 		return
@@ -93,7 +93,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addresses := []Address{}
-	rows, err = s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE user_id=$1 OR user_id IS NULL ORDER BY id DESC LIMIT 1000`, user)
+	rows, err = s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE deleted_at IS NULL AND (user_id=$1 OR user_id IS NULL) ORDER BY id DESC LIMIT 1000`, user)
 	if err != nil {
 		addressError(w, err)
 		return

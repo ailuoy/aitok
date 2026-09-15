@@ -31,11 +31,11 @@ func (s *Server) syncPayment(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	var sessionID sql.NullString
 	var status string
-	err = s.db.QueryRowContext(ctx, `SELECT session_id,status FROM topup_orders WHERE order_no=$1 AND user_id=$2`, parts[0], id).Scan(&sessionID, &status)
+	err = s.db.QueryRowContext(ctx, `SELECT session_id,status FROM topup_orders WHERE order_no=$1 AND deleted_at IS NULL AND user_id=$2`, parts[0], id).Scan(&sessionID, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		admin, adminErr := s.isAdmin(ctx, id)
 		if adminErr == nil && admin {
-			err = s.db.QueryRowContext(ctx, `SELECT session_id,status FROM topup_orders WHERE order_no=$1`, parts[0]).Scan(&sessionID, &status)
+			err = s.db.QueryRowContext(ctx, `SELECT session_id,status FROM topup_orders WHERE order_no=$1 AND deleted_at IS NULL`, parts[0]).Scan(&sessionID, &status)
 		}
 	}
 	if errors.Is(err, sql.ErrNoRows) {

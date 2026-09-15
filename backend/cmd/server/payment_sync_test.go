@@ -11,10 +11,14 @@ import (
 )
 
 func TestRestartPreservesToken(t *testing.T) {
+	db := walletTestDB(t)
+	if _, err := db.Exec(`INSERT INTO users(id,email,password_hash) VALUES(42,'restart@test.local','')`); err != nil {
+		t.Fatal(err)
+	}
 	key := []byte("same-persisted-key-before-and-after-restart")
 	before := &Server{secret: key}
 	token := before.token(42)
-	after := &Server{secret: append([]byte(nil), key...)}
+	after := &Server{db: db, secret: append([]byte(nil), key...)}
 	r := httptest.NewRequest("GET", "/api/me", nil)
 	r.Header.Set("Authorization", "Bearer "+token)
 	id, err := after.auth(r)
@@ -54,7 +58,7 @@ func TestPaymentQuantityAndReconciliation(t *testing.T) {
 	if provider.calls != 1 || *provider.params.LineItems[0].Quantity != 7 || *provider.params.LineItems[0].Price != "price_test_1" {
 		t.Fatal("数量或支付幂等处理错误")
 	}
-	if *provider.params.SuccessURL != s.billing.BaseURL+"/wallet?topup=success&order="+order || *provider.params.CancelURL != s.billing.BaseURL+"/wallet?topup=cancelled&order="+order {
+	if *provider.params.SuccessURL != s.billing.BaseURL+"/admin/wallet?topup=success&order="+order || *provider.params.CancelURL != s.billing.BaseURL+"/admin/wallet?topup=cancelled&order="+order {
 		t.Fatal("支付返回地址必须指向钱包并保留订单号")
 	}
 	wallet := call("GET", "/api/wallet", "", 1, 200)

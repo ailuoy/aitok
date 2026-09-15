@@ -5,6 +5,7 @@ import Dialog from './Dialog';
 import ProxyHistory from './ProxyHistory';
 import { formatUTC8 } from './time';
 import ProxyImport from './ProxyImport';
+import DataTable from './DataTable';
 
 export default function ProxyManager({ config, error: connectionError, refresh, onChange }) {
   const [editing, setEditing] = useState(null);
@@ -58,18 +59,19 @@ export default function ProxyManager({ config, error: connectionError, refresh, 
       {tested ? <p role="status" className={tested.result.ok && tested.result.matches ? 'proxy-result match' : 'proxy-result mismatch'}>{tested.result.ok ? `测试通过，出口 IP：${tested.result.exit_ip}（${tested.result.matches ? '与代理 IP 一致' : '与代理 IP 不一致'}），可以保存。` : tested.result.error}</p> : <p className="muted">请先测试当前配置，测试通过后才能保存。修改配置后需重新测试。</p>}
       <div className="browser-buttons"><button className="primary small" disabled={Boolean(busy) || !tested?.result.ok || !tested.test_token}>{busy === 'save' ? '保存中…' : '保存代理'}</button><button type="submit" value="test" className="outline small" disabled={Boolean(busy)}>{busy === 'draft-test' ? '测试中…' : '测试'}</button><button type="button" className="outline small" disabled={Boolean(busy)} onClick={() => { setEditing(null); setTested(null); }}>取消</button></div>
     </form>}
-    <div className="proxy-list">{config?.proxies.map(proxy => {
-      const result = proxy.last_test;
-      return <article className="proxy-card" key={proxy.id}>
-        <div className="proxy-details"><strong>{proxy.name}</strong><span className="muted">{proxy.host}:{proxy.port} · {proxy.username ? '用户名密码认证' : '无认证'}</span>
-          {result ? <div className={result.ok && result.matches ? 'proxy-result match' : 'proxy-result mismatch'} role="status">{result.ok ? <><b>出口 IP：{result.exit_ip}</b><span>{result.matches ? '与代理 IP 一致' : '与代理 IP 不一致'} · {result.latency_ms} ms</span><span>代理 IP：{result.proxy_ips.join(' / ')}</span></> : <b>{result.error}</b>}<small>{formatUTC8(result.tested_at)}</small></div> : <span className="muted">尚未测试</span>}
-        </div>
-        <div className="proxy-actions"><button className="outline small" onClick={() => setHistory(proxy)}>使用记录</button><button className="outline small" disabled={Boolean(busy)} onClick={() => action(proxy.id + ':test', '/proxies/' + proxy.id + '/test', { method: 'POST', body: {} })}>{busy === proxy.id + ':test' ? '测试中…' : '测试'}</button><button className="outline small" disabled={Boolean(busy)} onClick={() => action(proxy.id + ':ip', '/proxies/' + proxy.id + '/test', { method: 'POST', body: { action: 'get_ip' } })}>{busy === proxy.id + ':ip' ? '获取中…' : '获取 IP'}</button><button className="outline small" disabled={Boolean(busy)} onClick={() => edit(proxy)}>编辑</button><button className="text-btn danger" disabled={Boolean(busy)} onClick={() => { setDeleting(proxy); setError(''); }}>删除</button></div>
-      </article>;
-    })}</div>
+    {config && <DataTable label="SOCKS5 列表" className="proxy-table" columns={['名称', '主机 / 端口', '用户名', '出口 IP / 状态', '延迟', '上次测试（UTC+8）', '操作']} empty={!config.proxies.length && '还没有 SOCKS5 代理，添加后可在账号表格中选择。'}>
+      {config.proxies.map(proxy => {
+        const result = proxy.last_test;
+        return <tr className="proxy-row" key={proxy.id}>
+          <td className="table-text"><strong>{proxy.name}</strong></td><td className="table-mono">{proxy.host}:{proxy.port}</td><td className="table-text">{proxy.username || '无认证'}</td>
+          <td className="table-text">{result ? <div className={result.ok && result.matches ? 'proxy-result match' : 'proxy-result mismatch'} role="status">{result.ok ? <><b>{result.exit_ip}</b><span>{result.matches ? '与代理 IP 一致' : '与代理 IP 不一致'}</span><small>代理 IP：{result.proxy_ips.join(' / ')}</small></> : <b>{result.error}</b>}</div> : <span className="muted">尚未测试</span>}</td>
+          <td>{result?.ok ? result.latency_ms + ' ms' : '—'}</td><td>{formatUTC8(result?.tested_at)}</td>
+          <td className="table-actions"><div className="row-actions"><button className="outline small" onClick={() => setHistory(proxy)}>使用记录</button><button className="outline small" disabled={Boolean(busy)} onClick={() => action(proxy.id + ':test', '/proxies/' + proxy.id + '/test', { method: 'POST', body: {} })}>{busy === proxy.id + ':test' ? '测试中…' : '测试'}</button><button className="outline small" disabled={Boolean(busy)} onClick={() => action(proxy.id + ':ip', '/proxies/' + proxy.id + '/test', { method: 'POST', body: { action: 'get_ip' } })}>{busy === proxy.id + ':ip' ? '获取中…' : '获取 IP'}</button><button className="outline small" disabled={Boolean(busy)} onClick={() => edit(proxy)}>编辑</button><button className="text-btn danger" disabled={Boolean(busy)} onClick={() => { setDeleting(proxy); setError(''); }}>删除</button></div></td>
+        </tr>;
+      })}
+    </DataTable>}
     {importing && <ProxyImport onClose={() => setImporting(false)} onChange={onChange} />}
     {history && <ProxyHistory proxy={history.id ? history : null} onClose={() => setHistory(null)} />}
     {deleting && <Dialog title="删除代理" onClose={() => { if (!busy) setDeleting(null); }}><p>确认删除「{deleting.name}」？此操作无法撤销。</p>{error && <p className="error" role="alert">{error}</p>}<div className="browser-buttons"><button className="outline small danger" disabled={Boolean(busy)} onClick={() => action('delete', '/proxies/' + deleting.id, { method: 'DELETE' })}>{busy === 'delete' ? '删除中…' : '确认删除'}</button><button className="text-btn" disabled={Boolean(busy)} onClick={() => setDeleting(null)}>取消</button></div></Dialog>}
-    {config && config.proxies.length === 0 && <p className="empty muted">还没有 SOCKS5 代理，添加后可在账号卡片中选择。</p>}
   </section>;
 }

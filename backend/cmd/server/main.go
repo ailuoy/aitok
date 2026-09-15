@@ -75,6 +75,8 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/forgot-password", s.forgotPassword)
 	mux.HandleFunc("/api/reset-password", s.resetPassword)
 	mux.HandleFunc("/api/me", s.me)
+	mux.HandleFunc("/api/users", s.users)
+	mux.HandleFunc("/api/users/", s.users)
 	mux.HandleFunc("/api/accounts", s.accounts)
 	mux.HandleFunc("/api/accounts/", s.accountAction)
 	mux.HandleFunc("/api/bank-cards", s.bankCards)
@@ -125,7 +127,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id int64
-	err := s.db.QueryRowContext(r.Context(), `INSERT INTO users(email,password_hash) VALUES($1,$2) RETURNING id`, strings.ToLower(in.Email), hash(in.Password)).Scan(&id)
+	err := s.db.QueryRowContext(r.Context(), `INSERT INTO users(email,password_hash,role) VALUES($1,$2,'user') RETURNING id`, strings.ToLower(in.Email), hash(in.Password)).Scan(&id)
 	if err != nil {
 		reply(w, map[string]string{"error": "邮箱已注册或数据库不可用"}, 409)
 		return
@@ -155,7 +157,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id int64
-	if err := s.db.QueryRowContext(r.Context(), `SELECT id FROM users WHERE email=$1 AND password_hash=$2`, strings.ToLower(identity), hash(in.Password)).Scan(&id); err != nil {
+	if err := s.db.QueryRowContext(r.Context(), `SELECT id FROM users WHERE email=$1 AND deleted_at IS NULL AND password_hash=$2`, strings.ToLower(identity), hash(in.Password)).Scan(&id); err != nil {
 		reply(w, map[string]string{"error": "用户名、邮箱或密码错误"}, 401)
 		return
 	}
@@ -202,7 +204,7 @@ func (s *Server) issueCode(w http.ResponseWriter, r *http.Request, email, purpos
 		reply(w, map[string]string{"error": "邮件发送失败，请检查 Cloudflare 邮件配置及发件域名"}, 502)
 		return
 	}
-	_, err = s.db.ExecContext(r.Context(), `INSERT INTO email_codes(email,purpose,code,expires_at) VALUES($1,$2,$3,$4) ON CONFLICT(email,purpose) DO UPDATE SET code=EXCLUDED.code,expires_at=EXCLUDED.expires_at`, email, purpose, hash(code), time.Now().Add(time.Duration(minutes)*time.Minute))
+	_, err = s.db.ExecContext(r.Context(), `INSERT INTO email_codes(email,purpose,code,expires_at) VALUES($1,$2,$3,$4) ON CONFLICT(email,purpose) WHERE deleted_at IS NULL DO UPDATE SET code=EXCLUDED.code,expires_at=EXCLUDED.expires_at`, email, purpose, hash(code), time.Now().Add(time.Duration(minutes)*time.Minute))
 	if err != nil {
 		reply(w, map[string]string{"error": "验证码保存失败，请稍后重试"}, 500)
 		return
@@ -214,7 +216,7 @@ func (s *Server) verifyCode(email, purpose, code string) bool {
 		return false
 	}
 	// 一次性消费，避免同一验证码被重复使用。
-	result, err := s.db.Exec(`DELETE FROM email_codes WHERE email=$1 AND purpose=$2 AND code=$3 AND expires_at>NOW()`, strings.ToLower(strings.TrimSpace(email)), purpose, hash(code))
+	result, err := s.db.Exec(`UPDATE email_codes SET deleted_at=NOW() WHERE email=$1 AND purpose=$2 AND code=$3 AND deleted_at IS NULL AND expires_at>NOW()`, strings.ToLower(strings.TrimSpace(email)), purpose, hash(code))
 	if err != nil {
 		return false
 	}
@@ -228,9 +230,9 @@ func (s *Server) loginCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id int64
-	err := s.db.QueryRow(`SELECT id FROM users WHERE email=$1`, strings.ToLower(in.Email)).Scan(&id)
+	err := s.db.QueryRow(`SELECT id FROM users WHERE email=$1 AND deleted_at IS NULL`, strings.ToLower(in.Email)).Scan(&id)
 	if err == sql.ErrNoRows {
-		err = s.db.QueryRow(`INSERT INTO users(email,password_hash) VALUES($1,$2) RETURNING id`, strings.ToLower(in.Email), "").Scan(&id)
+		err = s.db.QueryRow(`INSERT INTO users(email,password_hash,role) VALUES($1,$2,'user') RETURNING id`, strings.ToLower(in.Email), "").Scan(&id)
 	}
 	if err != nil {
 		reply(w, map[string]string{"error": "登录失败"}, 500)
@@ -252,7 +254,7 @@ func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "验证码无效或密码不符合要求"}, 400)
 		return
 	}
-	_, e := s.db.Exec(`UPDATE users SET password_hash=$1 WHERE email=$2`, hash(in.Password), strings.ToLower(in.Email))
+	_, e := s.db.Exec(`UPDATE users SET password_hash=$1 WHERE email=$2 AND deleted_at IS NULL`, hash(in.Password), strings.ToLower(in.Email))
 	if e != nil {
 		reply(w, map[string]string{"error": "重置失败"}, 500)
 		return
@@ -286,6 +288,11 @@ func (s *Server) auth(r *http.Request) (int64, error) {
 	if _, e = fmt.Sscanf(string(b), "%d:%d", &id, &exp); e != nil || time.Now().Unix() > exp {
 		return 0, errors.New("expired")
 	}
+	// 软删除用户的旧令牌立即失效，所有受保护接口统一校验。
+	var active bool
+	if e = s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND deleted_at IS NULL)`, id).Scan(&active); e != nil || !active {
+		return 0, errors.New("unauthorized")
+	}
 	return id, nil
 }
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
@@ -295,7 +302,7 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var u User
-	if e = s.db.QueryRow(`SELECT id,email FROM users WHERE id=$1`, id).Scan(&u.ID, &u.Email); e != nil {
+	if e = s.db.QueryRow(`SELECT id,email,COALESCE(role,'') FROM users WHERE id=$1 AND deleted_at IS NULL`, id).Scan(&u.ID, &u.Email, &u.Role); e != nil {
 		if errors.Is(e, sql.ErrNoRows) {
 			reply(w, map[string]string{"error": "用户不存在，请重新登录"}, 401)
 			return
@@ -303,14 +310,14 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "服务暂时不可用，请稍后重试"}, 503)
 		return
 	}
-	u.Role = "user"
+	u.Role = userRole(u.Email, u.Role)
 	if u.Email == adminIdentity {
 		u.Email = ""
 		u.Username = s.admin.Username
 		u.Role = "super_admin"
 	}
 
-	as, err := s.listAccounts(r.Context(), id, u.Role == "super_admin")
+	as, err := s.listAccounts(r.Context(), id, u.Role == "super_admin" || u.Role == "admin")
 	if err != nil {
 		reply(w, map[string]string{"error": "读取账号失败，请确认数据库迁移已执行"}, 500)
 		return

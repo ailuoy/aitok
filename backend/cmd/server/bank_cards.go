@@ -16,16 +16,17 @@ import (
 )
 
 type BankCard struct {
-	ID         int64  `json:"id"`
-	Label      string `json:"label"`
-	Platform   string `json:"platform"`
-	Notes      string `json:"notes"`
-	Cardholder string `json:"cardholder"`
-	Number     string `json:"number,omitempty"`
-	Last4      string `json:"last4"`
-	Brand      string `json:"brand"`
-	ExpMonth   int    `json:"exp_month"`
-	ExpYear    int    `json:"exp_year"`
+	ID              int64  `json:"id"`
+	Label           string `json:"label"`
+	Platform        string `json:"platform"`
+	Notes           string `json:"notes"`
+	Cardholder      string `json:"cardholder"`
+	Number          string `json:"number,omitempty"`
+	Last4           string `json:"last4"`
+	Brand           string `json:"brand"`
+	ExpMonth        int    `json:"exp_month"`
+	ExpYear         int    `json:"exp_year"`
+	BalanceUSDMinor int64  `json:"balance_usd_minor"`
 }
 
 func (c *BankCard) normalize() bool {
@@ -75,11 +76,11 @@ func (c *BankCard) normalize() bool {
 	return true
 }
 
-const bankCardColumns = `id,label,cardholder,last4,brand,exp_month,exp_year,platform,notes`
+const bankCardColumns = `id,label,cardholder,last4,brand,exp_month,exp_year,platform,notes,balance_usd_minor`
 
 func scanBankCard(row interface{ Scan(...any) error }) (BankCard, error) {
 	var c BankCard
-	err := row.Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes)
+	err := row.Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.BalanceUSDMinor)
 	return c, err
 }
 func cardError(w http.ResponseWriter, err error) {
@@ -92,13 +93,17 @@ func cardError(w http.ResponseWriter, err error) {
 		reply(w, map[string]string{"error": "这张银行卡已添加"}, 409)
 		return
 	}
+	if errors.As(err, &pg) && pg.Code == "23503" {
+		reply(w, map[string]string{"error": "此卡已有对账记录，不能删除，请保留用于核对历史余额"}, 409)
+		return
+	}
 	reply(w, map[string]string{"error": "银行卡操作失败，请检查服务配置或稍后重试"}, 500)
 }
 
-func (s *Server) readCard(r *http.Request, user, id int64) (BankCard, error) {
+func (s *Server) readCard(r *http.Request, user, id int64, admin bool) (BankCard, error) {
 	var c BankCard
 	var encrypted string
-	err := s.db.QueryRowContext(r.Context(), `SELECT `+bankCardColumns+`,number_ciphertext FROM bank_cards WHERE user_id=$1 AND id=$2`, user, id).Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &encrypted)
+	err := s.db.QueryRowContext(r.Context(), `SELECT `+bankCardColumns+`,number_ciphertext FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND id=$2`, user, id, admin).Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.BalanceUSDMinor, &encrypted)
 	if err == nil {
 		c.Number, err = decryptSession(encrypted)
 	}
@@ -111,7 +116,21 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "请先登录"}, 401)
 		return
 	}
+	admin, err := s.isAdmin(r.Context(), user)
+	if err != nil {
+		reply(w, map[string]string{"error": "用户不存在"}, 401)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
+	if strings.HasSuffix(r.URL.Path, "/ledger") {
+		id, parseErr := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/bank-cards/"), "/ledger"), 10, 64)
+		if parseErr != nil || id < 1 {
+			http.NotFound(w, r)
+			return
+		}
+		s.bankCardLedger(w, r, user, id, admin)
+		return
+	}
 	var id int64
 	if r.URL.Path != "/api/bank-cards" {
 		id, err = strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/api/bank-cards/"), 10, 64)
@@ -130,13 +149,13 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "搜索或页码无效"}, 400)
 			return
 		}
-		const filter = ` WHERE user_id=$1 AND strpos(lower(concat_ws(' ',label,cardholder,last4,brand,platform,notes)),lower($2))>0`
+		const filter = ` WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND strpos(lower(concat_ws(' ',label,cardholder,last4,brand,platform,notes)),lower($2))>0`
 		var total int
-		if err = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM bank_cards`+filter, user, query).Scan(&total); err != nil {
+		if err = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM bank_cards`+filter, user, query, admin).Scan(&total); err != nil {
 			cardError(w, err)
 			return
 		}
-		rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT 20 OFFSET $3`, user, query, (page-1)*20)
+		rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT 20 OFFSET $4`, user, query, admin, (page-1)*20)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -156,8 +175,8 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rows.Close()
-		// 平台选项来自当前用户的全部银行卡，不受列表搜索和分页影响。
-		platformRows, err := s.db.QueryContext(r.Context(), `SELECT DISTINCT platform FROM bank_cards WHERE user_id=$1 AND platform<>'' ORDER BY platform`, user)
+		// 平台选项来自当前用户有权管理的全部银行卡，不受列表搜索和分页影响。
+		platformRows, err := s.db.QueryContext(r.Context(), `SELECT DISTINCT platform FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $2) AND platform<>'' ORDER BY platform`, user, admin)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -180,7 +199,7 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "GET" && id > 0 {
-		c, err := s.readCard(r, user, id)
+		c, err := s.readCard(r, user, id, admin)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -200,19 +219,40 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "银行卡加密未配置"}, 503)
 			return
 		}
+		owner := user
+		tx, err := s.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			cardError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		if id > 0 {
+			if err = tx.QueryRowContext(r.Context(), `SELECT user_id FROM bank_cards WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3) FOR UPDATE`, id, user, admin).Scan(&owner); err != nil {
+				cardError(w, err)
+				return
+			}
+		}
 		mac := hmac.New(sha256.New, s.secret)
-		mac.Write([]byte("bank-card:" + strconv.FormatInt(user, 10) + ":" + c.Number))
+		mac.Write([]byte("bank-card:" + strconv.FormatInt(owner, 10) + ":" + c.Number))
 		fingerprint := hex.EncodeToString(mac.Sum(nil))
-		args := []any{c.Label, c.Cardholder, encrypted, fingerprint, c.Last4, c.Brand, c.ExpMonth, c.ExpYear, user, c.Platform, c.Notes}
+		args := []any{c.Label, c.Cardholder, encrypted, fingerprint, c.Last4, c.Brand, c.ExpMonth, c.ExpYear, owner, c.Platform, c.Notes}
 		query := `INSERT INTO bank_cards(label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,user_id,platform,notes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING ` + bankCardColumns
 		status := 201
 		if id > 0 {
-			query = `UPDATE bank_cards SET label=$1,cardholder=$2,number_ciphertext=$3,number_fingerprint=$4,last4=$5,brand=$6,exp_month=$7,exp_year=$8,platform=$10,notes=$11,updated_at=NOW() WHERE user_id=$9 AND id=$12 RETURNING ` + bankCardColumns
+			query = `UPDATE bank_cards SET label=$1,cardholder=$2,number_ciphertext=$3,number_fingerprint=$4,last4=$5,brand=$6,exp_month=$7,exp_year=$8,platform=$10,notes=$11,updated_at=NOW() WHERE deleted_at IS NULL AND user_id=$9 AND id=$12 AND (number_fingerprint=$4 OR NOT EXISTS(SELECT 1 FROM bank_card_ledger WHERE card_id=$12)) RETURNING ` + bankCardColumns
 			args = append(args, id)
 			status = 200
 		}
-		saved, err := scanBankCard(s.db.QueryRowContext(r.Context(), query, args...))
+		saved, err := scanBankCard(tx.QueryRowContext(r.Context(), query, args...))
+		if id > 0 && errors.Is(err, sql.ErrNoRows) {
+			reply(w, map[string]string{"error": "银行卡已不存在，或已有对账记录不能更换卡号；新卡请单独添加"}, 409)
+			return
+		}
 		if err != nil {
+			cardError(w, err)
+			return
+		}
+		if err = tx.Commit(); err != nil {
 			cardError(w, err)
 			return
 		}
@@ -220,7 +260,7 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" && id > 0 {
-		result, err := s.db.ExecContext(r.Context(), `DELETE FROM bank_cards WHERE id=$1 AND user_id=$2`, id, user)
+		result, err := s.db.ExecContext(r.Context(), `UPDATE bank_cards SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
 		if err != nil {
 			cardError(w, err)
 			return

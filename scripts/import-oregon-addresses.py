@@ -82,7 +82,7 @@ def main():
     fields = list(addresses[0])
     quote = lambda value: "'" + (json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value).replace("'", "''") + "'"
     values = ",\n".join("(" + ",".join(quote(item[field]) for field in fields) + ")" for item in addresses)
-    conflict = """ON CONFLICT (lower(address_line1), lower(address_line2), lower(city), lower(state), lower(postal_code), country)
+    conflict = """ON CONFLICT (lower(address_line1), lower(address_line2), lower(city), lower(state), lower(postal_code), country) WHERE deleted_at IS NULL
 DO UPDATE SET full_name=EXCLUDED.full_name,source_data=EXCLUDED.source_data,source_key=EXCLUDED.source_key,updated_at=NOW()
 WHERE addresses.user_id IS NULL AND addresses.source_url=EXCLUDED.source_url
   AND addresses.full_name='' AND addresses.source_data='{}'::jsonb"""

@@ -53,7 +53,7 @@ func (s *Server) accountGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if r.Method == "GET" && id == 0 {
-		rows, err := s.db.QueryContext(r.Context(), `SELECT g.id,g.user_id,g.name,count(a.id) FROM account_groups g LEFT JOIN chatgpt_accounts a ON a.group_id=g.id WHERE g.user_id=$1 OR $2 GROUP BY g.id ORDER BY lower(g.name),g.id`, user, admin)
+		rows, err := s.db.QueryContext(r.Context(), `SELECT g.id,g.user_id,g.name,count(a.id) FROM account_groups g LEFT JOIN chatgpt_accounts a ON a.group_id=g.id AND a.deleted_at IS NULL WHERE g.deleted_at IS NULL AND (g.user_id=$1 OR $2) GROUP BY g.id ORDER BY lower(g.name),g.id`, user, admin)
 		if err != nil {
 			groupError(w, err)
 			return
@@ -101,9 +101,9 @@ func (s *Server) accountGroups(w http.ResponseWriter, r *http.Request) {
 		status := 200
 		if id == 0 {
 			status = 201
-			err = s.db.QueryRowContext(r.Context(), `INSERT INTO account_groups(user_id,name) SELECT id,$2 FROM users WHERE id=$1 RETURNING id,user_id,name`, in.UserID, in.Name).Scan(&g.ID, &g.UserID, &g.Name)
+			err = s.db.QueryRowContext(r.Context(), `INSERT INTO account_groups(user_id,name) SELECT id,$2 FROM users WHERE id=$1 AND deleted_at IS NULL RETURNING id,user_id,name`, in.UserID, in.Name).Scan(&g.ID, &g.UserID, &g.Name)
 		} else {
-			err = s.db.QueryRowContext(r.Context(), `UPDATE account_groups SET name=$1 WHERE id=$2 AND (user_id=$3 OR $4) RETURNING id,user_id,name`, in.Name, id, user, admin).Scan(&g.ID, &g.UserID, &g.Name)
+			err = s.db.QueryRowContext(r.Context(), `UPDATE account_groups SET name=$1 WHERE id=$2 AND deleted_at IS NULL AND (user_id=$3 OR $4) RETURNING id,user_id,name`, in.Name, id, user, admin).Scan(&g.ID, &g.UserID, &g.Name)
 		}
 		if err != nil {
 			groupError(w, err)
@@ -113,7 +113,13 @@ func (s *Server) accountGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" && id > 0 {
-		result, err := s.db.ExecContext(r.Context(), `DELETE FROM account_groups WHERE id=$1 AND (user_id=$2 OR $3)`, id, user, admin)
+		tx, err := s.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			groupError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		result, err := tx.ExecContext(r.Context(), `UPDATE account_groups SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
 		if err != nil {
 			groupError(w, err)
 			return
@@ -125,6 +131,14 @@ func (s *Server) accountGroups(w http.ResponseWriter, r *http.Request) {
 		}
 		if count == 0 {
 			http.NotFound(w, r)
+			return
+		}
+		if _, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET group_id=NULL WHERE group_id=$1 AND deleted_at IS NULL`, id); err != nil {
+			groupError(w, err)
+			return
+		}
+		if err = tx.Commit(); err != nil {
+			groupError(w, err)
 			return
 		}
 		w.WriteHeader(204)
@@ -148,9 +162,26 @@ func (s *Server) setAccountGroup(w http.ResponseWriter, r *http.Request, user, i
 		return
 	}
 	// 账号和目标分组须属于同一用户；管理员也不能跨用户绑定。
-	var groupID *int64
-	err = s.db.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts a SET group_id=$1 WHERE a.id=$2 AND (a.user_id=$3 OR $4) AND ($1::bigint IS NULL OR EXISTS (SELECT 1 FROM account_groups g WHERE g.id=$1 AND g.user_id=a.user_id)) RETURNING group_id`, in.GroupID, id, user, admin).Scan(&groupID)
+	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
+		groupError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	if in.GroupID != nil {
+		var groupOwner int64
+		if err = tx.QueryRowContext(r.Context(), `SELECT user_id FROM account_groups WHERE id=$1 AND deleted_at IS NULL FOR SHARE`, *in.GroupID).Scan(&groupOwner); err != nil {
+			groupError(w, err)
+			return
+		}
+	}
+	var groupID *int64
+	err = tx.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts a SET group_id=$1 WHERE a.id=$2 AND a.deleted_at IS NULL AND (a.user_id=$3 OR $4) AND ($1::bigint IS NULL OR EXISTS (SELECT 1 FROM account_groups g WHERE g.id=$1 AND g.deleted_at IS NULL AND g.user_id=a.user_id)) RETURNING group_id`, in.GroupID, id, user, admin).Scan(&groupID)
+	if err != nil {
+		groupError(w, err)
+		return
+	}
+	if err = tx.Commit(); err != nil {
 		groupError(w, err)
 		return
 	}
@@ -167,7 +198,7 @@ func (s *Server) recordAccountLogin(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	var at time.Time
-	err := s.db.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts SET last_login_at=GREATEST(last_login_at,$1) WHERE id=$2 AND user_id=$3 RETURNING last_login_at`, in.At, id, user).Scan(&at)
+	err := s.db.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts SET last_login_at=GREATEST(last_login_at,$1) WHERE id=$2 AND deleted_at IS NULL AND user_id=$3 RETURNING last_login_at`, in.At, id, user).Scan(&at)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return

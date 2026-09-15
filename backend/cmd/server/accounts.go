@@ -28,14 +28,8 @@ type Account struct {
 	LastLoginAt *time.Time `json:"last_login_at"`
 }
 
-func (s *Server) isAdmin(ctx context.Context, id int64) (bool, error) {
-	var email string
-	err := s.db.QueryRowContext(ctx, `SELECT email FROM users WHERE id=$1`, id).Scan(&email)
-	return email == adminIdentity, err
-}
-
 func (s *Server) listAccounts(ctx context.Context, id int64, admin bool) ([]Account, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.user_id,a.label,a.email,u.email,a.created_at,a.renewal_date::text,COALESCE(a.session_ciphertext,'')<>'',a.group_id,a.last_login_at FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id WHERE a.user_id=$1 OR $2 ORDER BY a.id DESC`, id, admin)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.user_id,a.label,a.email,u.email,a.created_at,a.renewal_date::text,COALESCE(a.session_ciphertext,'')<>'',a.group_id,a.last_login_at FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) ORDER BY a.id DESC`, id, admin)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +180,12 @@ func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(405)
 		return
 	}
-	result, err := s.db.ExecContext(r.Context(), `DELETE FROM chatgpt_accounts WHERE id=$1 AND user_id=$2`, aid, id)
+	admin, err := s.isAdmin(r.Context(), id)
+	if err != nil {
+		reply(w, map[string]string{"error": "用户不存在"}, 401)
+		return
+	}
+	result, err := s.db.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, aid, id, admin)
 	if err != nil {
 		reply(w, map[string]string{"error": "删除失败"}, 500)
 		return
@@ -202,7 +201,7 @@ func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
 func (s *Server) setRenewalDate(w http.ResponseWriter, r *http.Request, id, aid int64) {
 	admin, err := s.isAdmin(r.Context(), id)
 	if err != nil || !admin {
-		reply(w, map[string]string{"error": "仅超级管理员可以设置续订日期"}, 403)
+		reply(w, map[string]string{"error": "仅管理员可以设置续订日期"}, 403)
 		return
 	}
 	var in struct {
@@ -228,13 +227,13 @@ func (s *Server) setRenewalDate(w http.ResponseWriter, r *http.Request, id, aid 
 	}
 	defer tx.Rollback()
 	var previous sql.NullTime
-	err = tx.QueryRowContext(r.Context(), `SELECT renewal_date FROM chatgpt_accounts WHERE id=$1 FOR UPDATE`, aid).Scan(&previous)
+	err = tx.QueryRowContext(r.Context(), `SELECT renewal_date FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, aid).Scan(&previous)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return
 	}
 	if err == nil {
-		_, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET renewal_date=$1 WHERE id=$2`, date, aid)
+		_, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET renewal_date=$1 WHERE id=$2 AND deleted_at IS NULL`, date, aid)
 	}
 	if err == nil {
 		_, err = tx.ExecContext(r.Context(), `INSERT INTO renewal_date_audit(account_id,admin_id,previous_date,renewal_date) VALUES($1,$2,$3,$4)`, aid, id, previous, date)

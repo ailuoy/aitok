@@ -2,17 +2,17 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestAdminConfigAndRejectedCredentials(t *testing.T) {
+	t.Setenv("ADMIN_USERNAME", "")
+	t.Setenv("ADMIN_PASSWORD", "")
 	t.Setenv("SUPER_ADMIN_USERNAME", "")
 	t.Setenv("SUPER_ADMIN_PASSWORD", "")
 	if got := loadAdminConfig(); got.Username != "admin" || got.Password != "123456" {
@@ -93,25 +93,7 @@ func TestCloudflareMailer(t *testing.T) {
 
 // 仅创建当前连接的临时表，连接关闭后自动回收，不修改项目持久化数据。
 func TestAuthIntegration(t *testing.T) {
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("设置 TEST_DATABASE_URL 运行 PostgreSQL 集成测试")
-	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	for _, statement := range []string{
-		`CREATE TEMP TABLE users (id BIGSERIAL PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL)`,
-		`CREATE TEMP TABLE chatgpt_accounts (id BIGSERIAL PRIMARY KEY,user_id BIGINT,label TEXT,email TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),renewal_date DATE,session_ciphertext TEXT,group_id BIGINT,last_login_at TIMESTAMPTZ)`,
-		`CREATE TEMP TABLE email_codes (email TEXT,purpose TEXT,code TEXT,expires_at TIMESTAMPTZ,PRIMARY KEY(email,purpose))`,
-	} {
-		if _, err := db.Exec(statement); err != nil {
-			t.Fatal(err)
-		}
-	}
+	db := walletTestDB(t)
 	var deliveredCode string
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload struct{ Text string }

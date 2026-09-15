@@ -77,8 +77,8 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 	}
 	for _, method := range []string{"GET", "PATCH", "DELETE"} {
 		call(method, path, other, input, 404)
-		call(method, path, s.token(3), input, 404)
 	}
+	call("GET", path, s.token(3), input, 200)
 	list := call("GET", "/api/bank-cards?q=4242", token, nil, 200)
 	if list["total"] != float64(1) || strings.Contains(fmt.Sprint(list), "4242424242424242") {
 		t.Fatal("银行卡列表不正确")

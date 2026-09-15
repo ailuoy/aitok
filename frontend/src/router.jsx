@@ -1,5 +1,13 @@
 import React, { useSyncExternalStore } from 'react';
 
+export const adminPages = ['accounts', 'proxies', 'addresses', 'bank-cards', 'users', 'wallet'];
+export const adminPath = page => '/admin/' + page;
+export function canonicalAdminPath(path) {
+  if (path === '/admin' || path === '/admin/') return adminPath('accounts');
+  const page = path.replace(/^\//, '');
+  return adminPages.includes(page) ? adminPath(page) : path;
+}
+
 const snapshot = () => location.pathname + location.search + location.hash;
 function subscribe(listener) {
   window.addEventListener('popstate', listener);
@@ -29,7 +37,8 @@ export function Link({ to, children, onClick, ...props }) {
 
 export function loginDestination(route) {
   const next = route.searchParams.get('next');
-  if (!next || !next.startsWith('/') || next.startsWith('//')) return '/accounts';
+  if (!next || !next.startsWith('/') || next.startsWith('//')) return adminPath('accounts');
   const target = new URL(next, location.origin);
-  return ['/accounts', '/wallet', '/proxies', '/addresses', '/bank-cards'].includes(target.pathname) ? target.pathname + target.search : '/accounts';
+  const path = canonicalAdminPath(target.pathname);
+  return target.origin === location.origin && adminPages.some(page => adminPath(page) === path) ? path + target.search + target.hash : adminPath('accounts');
 }

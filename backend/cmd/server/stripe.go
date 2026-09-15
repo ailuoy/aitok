@@ -99,7 +99,7 @@ func (s *Server) createCheckout(w http.ResponseWriter, r *http.Request) {
 	var status string
 	var checkoutURL sql.NullString
 	var storedQuantity, unitAmount int64
-	err = s.db.QueryRowContext(r.Context(), `SELECT order_no,amount_minor,tokens,status,checkout_url,quantity,COALESCE(unit_amount_minor,amount_minor),COALESCE(price_id,'') FROM topup_orders WHERE user_id=$1 AND request_key=$2`, id, in.RequestKey).Scan(&orderNo, &amount, &tokens, &status, &checkoutURL, &storedQuantity, &unitAmount, &priceID)
+	err = s.db.QueryRowContext(r.Context(), `SELECT order_no,amount_minor,tokens,status,checkout_url,quantity,COALESCE(unit_amount_minor,amount_minor),COALESCE(price_id,'') FROM topup_orders WHERE deleted_at IS NULL AND user_id=$1 AND request_key=$2`, id, in.RequestKey).Scan(&orderNo, &amount, &tokens, &status, &checkoutURL, &storedQuantity, &unitAmount, &priceID)
 	if err != nil {
 		reply(w, map[string]string{"error": "读取订单失败"}, 500)
 		return
@@ -123,8 +123,8 @@ func (s *Server) createCheckout(w http.ResponseWriter, r *http.Request) {
 	}
 	params := &stripe.CheckoutSessionCreateParams{
 		Mode:              stripe.String("payment"),
-		SuccessURL:        stripe.String(s.billing.BaseURL + "/wallet?topup=success&order=" + orderNo),
-		CancelURL:         stripe.String(s.billing.BaseURL + "/wallet?topup=cancelled&order=" + orderNo),
+		SuccessURL:        stripe.String(s.billing.BaseURL + "/admin/wallet?topup=success&order=" + orderNo),
+		CancelURL:         stripe.String(s.billing.BaseURL + "/admin/wallet?topup=cancelled&order=" + orderNo),
 		ClientReferenceID: stripe.String(orderNo),
 		Metadata:          map[string]string{"app": "aitok", "order_no": orderNo, "user_id": strconv.FormatInt(id, 10)},
 		LineItems: []*stripe.CheckoutSessionCreateLineItemParams{{
@@ -138,7 +138,7 @@ func (s *Server) createCheckout(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "创建 Stripe 支付页面失败，请重试"}, 502)
 		return
 	}
-	_, err = s.db.ExecContext(r.Context(), `UPDATE topup_orders SET session_id=$1,checkout_url=$2 WHERE order_no=$3 AND status='pending'`, session.ID, session.URL, orderNo)
+	_, err = s.db.ExecContext(r.Context(), `UPDATE topup_orders SET session_id=$1,checkout_url=$2 WHERE order_no=$3 AND deleted_at IS NULL AND status='pending'`, session.ID, session.URL, orderNo)
 	if err != nil {
 		reply(w, map[string]string{"error": "保存支付订单失败，请重试"}, 500)
 		return
@@ -202,7 +202,7 @@ func (s *Server) applyStripeSession(ctx context.Context, eventType stripe.EventT
 	var id, amount, tokens int64
 	var status, currency string
 	var sessionID sql.NullString
-	err = tx.QueryRowContext(ctx, `SELECT user_id,amount_minor,tokens,status,currency,session_id FROM topup_orders WHERE order_no=$1 FOR UPDATE`, session.ClientReferenceID).Scan(&id, &amount, &tokens, &status, &currency, &sessionID)
+	err = tx.QueryRowContext(ctx, `SELECT user_id,amount_minor,tokens,status,currency,session_id FROM topup_orders WHERE order_no=$1 AND deleted_at IS NULL FOR UPDATE`, session.ClientReferenceID).Scan(&id, &amount, &tokens, &status, &currency, &sessionID)
 	if err != nil {
 		return err
 	}
@@ -218,7 +218,7 @@ func (s *Server) applyStripeSession(ctx context.Context, eventType stripe.EventT
 		if eventType == stripe.EventTypeCheckoutSessionAsyncPaymentFailed {
 			next = "failed"
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE topup_orders SET status=$1 WHERE order_no=$2 AND status='pending'`, next, session.ClientReferenceID)
+		_, err = tx.ExecContext(ctx, `UPDATE topup_orders SET status=$1 WHERE order_no=$2 AND deleted_at IS NULL AND status='pending'`, next, session.ClientReferenceID)
 		if err != nil {
 			return err
 		}
@@ -231,7 +231,7 @@ func (s *Server) applyStripeSession(ctx context.Context, eventType stripe.EventT
 		return err
 	}
 	var balance int64
-	err = tx.QueryRowContext(ctx, `UPDATE wallets SET balance=balance+$1 WHERE user_id=$2 RETURNING balance`, tokens, id).Scan(&balance)
+	err = tx.QueryRowContext(ctx, `UPDATE wallets SET balance=balance+$1 WHERE user_id=$2 AND deleted_at IS NULL RETURNING balance`, tokens, id).Scan(&balance)
 	if err != nil {
 		return err
 	}
@@ -239,7 +239,7 @@ func (s *Server) applyStripeSession(ctx context.Context, eventType stripe.EventT
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE topup_orders SET status='paid' WHERE order_no=$1`, session.ClientReferenceID)
+	_, err = tx.ExecContext(ctx, `UPDATE topup_orders SET status='paid' WHERE order_no=$1 AND deleted_at IS NULL`, session.ClientReferenceID)
 	if err != nil {
 		return err
 	}

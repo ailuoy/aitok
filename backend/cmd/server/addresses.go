@@ -105,7 +105,7 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		const filter = ` WHERE (user_id=$1 OR user_id IS NULL OR $2) AND strpos(lower(concat_ws(' ',full_name,address_line1,address_line2,city,state,postal_code,country,source_data->>'Telephone',source_data->>'Temporary_mail')),lower($3)) > 0`
+		const filter = ` WHERE deleted_at IS NULL AND (user_id=$1 OR user_id IS NULL OR $2) AND strpos(lower(concat_ws(' ',full_name,address_line1,address_line2,city,state,postal_code,country,source_data->>'Telephone',source_data->>'Temporary_mail')),lower($3)) > 0`
 		var total int
 		if err = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM addresses`+filter, user, admin, query).Scan(&total); err != nil {
 			addressError(w, err)
@@ -135,7 +135,7 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet && id > 0 {
-		a, err := scanAddress(s.db.QueryRowContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE id=$1 AND (user_id=$2 OR user_id IS NULL OR $3)`, id, user, admin))
+		a, err := scanAddress(s.db.QueryRowContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR user_id IS NULL OR $3)`, id, user, admin))
 		if err != nil {
 			addressError(w, err)
 			return
@@ -155,7 +155,7 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 		query := `INSERT INTO addresses(address_line1,address_line2,city,state,postal_code,country,user_id,full_name) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ` + addressColumns
 		status := 201
 		if id > 0 {
-			query = `UPDATE addresses SET address_line1=$1,address_line2=$2,city=$3,state=$4,postal_code=$5,country=$6,full_name=$8,updated_at=NOW() WHERE (user_id=$7 OR $10) AND id=$9 RETURNING ` + addressColumns
+			query = `UPDATE addresses SET address_line1=$1,address_line2=$2,city=$3,state=$4,postal_code=$5,country=$6,full_name=$8,updated_at=NOW() WHERE deleted_at IS NULL AND (user_id=$7 OR $10) AND id=$9 RETURNING ` + addressColumns
 			args = append(args, id, admin)
 			status = 200
 		}
@@ -169,7 +169,7 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete && id > 0 {
-		result, err := s.db.ExecContext(r.Context(), `DELETE FROM addresses WHERE id=$1 AND (user_id=$2 OR $3)`, id, user, admin)
+		result, err := s.db.ExecContext(r.Context(), `UPDATE addresses SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
 		if err != nil {
 			addressError(w, err)
 			return

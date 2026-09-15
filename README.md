@@ -55,9 +55,9 @@ bash scripts/deploy.sh --skip-pull
 
 ## 页面地址
 
-导航使用独立路径：`/features`（功能）、`/plans`（套餐说明）、`/security`（安全）、`/login`（登录）、`/register`（注册）、`/accounts`（账号工作台）、`/wallet`（钱包）。支持直接访问、刷新和浏览器前进/后退。登录后访问首页会进入账号工作台；未登录访问钱包时，登录成功后返回钱包并保留待核对的支付订单。
+导航使用独立路径：`/features`（功能）、`/plans`（套餐说明）、`/security`（安全）、`/login`（登录）、`/register`（注册）、`/admin/accounts`（账号工作台）、`/admin/proxies`（SOCKS5）、`/admin/addresses`（地址）、`/admin/bank-cards`（银行卡）、`/admin/users`（用户列表，仅超管）、`/admin/wallet`（钱包）。支持直接访问、刷新和浏览器前进/后退。登录后访问首页会进入账号工作台；未登录访问钱包时，登录成功后返回钱包并保留待核对的支付订单。
 
-Stripe 新订单返回 `/wallet?topup=success&order=...`，兼容旧订单的根路径返回地址。收到服务端确认的订单终态后清理支付参数，页面保留结果提示，记录仍可在钱包查询。取消支付返回时清理参数，订单是否到账仍以服务端核对为准。
+Stripe 新订单返回 `/admin/wallet?topup=success&order=...`，旧 `/wallet` 和根路径返回地址仍兼容并保留查询参数。收到服务端确认的订单终态后清理支付参数，页面保留结果提示，记录仍可在钱包查询。取消支付返回时清理参数，订单是否到账仍以服务端核对为准。
 
 生产部署需为前端配置 SPA history fallback，将不存在的页面路径回退到 `index.html`，例如 Nginx 的前端 `location /` 使用 `try_files $uri $uri/ /index.html;`。`/api/` 应单独反向代理至 Go 服务，不能回退到前端页面。Vite 开发服务已支持这些路径。
 
@@ -72,8 +72,8 @@ Stripe 新订单返回 `/wallet?topup=success&order=...`，兼容旧订单的根
 默认超管配置：
 
 ```dotenv
-SUPER_ADMIN_USERNAME=admin
-SUPER_ADMIN_PASSWORD=123456
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=123456
 ```
 
 在密码登录页输入用户名和密码即可登录。修改配置后重启后端生效；超管关联的账号数据保留。超管凭据由环境配置管理，不通过邮箱验证码或密码找回修改。首次成功登录时创建内部用户记录，接口返回 `super_admin` 身份。
@@ -155,7 +155,7 @@ Session 输入框支持 JSON 语法高亮和格式化。普通 `/api/auth/sessio
 
 启动前会根据 JSON 的 `expires` 和 JWT 的 `exp` 提示已知过期情况；本地解析 JWT 不验证签名，不证明凭据有效。没有刷新凭据时需要重新复制 Session。本版没有自动刷新 Token，也不执行购买、支付或续费网页操作。
 
-`GET /api/accounts/:id/browser` 查询状态，`PATCH` 保存代理，`POST` 启动，`DELETE` 关闭；这些操作全部限定超级管理员。服务端从数据库读取会话后直接交给浏览器进程，前端不获取 Token。`PATCH /api/accounts/:id/session` 允许所有者或管理员更新会话。浏览器接口均禁止缓存，凭据不会进入进程命令行。
+`GET /api/accounts/:id/browser` 查询状态，`PATCH` 保存代理，`POST` 启动，`DELETE` 关闭；这些操作限定管理员或超级管理员。服务端从数据库读取会话后直接交给浏览器进程，前端不获取 Token。`PATCH /api/accounts/:id/session` 允许所有者或管理员更新会话。浏览器接口均禁止缓存，凭据不会进入进程命令行。
 
 “打开账号”通过独立启动器命令 `node scripts/session-browser.mjs --origin http://localhost:15680` 和仅限所有者的 `POST /api/accounts/:id/browser-session` 实现本机开窗；管理员的“浏览器管理”仍使用后台进程，不调用本机启动器。
 
@@ -175,11 +175,11 @@ SOCKS5 管理中可查看单个代理或全部代理的使用记录，包含测�
 
 ## 银行卡、地址与浏览器助手
 
-工作台在“SOCKS5 管理”后显示“地址管理”和“银行卡管理”，所有登录用户可使用。原先采集的地址为共享地址，普通用户可以选择，但只能编辑和删除自己新增的地址；管理员可管理全部地址。银行卡按用户隔离，支持搜索、分页、添加、编辑和删除确认。卡平台支持从下拉框选择已有名称，或输入新名称后点击“使用输入的平台”，随银行卡一起保存；选项来自本人全部银行卡，去重且不受搜索和分页影响。卡平台最多 80 字，备注支持多行、最多 1000 字，均为选填且可清空，列表搜索包含平台与备注。账号助手同步展示这两个字段并支持逐项复制。升级需先执行迁移 `backend/migrations/008_bank_card_platform_and_notes.sql`，再部署服务。
+工作台在“SOCKS5 管理”后显示“地址管理”和“银行卡管理”，所有登录用户可使用。原先采集的地址为共享地址，普通用户可以选择，但只能编辑和删除自己新增的地址；管理员可管理全部地址。普通用户仅管理自己的银行卡，管理员和超管可管理全部银行卡，编辑保留原归属；支持搜索、分页、添加、编辑和删除确认。卡平台支持从下拉框选择已有名称，或输入新名称后点击“使用输入的平台”，随银行卡一起保存；选项来自有权管理的全部银行卡，去重且不受搜索和分页影响。卡平台最多 80 字，备注支持多行、最多 1000 字，均为选填且可清空，列表搜索包含平台与备注。账号助手同步展示这两个字段并支持逐项复制。升级需先执行迁移 `backend/migrations/008_bank_card_platform_and_notes.sql`，再部署服务。
 
 地址卡片逐项展示账单姓名、街道、公寓 / 房间、城市、州 / 省、邮编和国家 / 地区，不显示采集来源链接。新增和编辑地址可填写账单姓名，搜索也支持姓名；迁移 `backend/migrations/006_address_full_name.sql` 为旧地址保留空姓名，显示“未填写”，可按实际账单信息补充。
 
-迁移 `backend/migrations/005_bank_cards_and_address_owners.sql` 新增银行卡表和地址归属字段。卡号通过现有 `SESSION_ENCRYPTION_KEY` 加密，列表只显示尾号；详情仅允许本人读取。安全码（CVV/CVC）不入库，只在浏览器助手中临时输入，填充后清空。
+迁移 `backend/migrations/005_bank_cards_and_address_owners.sql` 新增银行卡表和地址归属字段。卡号通过现有 `SESSION_ENCRYPTION_KEY` 加密，列表只显示尾号；详情允许本人或管理员读取。安全码（CVV/CVC）不入库，只在浏览器助手中临时输入，填充后清空。
 
 从工作台重新“打开账号”后，ChatGPT 网页右侧显示可折叠的“账号助手 0.0.1”（版本号在脚本中统一定义），收起后的“账号助手”按钮可拖拽或使用方向键移动，窗口缩小与重新展开时自动限制在可视区域；刷新页面后恢复默认右侧位置。助手包含邮箱、真实登录状态、官网返回的套餐、银行卡和账单地址选择，以及手动填充和切换功能。不包含删除登录状态、登录其他账号或获取充值队列。套餐按钮进入官网套餐选择页，并不直接创建订单或承诺某个方案可购买，实际方案与价格以官网为准。
 
@@ -229,7 +229,9 @@ bash run-stripe.sh
 
 ## 数据库升级
 
-上线 SQL 已整理为 [backend/migrations/release.sql](backend/migrations/release.sql)，可对空库或本项目旧库整体执行。表结构、执行命令与历史字段兼容说明见 [上线 SQL 说明](backend/migrations/README.md)，执行后可使用 [verify.sql](backend/migrations/verify.sql) 只读核对表和字段。上线 SQL 由基础表和编号迁移生成，服务部署脚本不会自动执行。
+当前完整表结构统一维护在 [schema.sql](backend/migrations/schema.sql)，包含全部 12 张业务表的字段、默认值、约束、索引和中文表注释，可独立初始化空库。后续所有结构变更必须同步更新该文件，规范见 [agent.md](agent.md)。旧库升级使用 [release.sql](backend/migrations/release.sql)，由 000 历史基线和后续编号迁移生成；不使用完整快照替代升级。执行命令与历史兼容说明见 [上线 SQL 说明](backend/migrations/README.md)，执行后使用 [verify.sql](backend/migrations/verify.sql) 只读核对。服务部署脚本不会自动执行 SQL。
+
+所有业务表统一使用 `created_at`、`updated_at`、`deleted_at`，更新时自动维护更新时间，所有业务删除只写删除时间。列表和普通接口隐藏已删除数据，数据库禁止真实 DELETE/TRUNCATE。删除分组解除账号绑定；删除账号或银行卡保留历史记录和流水，财务幂等判定仍包含历史数据。启用前按迁移说明执行 `012_soft_delete_timestamps.sql`，并同步部署新版应用。
 
 `run-dev.sh` 初始化基础表后，会按编号执行 `backend/migrations` 的增量 SQL。此次新增 Session 密文字段、续订日期、钱包、充值订单、钱包流水和续订记录；保留旧账号数据。SQL 支持重复执行，迁移失败时脚本停止启动。
 
@@ -258,7 +260,11 @@ AITOK_BROWSER_SMOKE=1 node --test scripts/browser/frontend.test.mjs
 
 ## 地址库
 
-所有登录用户可在工作台访问地址管理，按姓名、街道、城市、州、邮编、电话或邮箱搜索。普通用户可读取共享地址及自己的地址，只能修改自己的记录；超级管理员可管理全部地址，删除需二次确认。
+所有登录用户可在工作台访问地址管理，按姓名、街道、城市、州、邮编、电话或邮箱搜索。普通用户可读取共享地址及自己的地址，只能修改自己的记录；管理员和超级管理员可管理全部地址，删除需二次确认。
+
+账号、SOCKS5、地址和银行卡列表统一以紧凑表格展示，保留各页面的筛选、分页和行内操作；宽表可横向滚动，桌面端操作列固定在右侧。地址表直接显示账单姓名、街道、公寓、城市、州、邮编、国家及联系方式，点击“完整资料”可查看全部来源字段。
+
+银行卡表展示 USD 记账余额，点击“余额 / 对账单”记录存入或账号开通支出。首次存入记为初始余额；开通支出先选择已付款成功的账号，再按卡平台账单填写实际 USD 扣款（包括实际汇率、手续费），流水同时保留 PHP 8,919.64 原价。每个账号只允许一笔开通扣款，重复请求不会重复记账；每条流水显示交易后余额、账号快照、备注及 UTC+8 时间，并支持分页。此功能只维护本地账本，不查询银行实际余额、不发起转账或付款。有流水的卡不能更换卡号；删除卡片只标记软删除，余额及历史流水保留。启用前执行 `backend/migrations/010_bank_card_ledger.sql`，再部署前后端。
 
 基础字段保存在 PostgreSQL 的 addresses 表，迁移 007_address_source_data.sql 增加 JSONB source_data，完整保留来源接口返回的字段（包括未知的新字段）。列表直接显示姓名、街道、城市、州、邮编、国家、电话和邮箱，其他生成资料在“完整来源资料”中展开查看。原始来源快照只读，编辑基础地址不会覆盖原始快照。来源生成的身份、卡号和安全码只作资料展示，不自动加入付款银行卡库。
 
@@ -270,3 +276,13 @@ AITOK_BROWSER_SMOKE=1 node --test scripts/browser/frontend.test.mjs
 python3 scripts/import-oregon-addresses.py --count 100 --output backend/data/oregon-profiles.json --sql /tmp/oregon-profiles.sql
 # 对已执行迁移的目标库运行生成的 SQL；事务写入并按地址去重。
 ```
+
+## 用户角色与后台导航
+
+后端优先读取 `ADMIN_USERNAME`、`ADMIN_PASSWORD`，兼容旧 `SUPER_ADMIN_USERNAME`、`SUPER_ADMIN_PASSWORD`。本地配置在 `backend/.env`，示例见 `backend/.env.example`。环境账号是固定超级管理员，保留全部业务管理权限和用户角色管理权限，不能从用户列表降级或创建另一个超级管理员。
+
+迁移 `backend/migrations/009_user_roles.sql` 为用户增加 `role`：`admin` 为管理员，`user` 为用户；NULL、空字符串按用户处理。密码注册和验证码首次登录均强制创建用户身份，请求中传入 role 不会提权。管理员可管理全部账号、分组、地址和银行卡；普通用户只管理自己的数据并使用共享地址。钱包按登录用户记账，本机代理仍保存在访问者电脑，账号助手使用限权只读凭据。
+
+`GET /api/users?q=&page=1`、`PATCH /api/users/:id/role` 仅允许超级管理员访问，角色只能设为 `admin` 或 `user`。权限从数据库实时读取，降级后已有登录凭据立即受到限制；前端定期及重新聚焦时刷新角色。
+
+后台页面统一使用 `/admin/` 前缀，左侧导航包含账号、SOCKS5、地址、银行卡，超管额外显示用户列表。后台隐藏顶部功能、套餐、安全导航，钱包位于右上角“我的”。手机通过“管理菜单”展开侧栏。旧工作台路径自动跳转到对应新地址，支持直接打开、刷新及前进后退。先执行 009 迁移，再更新服务。

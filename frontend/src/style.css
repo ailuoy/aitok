@@ -30,7 +30,11 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offs
 .topup-options button.selected{border-color:var(--focus);background:var(--accent-soft)}.topup-options strong{font-size:16px}.topup-options small{font-size:11px;font-weight:400}.topup-options span{font-size:13px;color:var(--muted)}
 .table-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--surface);margin:18px 0 30px}
 table{width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap}th{text-align:left;background:var(--raised);color:var(--muted);font-weight:500}th,td{padding:12px 14px;border-bottom:1px solid var(--line)}tbody tr:last-child td{border-bottom:0}.table-empty{text-align:center;padding:24px;color:var(--muted);font-size:13px}.order-number{font-family:monospace;font-size:11px;color:var(--muted)}
-.workspace-dialog{width:min(540px,calc(100vw - 32px));max-height:calc(100dvh - 48px);overflow-y:auto;padding:24px;border:1px solid var(--line-strong);border-radius:16px;background:var(--surface);color:var(--text);box-shadow:0 30px 100px #0009}
+.workspace-dialog{width:min(960px,calc(100vw - 32px));max-width:calc(100vw - 32px);max-height:min(640px,calc(100dvh - 48px));overflow:hidden;padding:24px;border:1px solid var(--line-strong);border-radius:16px;background:var(--surface);color:var(--text);box-shadow:0 30px 100px #0009}
+.workspace-dialog[open]{display:flex;flex-direction:column}
+.workspace-dialog-heading{flex-shrink:0;position:relative}
+.workspace-dialog-body{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:2px}
+.workspace-dialog .workspace-dialog-heading .close{right:0;top:0}
 .workspace-dialog::backdrop{background:#03050bce;backdrop-filter:blur(4px)}
 .workspace-dialog h2{font-size:20px;line-height:1.4;margin:0 30px 18px 0}.workspace-dialog form{display:grid;gap:14px}.workspace-dialog form p{margin:0}.workspace-dialog .close{right:14px;top:16px;display:grid;place-items:center;padding:7px}
 textarea{width:100%;min-width:0;resize:vertical;background:var(--inset);border:1px solid var(--line-strong);border-radius:8px;color:var(--text);padding:13px;font:13px/1.65 monospace;outline:0}textarea:focus{border-color:var(--focus)}input[type=date]{width:100%}
@@ -158,6 +162,9 @@ button,input,textarea{font-family:inherit}
 .address-source-details summary:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
 .address-source-details>.muted{font-size:12px;margin:8px 0}
 .source-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 16px;margin:12px 0 0}
+.workspace-dialog .source-fields{grid-template-columns:repeat(4,minmax(0,1fr));gap:14px 20px}
+@media(max-width:900px){.workspace-dialog .source-fields{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.workspace-dialog .source-fields{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}
 .source-fields>div{min-width:0}
 .source-fields dt{font-size:11px;color:var(--muted);margin-bottom:3px}
 .source-fields dd{font-size:12px;margin:0;overflow-wrap:anywhere;white-space:pre-wrap}
@@ -170,3 +177,61 @@ button,input,textarea{font-family:inherit}
 @media(pointer:coarse){.account-section .select-trigger,.account-section .small,.select-create{min-height:44px}}
 
 .bank-card-notes{white-space:pre-wrap}
+.card-ledger-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}
+.card-ledger-summary>div{display:grid;gap:5px;padding:12px;background:var(--inset);border:1px solid var(--line);border-radius:8px}
+.card-ledger-summary span{font-size:11px;color:var(--muted)}.card-ledger-summary strong{font-size:18px;font-variant-numeric:tabular-nums}
+.card-ledger-form,.card-ledger-confirm{padding:14px;border:1px solid var(--line);border-radius:8px;margin:12px 0}
+.card-ledger-confirm h3{margin:0;font-size:14px}
+@media(max-width:700px){.card-ledger-summary{gap:6px}.card-ledger-summary>div{padding:8px}.card-ledger-summary strong{font-size:15px}}
+
+/* 管理页面使用独立侧栏，内容区填满剩余宽度。 */
+.admin-header{height:64px;min-height:64px;padding:0 24px;flex-wrap:nowrap}
+.admin-header .userbar{margin-left:auto}
+.admin-shell{min-height:calc(100vh - 64px)}
+.admin-sidebar{position:fixed;top:64px;bottom:0;left:0;width:208px;padding:24px 12px 16px;background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:auto;z-index:4}
+.sidebar-heading{padding:0 12px 18px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px;font-weight:600}
+.workspace-nav{display:flex;flex-direction:column;margin:0;gap:6px}
+.workspace-nav a{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:7px;color:var(--muted);font-size:13px;text-decoration:none}
+.workspace-nav a:hover{background:var(--inset);color:var(--text)}
+.workspace-nav a[aria-current=page]{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.workspace-nav a:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.sidebar-role{margin-top:auto;padding:28px 12px 0;color:var(--muted);font-size:11px}
+.admin-content{margin-left:208px;min-width:0}
+.admin-content .dashboard{width:100%;max-width:none;margin:0;padding:28px 32px 48px}
+.sidebar-toggle,.sidebar-close,.sidebar-backdrop{display:none}
+.user-manager .table-wrap{margin-top:16px}.user-manager td{overflow-wrap:anywhere}.user-manager td:last-child{width:210px;min-width:180px}.user-manager .section-title{gap:12px;flex-wrap:wrap}
+@media(max-width:760px){
+  .admin-header{padding:0 16px}.admin-header .userbar{gap:8px}
+  .admin-sidebar{width:220px;visibility:hidden;transform:translateX(-100%);z-index:7}
+  .admin-sidebar.open{visibility:visible;transform:none}
+  .sidebar-close{display:inline-flex}.sidebar-heading{padding-bottom:12px}
+  .sidebar-toggle{display:inline-flex;margin:16px 16px 0}.sidebar-backdrop{display:block;position:fixed;inset:64px 0 0;background:#0006;z-index:6}
+  .admin-content{margin-left:0}.admin-content .dashboard{padding:16px 16px 32px}
+  .workspace-nav{display:flex}
+}
+
+/* 管理列表统一表格密度，宽表仅在自身容器内滚动。 */
+.data-table-wrap{max-width:100%;margin:16px 0 0;overscroll-behavior-x:contain}
+.data-table-wrap:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.data-table{font-size:12px;min-width:960px}
+.data-table th,.data-table td{padding:11px 12px;vertical-align:middle}
+.data-table thead th{font-size:11px;font-weight:600}
+.data-table tbody tr:hover td{background:var(--inset)}
+.data-table strong{font-weight:600}
+.data-table .table-text{min-width:120px;max-width:240px;white-space:normal;overflow-wrap:anywhere;line-height:1.55}
+.data-table .cell-secondary{display:block;font-size:11px;color:var(--muted);margin-top:3px;white-space:normal;overflow-wrap:anywhere}
+.data-table .table-mono{font-family:monospace}
+.data-table .bank-card-notes{min-width:170px;white-space:pre-wrap}
+.data-table .table-selector{min-width:180px;width:190px}
+.data-table .account-group,.data-table .account-proxy{margin:0;max-width:210px}
+.data-table .select-trigger{font-size:12px;padding:6px 9px;min-height:32px}
+.data-table .table-actions{position:sticky;right:0;background:var(--surface);border-left:1px solid var(--line);z-index:1}
+.data-table thead .table-actions{background:var(--raised)}
+.data-table .row-actions,.data-table .account-actions{display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:6px;min-width:140px;max-width:260px;width:max-content}
+.data-table .small{font-size:11px;min-height:30px;padding:5px 8px}
+.data-table .text-btn{font-size:11px;padding:5px 3px}
+.data-table .icon-btn{padding:5px;display:inline-flex}
+.data-table .proxy-result{font-size:11px;min-width:160px;gap:3px}
+.accounts-table{min-width:1250px}.proxy-table{min-width:1120px}.address-table{min-width:1050px}
+@media(max-width:760px){.data-table .table-actions{position:static}.data-table th,.data-table td{padding:10px}.data-table .row-actions,.data-table .account-actions{max-width:230px}}
+@media(pointer:coarse){.data-table .small,.data-table .text-btn,.data-table .icon-btn,.data-table .select-trigger{min-height:44px}.data-table .icon-btn{min-width:44px}}
