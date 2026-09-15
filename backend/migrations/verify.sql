@@ -3,8 +3,11 @@
 -- 这不是完整的类型、索引和约束一致性检查；详细定义见 release.sql。
 WITH required(table_name, column_names) AS (
   VALUES
+    ('bank_cards', ARRAY['platform', 'notes', 'id', 'user_id', 'label', 'cardholder', 'number_ciphertext', 'number_fingerprint', 'last4', 'brand', 'exp_month', 'exp_year', 'created_at', 'updated_at']),
+    ('account_groups', ARRAY['id', 'user_id', 'name', 'created_at']),
+    ('addresses', ARRAY['source_data', 'full_name', 'id', 'address_line1', 'address_line2', 'city', 'state', 'postal_code', 'country', 'source_url', 'source_key', 'created_at', 'updated_at', 'user_id']),
     ('users', ARRAY['id', 'email', 'password_hash', 'created_at']),
-    ('chatgpt_accounts', ARRAY['id', 'user_id', 'label', 'email', 'api_key', 'created_at', 'session_ciphertext', 'renewal_date']),
+    ('chatgpt_accounts', ARRAY['id', 'user_id', 'label', 'email', 'api_key', 'created_at', 'session_ciphertext', 'renewal_date', 'group_id', 'last_login_at']),
     ('email_codes', ARRAY['email', 'purpose', 'code', 'expires_at']),
     ('wallets', ARRAY['user_id', 'balance']),
     ('topup_orders', ARRAY['order_no', 'user_id', 'request_key', 'amount_minor', 'tokens', 'currency', 'status', 'session_id', 'checkout_url', 'created_at', 'quantity', 'unit_amount_minor', 'price_id']),

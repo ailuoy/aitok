@@ -1,0 +1,20 @@
+# 与 docker-compose.yml 合并使用；复用现有前后端镜像与健康检查。
+services:
+  backend:
+    extends:
+      file: docker-compose.deploy.yml
+      service: backend
+    image: aitok-backend:dev
+
+  frontend:
+    extends:
+      file: docker-compose.deploy.yml
+      service: frontend
+    image: aitok-frontend:dev
+
+# 显式指定子网，避免宿主机默认地址池耗尽时无法创建开发网络。
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${DEV_NETWORK_SUBNET:-10.253.0.0/24}

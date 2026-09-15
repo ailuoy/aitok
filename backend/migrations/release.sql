@@ -93,4 +93,81 @@ ALTER TABLE topup_orders ADD COLUMN IF NOT EXISTS price_id TEXT;
 ALTER TABLE account_renewals ADD COLUMN IF NOT EXISTS account_label TEXT;
 ALTER TABLE account_renewals ADD COLUMN IF NOT EXISTS months INTEGER;
 
+-- 来源：003_addresses.sql
+
+-- 地址库独立于账号与账单；采集来源仅作为地址溯源信息。
+CREATE TABLE IF NOT EXISTS addresses (
+  id BIGSERIAL PRIMARY KEY,
+  address_line1 TEXT NOT NULL CHECK (length(address_line1) BETWEEN 1 AND 200),
+  address_line2 TEXT NOT NULL DEFAULT '' CHECK (length(address_line2) <= 200),
+  city TEXT NOT NULL CHECK (length(city) BETWEEN 1 AND 100),
+  state TEXT NOT NULL CHECK (length(state) BETWEEN 1 AND 100),
+  postal_code TEXT NOT NULL CHECK (length(postal_code) BETWEEN 1 AND 20),
+  country TEXT NOT NULL DEFAULT 'US' CHECK (country ~ '^[A-Z]{2}$'),
+  source_url TEXT NOT NULL DEFAULT '',
+  source_key TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS addresses_location_unique
+  ON addresses (lower(address_line1), lower(address_line2), lower(city), lower(state), lower(postal_code), country);
+
+
+-- 来源：004_account_groups_and_login.sql
+
+CREATE TABLE IF NOT EXISTS account_groups (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS account_groups_user_name_unique ON account_groups(user_id, lower(name));
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS group_id BIGINT REFERENCES account_groups(id) ON DELETE SET NULL;
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS chatgpt_accounts_group_id_idx ON chatgpt_accounts(group_id);
+
+
+-- 来源：005_bank_cards_and_address_owners.sql
+
+ALTER TABLE addresses ADD COLUMN IF NOT EXISTS user_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS addresses_user_id_idx ON addresses(user_id);
+CREATE TABLE IF NOT EXISTS bank_cards (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 80),
+  cardholder TEXT NOT NULL CHECK (length(cardholder) BETWEEN 1 AND 120),
+  number_ciphertext TEXT NOT NULL,
+  number_fingerprint TEXT NOT NULL,
+  last4 TEXT NOT NULL CHECK (last4 ~ '^[0-9]{4}$'),
+  brand TEXT NOT NULL,
+  exp_month INTEGER NOT NULL CHECK (exp_month BETWEEN 1 AND 12),
+  exp_year INTEGER NOT NULL CHECK (exp_year BETWEEN 2000 AND 9999),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, number_fingerprint)
+);
+
+
+-- 来源：006_address_full_name.sql
+
+-- 旧地址未采集姓名，保留空值供用户补充。
+ALTER TABLE addresses ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT '' CHECK (length(full_name) <= 120);
+
+
+-- 来源：007_address_source_data.sql
+
+-- 保留生成器返回的完整资料，基础地址字段仍可独立编辑。
+ALTER TABLE addresses ADD COLUMN IF NOT EXISTS source_data JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(source_data) = 'object');
+
+
+-- 来源：008_bank_card_platform_and_notes.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 旧银行卡保持空平台、空备注，不回填或改写已有付款信息。
+ALTER TABLE bank_cards
+  ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT '' CHECK (length(platform) <= 80),
+  ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 1000);
+
+
 COMMIT;

@@ -1,14 +1,19 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: getgpt-postgres
+    container_name: ${DB_CONTAINER_NAME:-getgpt-postgres}
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: getgpt
     ports:
-      - "15682:5432"
+      - "${DB_PORT:-15682}:5432"
     volumes:
       - getgpt_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "getgpt"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 volumes:
   getgpt_pgdata:

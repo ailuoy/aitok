@@ -105,7 +105,7 @@ func TestAuthIntegration(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	for _, statement := range []string{
 		`CREATE TEMP TABLE users (id BIGSERIAL PRIMARY KEY,email TEXT UNIQUE NOT NULL,password_hash TEXT NOT NULL)`,
-		`CREATE TEMP TABLE chatgpt_accounts (id BIGSERIAL PRIMARY KEY,user_id BIGINT,label TEXT,email TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),renewal_date DATE,session_ciphertext TEXT)`,
+		`CREATE TEMP TABLE chatgpt_accounts (id BIGSERIAL PRIMARY KEY,user_id BIGINT,label TEXT,email TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),renewal_date DATE,session_ciphertext TEXT,group_id BIGINT,last_login_at TIMESTAMPTZ)`,
 		`CREATE TEMP TABLE email_codes (email TEXT,purpose TEXT,code TEXT,expires_at TIMESTAMPTZ,PRIMARY KEY(email,purpose))`,
 	} {
 		if _, err := db.Exec(statement); err != nil {

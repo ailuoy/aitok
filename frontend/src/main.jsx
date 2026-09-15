@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Sparkles, LogOut, ArrowRight } from 'lucide-react';
+import { Sparkles, ArrowRight } from 'lucide-react';
 import Dashboard from './Dashboard';
 import Auth from './Auth';
 import PublicPage from './PublicPage';
 import { request } from './api';
 import { Link, navigate, useRoute, loginDestination } from './router';
 import './style.css';
+import UserMenu from './UserMenu';
 
-const titles = { '/': 'ChatGPT 账号管理', '/features': '功能', '/plans': '套餐', '/security': '安全', '/login': '登录', '/register': '注册', '/accounts': '账号管理', '/wallet': '钱包与充值' };
+const titles = { '/': 'ChatGPT 账号管理', '/features': '功能', '/plans': '套餐', '/security': '安全', '/login': '登录', '/register': '注册', '/accounts': '账号管理', '/wallet': '钱包与充值', '/proxies': 'SOCKS5 管理', '/addresses': '地址管理', '/bank-cards': '银行卡管理' };
 
 function App() {
   const route = useRoute();
@@ -18,7 +19,7 @@ function App() {
   const [accounts, setAccounts] = useState([]);
   const [sessionError, setSessionError] = useState('');
   const [retry, setRetry] = useState(0);
-  const protectedPage = ['/accounts', '/wallet'].includes(path);
+  const protectedPage = ['/accounts', '/wallet', '/proxies', '/addresses', '/bank-cards'].includes(path);
   const authPage = ['/login', '/register'].includes(path);
 
   useEffect(() => {
@@ -76,7 +77,7 @@ function Header({ user, token, path, onLogout }) {
   return <header>
     <Link to="/" className="brand" aria-label="AiTok 首页"><span className="logo"><Sparkles size={18} /></span><b>AiTok</b></Link>
     <nav aria-label="主导航">{[['/features', '功能'], ['/plans', '套餐'], ['/security', '安全']].map(([to, label]) => <Link key={to} to={to} aria-current={path === to ? 'page' : undefined}>{label}</Link>)}</nav>
-    {token ? <div className="userbar"><span>{user?.username || user?.email}{user?.role === 'super_admin' ? ' · 超级管理员' : ''}</span><Link className="outline small" to="/accounts">工作台</Link><button className="ghost" onClick={onLogout}><LogOut size={16} />退出</button></div> : <div className="actions"><Link className="ghost" to="/login">登录</Link><Link className="primary small" to="/register">免费开始 <ArrowRight size={15} /></Link></div>}
+    {token ? <div className="userbar"><Link className="outline small" to="/accounts">工作台</Link><UserMenu user={user} path={path} onLogout={onLogout} /></div> : <div className="actions"><Link className="ghost" to="/login">登录</Link><Link className="primary small" to="/register">免费开始 <ArrowRight size={15} /></Link></div>}
   </header>;
 }
 

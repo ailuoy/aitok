@@ -1,0 +1,61 @@
+import React, { useEffect, useRef, useState } from 'react';
+import { stateLabels } from './BrowserSession';
+import { browserEnvironmentID, launcherCommand, launcherRequest, openLocalAccount } from './localBrowser';
+
+export default function LocalBrowserSession({ account, userID, token, onStatus, onClosed }) {
+  const [status, setStatus] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(true);
+  const initialStart = useRef(null);
+  const busyRef = useRef(true);
+  const mounted = useRef(true);
+  const hasOpened = useRef(false);
+  const statusPath = '/browsers/' + encodeURIComponent(browserEnvironmentID(userID, account.id));
+  const running = status && !['closed', 'unavailable'].includes(status.state);
+  useEffect(() => {
+    if (!status) return;
+    onStatus?.(account.id, status);
+    if (!['closed', 'unavailable'].includes(status.state)) hasOpened.current = true;
+    if (status.state === 'closed' && hasOpened.current) onClosed?.();
+  }, [status, account.id, onStatus, onClosed]);
+
+  useEffect(() => {
+    mounted.current = true;
+    const controller = new AbortController();
+    let timer;
+    // 用户点击卡片即启动；复用 Promise，避免 StrictMode 重复打开窗口。
+    initialStart.current ||= openLocalAccount(account, userID, token);
+    initialStart.current.then(data => { if (!controller.signal.aborted) setStatus(data); }, error => {
+      if (!controller.signal.aborted) setError(error.message);
+    }).finally(() => { if (!controller.signal.aborted) { busyRef.current = false; setBusy(false); } });
+    const poll = async () => {
+      if (!busyRef.current) {
+        try {
+          const data = await launcherRequest(statusPath, { signal: controller.signal });
+          if (!controller.signal.aborted && !busyRef.current) setStatus(data);
+        } catch { /* 启动错误保留在弹窗，轮询失败不覆盖操作提示。 */ }
+      }
+      if (!controller.signal.aborted) timer = setTimeout(poll, 3000);
+    };
+    timer = setTimeout(poll, 3000);
+    return () => { mounted.current = false; controller.abort(); clearTimeout(timer); };
+  }, [account, userID, token, statusPath]);
+
+  async function act(action) {
+    if (busyRef.current) return;
+    busyRef.current = true; setBusy(true); setError('');
+    try {
+      const data = action === 'start' ? await openLocalAccount(account, userID, token) : await launcherRequest(statusPath, { method: 'DELETE' });
+      if (mounted.current) setStatus(data);
+    } catch (error) { if (mounted.current) setError(error.message); }
+    finally { busyRef.current = false; if (mounted.current) setBusy(false); }
+  }
+
+  return <div className="browser-session local-browser-session">
+    <p className="muted">{account.label} · {account.email}</p>
+    <div className="browser-status-row"><span>本机浏览器</span><strong>{busy ? '正在处理…' : status ? stateLabels[status.state] || status.state : '尚未打开'}</strong></div>
+    {status?.message && <p className={status.state === 'authenticated' ? 'success' : 'notice'} role="status">{status.message}</p>}
+    {error && <><p className="error" role="alert">{error}</p><details><summary>启动器使用说明</summary><p className="muted">本机安装 Node.js 22+ 和 Chrome / Edge，在项目目录运行并保持终端开启，无需配对密钥：</p><pre className="launcher-command"><code>{launcherCommand()}</code></pre></details></>}
+    <div className="browser-buttons"><button className="primary" disabled={busy || running} onClick={() => act('start')}>重新打开</button><button className="outline" disabled={busy || !running} onClick={() => act('stop')}>关闭账号窗口</button></div>
+  </div>;
+}

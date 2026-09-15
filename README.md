@@ -8,6 +8,28 @@ bash run-dev.sh
 
 前端地址为 `http://localhost:15680`，后端使用 `15681`，PostgreSQL 使用 `15682`。
 
+## 本地 Docker 启动
+
+需要 Docker、Docker Compose（支持 `up --wait`）和 `lsof`（用于释放端口，macOS 通常已自带），无需在宿主机安装 Go 或 Node.js：
+
+```bash
+./run-dev-docker.sh up           # 构建镜像、启动数据库、初始化表结构并启动前后端
+./run-dev-docker.sh logs backend # 查看后端日志
+./run-dev-docker.sh app-restart  # 重新加载前后端配置，保留数据库运行
+./run-dev-docker.sh down         # 移除容器，保留数据库卷
+./run-dev-docker.sh help         # 查看应用、数据库分组管理等全部命令
+```
+
+首次运行复制 `.env.docker.example` 为 `.env.docker`，未配置的 `JWT_SECRET` 和 `SESSION_ENCRYPTION_KEY` 通过 OpenSSL 生成并保存到该文件。配置按 `.env` → `backend/.env` → `.env.docker` 读取，后者覆盖同名项；`--env=test` 会最后读取 `backend/.env.test`。连接串中的 `$`、`&` 按原值保留。
+
+默认端口仍为 `15680` / `15681` / `15682`，可在 `.env.docker` 调整 `FRONTEND_PORT`、`BACKEND_PORT`、`DB_PORT` 和 `APP_BASE_URL`。容器中的默认数据库地址为 `postgres:5432`；使用已有数据库时，在 `.env.docker` 或指定环境文件中设置容器可访问的 `DATABASE_URL`，宿主机数据库可使用 `host.docker.internal`。自动初始化只作用于脚本管理的本地 PostgreSQL，外部数据库需自行执行上线 SQL。
+
+启动或重启服务前自动释放对应端口：停止冲突的 Docker 容器（保留容器和数据卷），对本机监听进程先发送 TERM，等待约 3 秒后仍占用则发送 KILL。当前项目对应的服务容器会跳过；仅启动数据库时只处理数据库端口，仅启动应用时只处理前后端端口。
+
+Docker 开发使用独立的 `aitok-dev` Compose 项目和 `aitok-dev_getgpt_pgdata` 数据卷，不复用 `run-dev.sh` 的数据库数据。`db-start` 先启动并初始化本地库，随后可用 `app-start` 单独启动应用；`app-restart` 和 `db-restart` 只重建对应容器，不删除数据卷。前后端复用现有 Go / Nginx 镜像配置，修改代码后再次执行 `up` 构建更新，不提供热更新。此模式和原生开发、部署模式使用相同默认端口，不能同时占用。后台账号浏览器需要宿主机图形桌面，请使用 `run-dev.sh` 运行该功能。
+
+开发网络显式使用 `10.253.0.0/24`，避免 Docker 默认地址池耗尽时报 `all predefined address pools have been fully subnetted`。若与已有 Docker 网络、局域网或 VPN 网段冲突，可在 `.env.docker` 设置 `DEV_NETWORK_SUBNET` 为未占用的私有子网；同时运行多个开发项目时需为各项目指定不同子网。已有网络的子网变更需先执行 `./run-dev-docker.sh down`，再执行 `./run-dev-docker.sh up` 重建网络（保留数据库卷）。
+
 ## 部署服务
 
 参考 google-maps 的部署方式，使用 Docker Compose 和限制 CPU 的 Buildx 构建器。服务器需要 Docker Engine 20.10+、近期版本的 Docker Compose（支持 `build --builder` 和 `up --wait`）、Buildx 0.14+ 和 Git，无需在宿主机安装 Node.js 或 Go。
@@ -72,19 +94,98 @@ CLOUDFLARE_EMAIL_API_BASE_URL=https://api.cloudflare.com/client/v4
 
 ## 账号与续订
 
-添加账号时输入名称、邮箱及完整 Session JSON 对象字符串。Session 加密保存，列表只返回是否已保存。旧账号不必删除，原账号 ID 保留；旧 API Key 不会自动转换为 Session。
+添加账号时粘贴完整的 `/api/auth/session` JSON，系统识别名称和邮箱；无法识别时可手动补充。支持 `accessToken` / `access_token`，以及 `tokens`、`credentials` 下的对应字段。名称可自定义，填写的邮箱需要与 Session 中识别到的邮箱一致。Session 加密保存，列表只返回是否已保存。旧账号不必删除，原账号 ID 保留；旧 API Key 不会自动转换为 Session。账号行的“更新 Session”可替换过期凭据，并检查邮箱是否属于同一账号。
 
-超管可以查看所有用户的账号、设置或清空续订日期，修改会记录操作人及前后日期。普通用户只能查看自己的账号，使用自己的钱包代币续订。
+## 在本机打开账号（实验版）
 
-默认 1 美元兑换 1 代币，20 代币续订 1 个月，通过以下配置修改：
+普通用户在自己的账号卡片上点击“打开账号”，使用已保存的 Session JSON 在访问网页的电脑上打开独立 ChatGPT 窗口。没有保存 Session 的账号会禁用此按钮。网站后端可以继续运行在 Docker 中。
 
-```dotenv
-TOKENS_PER_USD=1
-RENEWAL_TOKEN_COST=20
-RENEWAL_MONTHS=1
-```
+1. 在访问网页的电脑上安装 Node.js 22+ 和 Chrome、Chromium 或 Edge，并准备本项目的 `scripts` 目录。
+2. 在项目目录运行 `node scripts/session-browser.mjs --origin http://localhost:15680`。如果网站地址不同，使用弹窗中按当前站点生成的命令。
+3. 保持终端开启，直接点击账号卡片的“打开账号”。窗口同时打开 `https://api.ipify.org/` 和 `https://cleanip.io/`，通过 ipify 读取浏览器实际出口 IP；与所选 SOCKS5 主机 IP 一致后，保留 IP 标签并新开 `https://chatgpt.com/#settings/Billing`。直连账号获取有效 IP 后直接继续。IP 不一致或获取失败时保留窗口并提示原因，不自动打开 ChatGPT。不需要配对密钥，也无需在弹窗中再次点击；浏览器询问本地网络访问权限时选择允许。
+4. 浏览器打开后，账号卡片按钮自动变为“关闭浏览器”，点击即可结束该环境；也可在弹窗点击“关闭账号窗口”。刷新网页会同步现有窗口状态，手动关闭窗口后按钮自动恢复“打开账号”。更新 Session 或代理后重新打开即可生效。页面刷新后无需重新配对。关闭浏览器后，管理弹窗会自动收起。
 
-日期按北京时间计算。未过期账号从原日期延长，过期或未设置日期的账号从今天起算；月末日期会落在目标月份最后一个有效日。当前续订更新 AiTok 平台记录的会员有效期，尚未接入 OpenAI 官方购买或代充执行服务。
+每个账号的 Chrome 资料名称设为账号邮箱，网页右上角不再显示独立邮箱浮标，邮箱统一在账号助手中展示。Chrome 原生标题栏不支持任意位置自定义文字，资料菜单也可查看账号邮箱。仅修改独立账号目录，不修改日常 Chrome 资料。SOCKS5 使用代理端解析目标域名，并关闭网络预取；不再使用会触发 Chrome 警告的 `--host-resolver-rules` 参数。
+
+本机启动器只监听 `127.0.0.1`，限定 `--origin` 指定的站点及 Host，并要求非简单请求头；普通跨站网页和表单不能调用它。网站自己的登录鉴权和账号归属校验继续生效。
+
+重复运行启动命令会自动结束占用启动器端口（默认 `15683`）的旧进程，再启动新实例；旧启动器管理的浏览器也会关闭。macOS / Linux 使用 `lsof` 查询监听进程，Windows 使用 `netstat` / `taskkill`。仅影响指定端口，`--stdio` 模式不处理端口。
+
+### SOCKS5 管理
+
+工作台的“SOCKS5 管理”支持添加、编辑、删除、测试和获取出口 IP，可配置主机、端口及可选的用户名密码。在账号卡片的 SOCKS5 下拉框选择代理，绑定会保存在本机，下次打开自动使用；切回直连会移除绑定。仍被账号绑定的代理不能删除，需先更改账号选择。
+
+“导入代理”支持一行一条的 `socks5://主机:端口:用户名:密码`，也兼容 `socks5://用户名:密码@主机:端口` 和 `socks://`。导入逐条测试后保存，通过的行自动移除，失败的行保留供修改重试；最多一次 100 条。
+
+添加和编辑表单在保存旁提供“测试”按钮，测试通过才允许保存；修改任何字段后必须重新测试。启动器也校验测试结果与当前配置一致，测试凭证五分钟内有效且只能使用一次。账号和代理删除均需在弹窗中二次确认，可点击取消退出。
+
+测试与获取 IP 都由本机通过所选 SOCKS5 请求 `https://api.ipify.org`，不回退到直连。出口 IP 与代理主机 IP 一致显示绿色，不一致显示红色；代理主机是域名时与其 DNS 解析出的地址比对。不同出口可能是代理服务的正常转发结果，红色仅表示地址不一致。连接失败另行显示错误。
+
+代理密码与绑定按站点加密保存在启动器目录 `settings/<站点哈希>/proxies.enc`，加密密钥文件 `proxy.key` 只允许当前用户读取。它们属于当前电脑，不随服务器数据库或其他设备同步。编辑表单明文显示原密码，清空用户名和密码可取消认证；代理列表不返回密码。Chromium 通过回环 SOCKS5 桥接使用带密码的代理，凭据不会出现在进程参数中。
+
+### Session JSON 与网页登录
+
+Session 输入框支持 JSON 语法高亮和格式化。普通 `/api/auth/session` 返回的 `accessToken` 是访问凭据，无法转换成服务器签发的登录 Cookie。此前模拟 Session 接口的方式不能恢复真实网页登录，现已移除。
+
+可在导入或更新 Session 时补充“网页登录 Cookie”字段（`__Secure-next-auth.session-token` 的值），或在 JSON 中加入 `sessionToken`。分段 Cookie 使用 `cookies` 数组，每项为 `name`、`value`，可带 `domain`；仅接收 chatgpt.com 的 `__Secure-next-auth.session-token` / `__Secure-authjs.session-token` 及其数字分段，其他站点和无关 Cookie 不会导出。启动器在首次导航之前恢复这些真实 Cookie。
+
+没有登录 Cookie 时，窗口会提示本次未提供 Cookie；可沿用已有浏览器目录，或在独立窗口登录一次。Cookie 是否有效仍由 ChatGPT 校验；不会伪造登录成功。启动器只在 ChatGPT 标签检查登录，不暂停新标签或子页面；标签关闭、导航或检查失败不会结束浏览器。用户自己的 Session 和登录 Cookie 继续加密保存在数据库。
+
+## 后台账号浏览器（实验版）
+
+管理员可直接在“账号管理”完成“导入 Session JSON → 保存 SOCKS5 代理 → 打开独立 Chromium 窗口”。窗口出现在运行 Go 后台的电脑上；需要在该电脑的图形桌面会话中运行后台，并安装 Node.js 22+ 和 Chrome、Chromium 或 Edge。后台按需启动浏览器工作进程，页面不需要填写端口、配对密钥或另行启动服务。
+
+1. 在已登录 ChatGPT 的浏览器中打开 `https://chatgpt.com/api/auth/session`，复制完整 JSON 到 AiTok 的“添加账号”。
+2. 使用超级管理员登录，在目标账号行点击“浏览器管理”。管理员可操作全部账号，普通用户不能启动后台电脑的浏览器。
+3. “网络连接”默认沿用账号保存的配置。选择“设置 SOCKS5 代理”，填写 `socks5://主机:端口` 或 `socks5://用户名:密码@主机:端口`，点击“保存代理”；用户名或密码中的 `@`、`:`、`/` 等字符需进行 URL 百分号编码。选择“改用直连”并保存即可清除代理，直连不使用系统代理。
+4. 点击“打开浏览器”，在后台电脑弹出的窗口中确认 ChatGPT 能否使用。界面显示运行状态及上游账号验证结果。
+5. 在同一页面点击“关闭浏览器”。更换代理或更新 Session 前先关闭环境，重新打开后使用最新配置。退出后台时，浏览器工作进程检测到父进程管道关闭，会关闭它管理的浏览器。
+
+每个账号对应独立配置目录，默认在后台运行用户的 `~/.aitok/browsers`；最多同时打开 10 个环境。代理密码和 Session 一起加密保存于已有 `session_ciphertext` 字段，兼容以前保存的原始 Session，无需数据库迁移。更新 Session 保留已配置的代理，页面仅返回脱敏后的代理地址。Chromium 配置目录会保留网站自身保存的状态，目录不会自动删除。
+
+非标准安装可配置 `AITOK_BROWSER_NODE`（Node 可执行文件）、`AITOK_BROWSER_CHROME`（浏览器可执行文件）、`AITOK_BROWSER_SCRIPT`（`scripts/session-browser.mjs` 绝对路径）、`AITOK_BROWSER_DIRECTORY`（独立环境目录）。后台通过私有标准输入输出与 Node 子进程通信，不新增监听端口。Linux 需要可用的 `DISPLAY` 或 `WAYLAND_DISPLAY`；当前默认 Docker 部署镜像没有图形桌面，此开窗模式应在有桌面的宿主系统中原生运行后台。
+
+浏览器通过 Chromium 私有调试管道恢复登录 Cookie，不伪造 Session 接口，也不注入 Authorization。状态通过真实 `/api/auth/session` 返回的邮箱与导入账号进行核对：
+
+- “已打开”：浏览器已启动，可以正常浏览；访问 ChatGPT 标签后再检查实际登录状态。
+- “已确认登录”：真实网页登录会话的邮箱与导入账号一致。
+- “需要网页登录”：未登录或 Cookie 已失效，需要补充 Cookie 或在窗口登录。
+- “登录待确认”：网络、代理或网页验证导致无法核对状态。
+- “上游未接受凭据”：窗口内登录的邮箱与导入账号不一致。
+
+启动前会根据 JSON 的 `expires` 和 JWT 的 `exp` 提示已知过期情况；本地解析 JWT 不验证签名，不证明凭据有效。没有刷新凭据时需要重新复制 Session。本版没有自动刷新 Token，也不执行购买、支付或续费网页操作。
+
+`GET /api/accounts/:id/browser` 查询状态，`PATCH` 保存代理，`POST` 启动，`DELETE` 关闭；这些操作全部限定超级管理员。服务端从数据库读取会话后直接交给浏览器进程，前端不获取 Token。`PATCH /api/accounts/:id/session` 允许所有者或管理员更新会话。浏览器接口均禁止缓存，凭据不会进入进程命令行。
+
+“打开账号”通过独立启动器命令 `node scripts/session-browser.mjs --origin http://localhost:15680` 和仅限所有者的 `POST /api/accounts/:id/browser-session` 实现本机开窗；管理员的“浏览器管理”仍使用后台进程，不调用本机启动器。
+
+## 账号分组、登录时间与界面
+
+工作台支持分组创建、改名、删除以及账号绑定，账号分组下拉菜单底部可直接新建分组，自动带入搜索内容，创建成功后绑定当前账号；分组选择器和列表筛选均可搜索。分组按用户隔离；管理员可以管理所有用户的分组，但账号只能绑定其所属用户的分组。删除分组需要二次确认，账号保留并变为未分组。
+
+新增迁移为 `backend/migrations/004_account_groups_and_login.sql`，提供 `account_groups`、账号的 `group_id` 与 `last_login_at`。登录时间只在独立浏览器通过 ChatGPT 真实会话接口确认账号一致后记录，每次开窗最多记录一次；接口重试不会倒退或重复刷新时间。时间以绝对时间存储，页面统一显示 UTC+8，历史账号没有记录时显示“尚未登录”。
+
+右上角“我的”提供钱包与充值入口，以及“自动／黑色／白色”三种主题；自动模式跟随系统偏好，选择在本机浏览器中保存。所有选择器统一为可搜索的自定义菜单，支持方向键、Enter 和 Escape。
+
+代币续订已停用，旧 `POST /api/accounts/:id/renew` 返回 410，不再扣币；历史充值和扣款流水保留。管理员仍可以设置或清空会员日期，修改写入日期审计。充值兑换比例由 `TOKENS_PER_USD` 配置。
+
+## SOCKS5 使用记录
+
+SOCKS5 管理中可查看单个代理或全部代理的使用记录，包含测试、获取 IP、账号打开成功或失败、浏览器 IP 核对、登录确认及关闭。记录时间显示 UTC+8，支持分页。记录与代理配置一起加密保存在本机，保留代理名称和地址快照；编辑或删除代理后历史仍可查看。日志不包含密码、Session 或网页访问内容。新功能上线前的使用无法补录。
+
+## 银行卡、地址与浏览器助手
+
+工作台在“SOCKS5 管理”后显示“地址管理”和“银行卡管理”，所有登录用户可使用。原先采集的地址为共享地址，普通用户可以选择，但只能编辑和删除自己新增的地址；管理员可管理全部地址。银行卡按用户隔离，支持搜索、分页、添加、编辑和删除确认。卡平台支持从下拉框选择已有名称，或输入新名称后点击“使用输入的平台”，随银行卡一起保存；选项来自本人全部银行卡，去重且不受搜索和分页影响。卡平台最多 80 字，备注支持多行、最多 1000 字，均为选填且可清空，列表搜索包含平台与备注。账号助手同步展示这两个字段并支持逐项复制。升级需先执行迁移 `backend/migrations/008_bank_card_platform_and_notes.sql`，再部署服务。
+
+地址卡片逐项展示账单姓名、街道、公寓 / 房间、城市、州 / 省、邮编和国家 / 地区，不显示采集来源链接。新增和编辑地址可填写账单姓名，搜索也支持姓名；迁移 `backend/migrations/006_address_full_name.sql` 为旧地址保留空姓名，显示“未填写”，可按实际账单信息补充。
+
+迁移 `backend/migrations/005_bank_cards_and_address_owners.sql` 新增银行卡表和地址归属字段。卡号通过现有 `SESSION_ENCRYPTION_KEY` 加密，列表只显示尾号；详情仅允许本人读取。安全码（CVV/CVC）不入库，只在浏览器助手中临时输入，填充后清空。
+
+从工作台重新“打开账号”后，ChatGPT 网页右侧显示可折叠的“账号助手 0.0.1”（版本号在脚本中统一定义），收起后的“账号助手”按钮可拖拽或使用方向键移动，窗口缩小与重新展开时自动限制在可视区域；刷新页面后恢复默认右侧位置。助手包含邮箱、真实登录状态、官网返回的套餐、银行卡和账单地址选择，以及手动填充和切换功能。不包含删除登录状态、登录其他账号或获取充值队列。套餐按钮进入官网套餐选择页，并不直接创建订单或承诺某个方案可购买，实际方案与价格以官网为准。
+
+助手通过 Chromium 调试接口在隔离脚本环境中注入网页 HTML，并使用封闭 Shadow DOM 隔离界面样式；它不是浏览器原生侧栏或扩展侧栏。
+
+助手也可在允许的官方收银页面显示，选中银行卡后读取并明文展示完整卡号、持卡人、卡类型及有效期，同时显示所选地址的必要字段，每个字段后有小型复制按钮，未填写的字段不可复制。套餐入口按 Plus / 5X / 20X 横向排列。安全码详情实时展示并支持复制本次输入值，填充后或切卡时清空；名称、持卡人和卡号均匹配内置演示记录时显示明确标注的测试安全码（Visa / Mastercard 为 123，Amex 为 1234），普通卡不推断安全码。只填写识别出的可见支付字段，不提交付款。不同收银页面或嵌入字段可能需要手动补充，请核对信息后自行付款。仅使用与你付款信息一致的账单地址。助手用独立的 12 小时只读授权访问本人银行卡与可用地址，授权保留在本机进程，不向 ChatGPT 注入平台登录凭据。更改启动器版本后需重新打开账号才能更新助手。
 
 ## Stripe 充值
 
@@ -143,3 +244,29 @@ go vet ./...
 设置 `TEST_DATABASE_URL` 后，测试还会验证账号权限、Session 加密、管理员日期设置、Stripe 验签与防重复入账、余额不足、续订幂等和月末日期。测试仅使用当前数据库连接的临时表，不修改持久化数据；邮件与 Stripe 使用模拟服务，不会实际发信或扣款。
 
 前端构建：在 `frontend` 目录执行 `npm run build`。
+
+浏览器启动器验证（使用模拟会话和本地代理，不需要真实账号）：
+
+```bash
+node --test scripts/browser/session.test.mjs scripts/browser/browser-ip.test.mjs scripts/browser/proxy-store.test.mjs scripts/browser/launcher-port.test.mjs
+# 可选：真实 Chromium 冒烟测试，仅打开 about:blank，检查 Cookie 恢复和登录状态判定。
+AITOK_BROWSER_SMOKE=1 node --test scripts/browser/session.test.mjs scripts/browser/browser-ip.test.mjs
+# 在 frontend 中完成 npm run build 后，验证导入、代理配置、启动和关闭入口及移动端布局。
+AITOK_BROWSER_SMOKE=1 node --test scripts/browser/frontend.test.mjs
+```
+
+
+## 地址库
+
+所有登录用户可在工作台访问地址管理，按姓名、街道、城市、州、邮编、电话或邮箱搜索。普通用户可读取共享地址及自己的地址，只能修改自己的记录；超级管理员可管理全部地址，删除需二次确认。
+
+基础字段保存在 PostgreSQL 的 addresses 表，迁移 007_address_source_data.sql 增加 JSONB source_data，完整保留来源接口返回的字段（包括未知的新字段）。列表直接显示姓名、街道、城市、州、邮编、国家、电话和邮箱，其他生成资料在“完整来源资料”中展开查看。原始来源快照只读，编辑基础地址不会覆盖原始快照。来源生成的身份、卡号和安全码只作资料展示，不自动加入付款银行卡库。
+
+页面每次生成一条随机资料，并非有限的可枚举全站数据库。本项目采集 100 条完整资料，原始 JSON 保存在 backend/data/oregon-profiles.json；旧的基础地址快照仍在 backend/data/oregon-addresses.json。未再次出现的旧地址不拼接其他人的姓名；同一地址再次出现时，仅补充未编辑的共享精简记录，其他旧地址保留。新导入或更新的记录优先展示。
+
+采集依赖 Python 3 和 curl，每获得一条去重记录即保存，失败可重试；只有达到指定数量才生成导入 SQL：
+
+```bash
+python3 scripts/import-oregon-addresses.py --count 100 --output backend/data/oregon-profiles.json --sql /tmp/oregon-profiles.sql
+# 对已执行迁移的目标库运行生成的 SQL；事务写入并按地址去重。
+```

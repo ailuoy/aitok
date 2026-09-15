@@ -27,6 +27,7 @@ type Server struct {
 	mailer  *cloudflareMailer
 	billing billingConfig
 	stripe  stripeGateway
+	browser browserService
 }
 type User struct {
 	ID       int64  `json:"id"`
@@ -48,7 +49,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	s := &Server{db: db, secret: secret(), admin: loadAdminConfig(), mailer: newMailer(), billing: config, stripe: newStripeGateway(config.SecretKey)}
+	browser := &browserRuntime{}
+	defer browser.Close()
+	s := &Server{db: db, secret: secret(), admin: loadAdminConfig(), mailer: newMailer(), billing: config, stripe: newStripeGateway(config.SecretKey), browser: browser}
 	if err := db.Ping(); err != nil {
 		log.Fatal("数据库连接失败: ", err)
 	}
@@ -74,6 +77,14 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/me", s.me)
 	mux.HandleFunc("/api/accounts", s.accounts)
 	mux.HandleFunc("/api/accounts/", s.accountAction)
+	mux.HandleFunc("/api/bank-cards", s.bankCards)
+	mux.HandleFunc("/api/bank-cards/", s.bankCards)
+	mux.HandleFunc("/api/browser-assistant", s.browserAssistant)
+	mux.HandleFunc("/api/browser-assistant/", s.browserAssistant)
+	mux.HandleFunc("/api/addresses", s.addresses)
+	mux.HandleFunc("/api/account-groups", s.accountGroups)
+	mux.HandleFunc("/api/account-groups/", s.accountGroups)
+	mux.HandleFunc("/api/addresses/", s.addresses)
 	mux.HandleFunc("/api/wallet", s.walletDashboard)
 	mux.HandleFunc("/api/wallet/topups", s.createCheckout)
 	mux.HandleFunc("/api/wallet/topups/", s.syncPayment)

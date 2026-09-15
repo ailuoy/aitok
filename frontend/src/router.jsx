@@ -31,5 +31,5 @@ export function loginDestination(route) {
   const next = route.searchParams.get('next');
   if (!next || !next.startsWith('/') || next.startsWith('//')) return '/accounts';
   const target = new URL(next, location.origin);
-  return ['/accounts', '/wallet'].includes(target.pathname) ? target.pathname + target.search : '/accounts';
+  return ['/accounts', '/wallet', '/proxies', '/addresses', '/bank-cards'].includes(target.pathname) ? target.pathname + target.search : '/accounts';
 }

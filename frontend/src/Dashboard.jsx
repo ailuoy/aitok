@@ -1,19 +1,24 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Trash2, MessageSquare, CalendarDays, Coins, RefreshCw, KeyRound, X } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Plus, Trash2, MessageSquare, CalendarDays, Coins, RefreshCw, KeyRound, Monitor } from 'lucide-react';
 import { request } from './api';
 import WalletPanel from './WalletPanel';
+import SessionFields from './SessionFields';
+import BrowserSession from './BrowserSession';
+import LocalBrowserSession from './LocalBrowserSession';
+import ProxyManager from './ProxyManager';
+import { browserEnvironmentID, launcherRequest } from './localBrowser';
 import { Link, navigate } from './router';
-
-function Dialog({ title, onClose, children }) {
-  const ref = useRef(null);
-  useEffect(() => { const dialog = ref.current; dialog.showModal(); return () => dialog.close(); }, []);
-  return <dialog ref={ref} className="workspace-dialog" aria-labelledby="dialog-title" onCancel={event => { event.preventDefault(); onClose(); }}>
-    <button className="close" aria-label="关闭" onClick={onClose}><X size={20} /></button><h2 id="dialog-title">{title}</h2>{children}
-  </dialog>;
-}
+import Dialog from './Dialog';
+import useLocalBrowsers, { browserRunning } from './useLocalBrowsers';
+import AddressManager from './AddressManager';
+import BankCardManager from './BankCardManager';
+import Select from './Select';
+import GroupManager from './GroupManager';
+import CreateAccountGroup from './CreateAccountGroup';
+import { formatUTC8 } from './time';
 
 export default function Dashboard({ user, token, accounts, setAccounts, route }) {
-  const tab = route.pathname === '/wallet' ? 'wallet' : 'accounts';
+  const tab = route.pathname === '/wallet' ? 'wallet' : route.pathname === '/proxies' ? 'proxies' : route.pathname === '/addresses' ? 'addresses' : route.pathname === '/bank-cards' ? 'bank-cards' : 'accounts';
   const [returnNotice, setReturnNotice] = useState('');
   const [wallet, setWallet] = useState(null);
   const [dialog, setDialog] = useState(null);
@@ -21,6 +26,46 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   const [error, setError] = useState('');
   const [dialogError, setDialogError] = useState('');
   const [message, setMessage] = useState('');
+  const [proxyConfig, setProxyConfig] = useState(null);
+  const [proxyError, setProxyError] = useState('');
+  const [bindingAccount, setBindingAccount] = useState(null);
+  const localBrowsers = useLocalBrowsers(accounts, user?.id, token, setAccounts);
+  const [groups, setGroups] = useState([]);
+  const [groupFilter, setGroupFilter] = useState('all');
+  const [groupManager, setGroupManager] = useState(false);
+  const [creatingGroup, setCreatingGroup] = useState(null);
+  const [groupBusy, setGroupBusy] = useState(null);
+  const refreshGroups = useCallback(async () => { const data = await request('/account-groups', token); setGroups(data.groups); }, [token]);
+  useEffect(() => { refreshGroups().catch(error => setError(error.message)); }, [refreshGroups]);
+  useEffect(() => { if (groupFilter && groupFilter !== 'all' && !groups.some(group => String(group.id) === groupFilter)) setGroupFilter('all'); }, [groups, groupFilter]);
+  const refreshGrouping = async () => { await refreshGroups(); const data = await request('/accounts', token); setAccounts(data.accounts); };
+  async function bindGroup(account, value) {
+    setGroupBusy(account.id);
+    try {
+      const data = await request('/accounts/' + account.id + '/group', token, { method: 'PATCH', body: { group_id: value ? Number(value) : null } });
+      setAccounts(current => current.map(item => item.id === account.id ? { ...item, group_id: data.group_id } : item));
+      await refreshGroups(); setError(''); setMessage('账号分组已更新');
+    } catch (error) { setError(error.message); } finally { setGroupBusy(null); }
+  }
+  const closeBrowserDialog = useCallback(() => setDialog(current => ['local-browser', 'browser'].includes(current?.type) ? null : current), []);
+  async function toggleBrowser(account) {
+    if (!browserRunning(localBrowsers.states[account.id])) { open('local-browser', account); return; }
+    try { await localBrowsers.close(account.id); setError(''); }
+    catch (error) { setError(error.message); }
+  }
+  const refreshProxies = useCallback(async () => {
+    try { setProxyConfig(await launcherRequest('/proxies')); setProxyError(''); }
+    catch (error) { setProxyError(error.message); }
+  }, []);
+  useEffect(() => { refreshProxies(); }, [refreshProxies, tab]);
+  async function bindProxy(account, proxyID) {
+    setBindingAccount(account.id);
+    try {
+      setProxyConfig(await launcherRequest('/browsers/' + encodeURIComponent(browserEnvironmentID(user.id, account.id)) + '/proxy', { method: 'PATCH', body: { proxy_id: proxyID || null } }));
+      setMessage('代理选择已保存，下次打开账号时使用'); setError('');
+    } catch (error) { setError(error.message); }
+    finally { setBindingAccount(null); }
+  }
   const admin = user?.role === 'super_admin';
   const refresh = useCallback(async (syncPending = false) => {
     const [accountData, initialWallet] = await Promise.all([request('/accounts', token), request('/wallet', token)]);
@@ -68,19 +113,23 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     event.preventDefault(); setBusy(true); setDialogError('');
     const fields = new FormData(event.currentTarget);
     try {
-      if (dialog.type === 'add') {
-        const raw = fields.get('session_json');
+      if (dialog.type === 'add' || dialog.type === 'session') {
+        let raw = fields.get('session_json');
         let session;
         try { session = JSON.parse(raw); } catch { throw new Error('Session JSON 格式不正确，请输入完整 JSON 对象'); }
         if (!session || typeof session !== 'object' || Array.isArray(session) || Object.keys(session).length === 0) throw new Error('Session JSON 必须是非空 JSON 对象');
-        await request('/accounts', token, { method: 'POST', body: { label: fields.get('label'), email: fields.get('email'), session_json: raw } });
-        setMessage('账号已保存');
+        const cookie = fields.get('session_cookie')?.trim();
+        if (cookie) { session.sessionToken = cookie; raw = JSON.stringify(session); }
+        if (dialog.type === 'session') {
+          await request(`/accounts/${dialog.account.id}/session`, token, { method: 'PATCH', body: { session_json: raw } });
+          setMessage('Session 已更新，下次打开浏览器时生效');
+        } else {
+          await request('/accounts', token, { method: 'POST', body: { label: fields.get('label'), email: fields.get('email'), session_json: raw } });
+          setMessage('账号已导入，可点击“打开账号”在本机打开');
+        }
       } else if (dialog.type === 'date') {
         await request(`/accounts/${dialog.account.id}/renewal-date`, token, { method: 'PATCH', body: { renewal_date: fields.get('renewal_date') } });
         setMessage('续订日期已更新');
-      } else if (dialog.type === 'renew') {
-        const result = await request(`/accounts/${dialog.account.id}/renew`, token, { method: 'POST', body: { request_key: dialog.key, expected_cost: wallet.renewal_token_cost, expected_months: wallet.renewal_months } });
-        setMessage(`续订成功，新的续订日期为 ${result.renewal_date}`);
       } else if (dialog.type === 'delete') {
         await request(`/accounts/${dialog.account.id}`, token, { method: 'DELETE' });
         setMessage('账号已删除');
@@ -91,28 +140,32 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   }
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const activeCount = accounts.filter(a => a.renewal_date && a.renewal_date > today).length;
+  const visibleAccounts = accounts.filter(account => groupFilter === 'all' || (groupFilter === '' ? !account.group_id : String(account.group_id) === groupFilter));
   return <main className="dashboard">
-    <div className="dash-head"><div><span className="eyebrow">AITOK WORKSPACE</span><h1>{admin ? '账号与续订管理' : '你好，准备好开始了吗？'}</h1><p>{admin ? '管理全部 ChatGPT 账号的续订日期。' : '管理你的 ChatGPT 账号、会员日期和钱包。'}</p></div><button className="primary" onClick={() => open('add')}><Plus size={17} />添加账号</button></div>
+    <div className="dash-head"><div><span className="eyebrow">AITOK WORKSPACE</span><h1>{admin ? '账号管理' : '你好，准备好开始了吗？'}</h1><p>{admin ? '导入 Session、配置代理、打开账号浏览器及管理续订日期。' : '管理你的 ChatGPT 账号、会员日期和钱包。'}</p></div><button className="primary" onClick={() => open('add')}><Plus size={17} />添加账号</button></div>
     <div className="stats"><div><span>{admin ? '全部账号' : '我的账号'}</span><b>{accounts.length}</b></div><div><span>有效会员账号</span><b>{activeCount}</b></div><div><span>我的钱包</span><button className="balance-link" onClick={() => navigate('/wallet')}><b>{wallet?.balance ?? '—'}</b> 代币 <Coins size={16} /></button></div></div>
-    <nav className="workspace-tabs" aria-label="工作台"><Link aria-current={tab === 'accounts' ? 'page' : undefined} className={tab === 'accounts' ? 'active' : ''} to="/accounts"><MessageSquare size={16} />ChatGPT 账号</Link><Link aria-current={tab === 'wallet' ? 'page' : undefined} className={tab === 'wallet' ? 'active' : ''} to="/wallet"><Coins size={16} />钱包与充值</Link></nav>
+    <nav className="workspace-tabs" aria-label="工作台"><Link aria-current={tab === 'accounts' ? 'page' : undefined} className={tab === 'accounts' ? 'active' : ''} to="/accounts"><MessageSquare size={16} />ChatGPT 账号</Link><Link aria-current={tab === 'proxies' ? 'page' : undefined} className={tab === 'proxies' ? 'active' : ''} to="/proxies"><Monitor size={16} />SOCKS5 管理</Link><Link aria-current={tab === 'addresses' ? 'page' : undefined} className={tab === 'addresses' ? 'active' : ''} to="/addresses">地址管理</Link><Link aria-current={tab === 'bank-cards' ? 'page' : undefined} className={tab === 'bank-cards' ? 'active' : ''} to="/bank-cards">银行卡管理</Link></nav>
     {error && <p className="error" role="alert">{error}<button className="text-btn" onClick={() => refresh().catch(e => setError(e.message))}>重试</button></p>}
     {message && <p className="success" role="status">{message}</p>}
-    {tab === 'wallet' ? <WalletPanel wallet={wallet} token={token} refresh={refresh} user={user || {}} notice={notice} /> : <section className="account-section">
+    {localBrowsers.loginError && <p className="notice" role="status">{localBrowsers.loginError}</p>}
+    {tab === 'addresses' ? <AddressManager token={token} /> : tab === 'bank-cards' ? <BankCardManager token={token} /> : tab === 'proxies' ? <ProxyManager config={proxyConfig} error={proxyError} refresh={refreshProxies} onChange={setProxyConfig} /> : tab === 'wallet' ? <WalletPanel wallet={wallet} token={token} refresh={refresh} user={user || {}} notice={notice} /> : <section className="account-section">
       <div className="section-title"><h2>{admin ? '全部 ChatGPT 账号' : '你的 ChatGPT 账号'}</h2><button className="text-btn" onClick={() => refresh().catch(e => setError(e.message))}><RefreshCw size={15} />刷新</button></div>
-      {accounts.length === 0 ? <div className="empty"><div className="empty-icon"><KeyRound size={24} /></div><h3>还没有添加账号</h3><p>粘贴 Session JSON，保存你的 ChatGPT 账号。</p><button className="outline" onClick={() => open('add')}>添加第一个账号</button></div> : <div className="account-list">{accounts.map(account => <div className="account" key={account.id}>
-        <div className="account-avatar"><MessageSquare size={20} /></div><div className="account-info"><b>{account.label}</b><span>{account.email}</span>{admin && <span>所属用户：{account.owner_email}</span>}<span>{account.has_session ? 'Session 已保存' : '未保存 Session'}</span></div>
+      <div className="account-toolbar"><Select label="筛选账号分组" value={groupFilter} onChange={setGroupFilter} options={[{ value: 'all', label: '全部分组 · ' + accounts.length }, { value: '', label: '未分组 · ' + accounts.filter(account => !account.group_id).length }, ...groups.map(group => ({ value: String(group.id), label: group.name + ' · ' + group.account_count }))]} /><button className="outline small" onClick={() => setGroupManager(true)}>管理分组</button><span className="muted">{visibleAccounts.length} 个账号</span></div>
+      {accounts.length === 0 ? <div className="empty"><div className="empty-icon"><KeyRound size={24} /></div><h3>还没有添加账号</h3><p>粘贴 Session JSON，保存你的 ChatGPT 账号。</p><button className="outline" onClick={() => open('add')}>添加第一个账号</button></div> : <div className="account-list">{visibleAccounts.length === 0 && <p className="empty muted">此分组暂无账号。</p>}{visibleAccounts.map(account => <div className="account" key={account.id}>
+        <div className="account-avatar"><MessageSquare size={20} /></div><div className="account-info"><b>{account.label}</b>{account.label !== account.email && <span>{account.email}</span>}{admin && <span>所属用户：{account.owner_email}</span>}<span>{account.has_session ? 'Session 已保存' : '未保存 Session'}</span><div className="account-selects">{account.user_id === user?.id && <label className="account-proxy">SOCKS5<Select label={'账号 ' + account.email + ' 的 SOCKS5'} value={proxyConfig?.bindings[browserEnvironmentID(user.id, account.id)] || ''} disabled={!proxyConfig || bindingAccount !== null} onChange={value => bindProxy(account, value)} options={[{ value: '', label: proxyConfig ? '直连（不使用代理）' : '请先启动本机启动器' }, ...(proxyConfig?.proxies || []).map(proxy => ({ value: proxy.id, label: proxy.name + ' · ' + proxy.host }))]} /></label>}<label className="account-group">账号分组<Select label={'账号 ' + account.email + ' 的分组'} value={account.group_id ?? ''} onChange={value => bindGroup(account, value)} disabled={groupBusy !== null} options={[{ value: '', label: '未分组' }, ...groups.filter(group => group.user_id === account.user_id).map(group => ({ value: String(group.id), label: group.name }))]} searchPlaceholder="输入分组名称过滤…" createLabel="新建分组" onCreate={name => setCreatingGroup({ account, name })} /></label></div><span className="last-login">上次登录（UTC+8）：{formatUTC8(account.last_login_at)}</span></div>
         <div className="renewal-info"><span>续订日期</span><strong>{account.renewal_date || '未设置'}</strong><small className={account.renewal_date && account.renewal_date > today ? 'credit' : 'muted'}>{!account.renewal_date ? '待续订' : account.renewal_date > today ? '会员有效' : '已到续订日'}</small></div>
-        <div className="account-actions">{admin && <button className="outline small" onClick={() => open('date', account)}><CalendarDays size={15} />设置日期</button>}{account.user_id === user?.id && <><button className="primary small" disabled={!wallet} onClick={() => open('renew', account)}>代币续订</button><button className="icon-btn" aria-label={`删除 ${account.label}`} onClick={() => open('delete', account)}><Trash2 size={17} /></button></>}</div>
+        <div className="account-actions">{account.user_id === user?.id && <button className="outline small" onClick={() => toggleBrowser(account)} disabled={localBrowsers.closing[account.id] || localBrowsers.states[account.id]?.state === 'closing' || (!browserRunning(localBrowsers.states[account.id]) && !account.has_session)}><Monitor size={15} />{localBrowsers.closing[account.id] || localBrowsers.states[account.id]?.state === 'closing' ? '正在关闭…' : browserRunning(localBrowsers.states[account.id]) ? '关闭浏览器' : '打开账号'}</button>}{admin && <button className="outline small" onClick={() => open('browser', account)} disabled={!account.has_session}><Monitor size={15} />浏览器管理</button>}{(admin || account.user_id === user?.id) && <button className="outline small" onClick={() => open('session', account)}>更新 Session</button>}{admin && <button className="outline small" onClick={() => open('date', account)}><CalendarDays size={15} />设置日期</button>}{account.user_id === user?.id && <><button className="icon-btn" aria-label={`删除 ${account.label}`} onClick={() => open('delete', account)}><Trash2 size={17} /></button></>}</div>
       </div>)}</div>}
     </section>}
-    {dialog && <Dialog title={{ add: '添加 ChatGPT 账号', date: '设置续订日期', renew: '续订账号会员', delete: '删除账号' }[dialog.type]} onClose={() => { if (!busy) setDialog(null); }}><form onSubmit={submit}>
-      {dialog.type === 'add' && <><p className="muted">输入完整的 Session JSON，账号信息将加密保存。</p><label>账号名称<input name="label" required maxLength={120} placeholder="例如：工作账号" autoFocus /></label><label>登录邮箱<input name="email" type="email" required placeholder="chatgpt@example.com" autoComplete="off" /></label><label>Session JSON<textarea name="session_json" required rows={7} maxLength={240000} placeholder={'{\n  "user": { "email": "you@example.com" },\n  "accessToken": "…"\n}'} autoComplete="off" autoCapitalize="off" spellCheck={false} /></label></>}
+    {creatingGroup && <CreateAccountGroup token={token} account={creatingGroup.account} initialName={creatingGroup.name} onCreated={refreshGrouping} onClose={() => setCreatingGroup(null)} />}
+    {groupManager && <GroupManager groups={groups} token={token} user={user} accounts={accounts} onChange={refreshGrouping} onClose={() => setGroupManager(false)} />}
+    {dialog && <Dialog title={{ add: '导入 ChatGPT 账号', session: '更新账号 Session', browser: '账号浏览器管理', 'local-browser': '在本机打开账号', date: '设置续订日期', delete: '删除账号' }[dialog.type]} onClose={() => { if (!busy) setDialog(null); }}>{dialog.type === 'local-browser' ? <LocalBrowserSession key={dialog.key} account={dialog.account} userID={user.id} token={token} onStatus={localBrowsers.update} onClosed={closeBrowserDialog} /> : dialog.type === 'browser' ? <BrowserSession account={dialog.account} token={token} onClosed={closeBrowserDialog} /> : <form onSubmit={submit}>
+      {(dialog.type === 'add' || dialog.type === 'session') && <SessionFields updating={dialog.type === 'session'} />}
       {dialog.type === 'date' && <><p className="muted">{dialog.account.label} · {dialog.account.email}</p><label>下次续订日期<input type="date" name="renewal_date" defaultValue={dialog.account.renewal_date || ''} min="2000-01-01" max="9999-12-31" autoFocus /></label><p className="muted">清空日期可取消设置；此操作不扣除钱包代币。</p></>}
-      {dialog.type === 'renew' && <><p className="muted">为 {dialog.account.label} 续订 {wallet.renewal_months} 个月</p><div className="renewal-summary"><span>所需代币<strong>{wallet.renewal_token_cost}</strong></span><span>钱包余额<strong>{wallet.balance}</strong></span></div><p className="muted">未过期账号从原续订日期延长，已过期账号从今天起算。续订更新 AiTok 平台会员日期。</p>{wallet.balance < wallet.renewal_token_cost && <p className="notice">余额不足，请先到钱包充值。</p>}</>}
       {dialog.type === 'delete' && <p className="muted">确认删除「{dialog.account.label}」及其保存的 Session？钱包流水会保留。</p>}
       {dialogError && <p className="error" role="alert">{dialogError}</p>}
-      <button className="primary full" disabled={busy || (dialog.type === 'renew' && wallet.balance < wallet.renewal_token_cost)}>{busy ? '处理中…' : dialog.type === 'renew' ? `确认支付 ${wallet.renewal_token_cost} 代币` : dialog.type === 'delete' ? '确认删除' : '保存'}</button>
-      {dialog.type === 'renew' && wallet.balance < wallet.renewal_token_cost && <button type="button" className="outline" onClick={() => { setDialog(null); navigate('/wallet'); }}>前往充值</button>}
-    </form></Dialog>}
+      <button className="primary full" disabled={busy}>{busy ? '处理中…' : dialog.type === 'delete' ? '确认删除' : '保存'}</button>
+      {dialog.type === 'delete' && <button type="button" className="outline full" disabled={busy} onClick={() => setDialog(null)}>取消</button>}
+    </form>}</Dialog>}
   </main>;
 }

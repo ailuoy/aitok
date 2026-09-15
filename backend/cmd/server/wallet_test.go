@@ -14,14 +14,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	stripe "github.com/stripe/stripe-go/v82"
 )
 
-func TestSessionEncryptionAndMonthEnd(t *testing.T) {
+func TestSessionEncryption(t *testing.T) {
 	key := []byte(strings.Repeat("x", 32))
 	t.Setenv("SESSION_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString(key))
 	raw := `{"accessToken":"sensitive-test-token"}`
@@ -40,12 +39,7 @@ func TestSessionEncryptionAndMonthEnd(t *testing.T) {
 	if err != nil || string(plain) != raw {
 		t.Fatal("Session 加密内容不完整")
 	}
-	for _, pair := range [][2]string{{"2026-01-31", "2026-02-28"}, {"2028-01-31", "2028-02-29"}, {"2026-12-31", "2027-01-31"}} {
-		date, _ := time.Parse("2006-01-02", pair[0])
-		if got := addMonthsClamped(date, 1).Format("2006-01-02"); got != pair[1] {
-			t.Fatalf("日期计算错误 %s", got)
-		}
-	}
+
 }
 
 type fakeStripe struct {
@@ -87,7 +81,7 @@ func walletTestDB(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { db.Close() })
 	db.SetMaxOpenConns(1)
-	for _, file := range []string{"../../migrations/schema.sql", "../../migrations/001_wallet_and_renewals.sql", "../../migrations/002_payment_quantity_and_history.sql"} {
+	for _, file := range []string{"../../migrations/schema.sql", "../../migrations/001_wallet_and_renewals.sql", "../../migrations/002_payment_quantity_and_history.sql", "../../migrations/003_addresses.sql", "../../migrations/004_account_groups_and_login.sql", "../../migrations/005_bank_cards_and_address_owners.sql", "../../migrations/006_address_full_name.sql", "../../migrations/007_address_source_data.sql", "../../migrations/008_bank_card_platform_and_notes.sql"} {
 		body, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatal(err)
@@ -156,8 +150,8 @@ func TestWalletAndRenewalIntegration(t *testing.T) {
 		t.Fatal("管理员日期修改未记录")
 	}
 	renew := map[string]any{"request_key": "renewal-request-001", "expected_cost": 45, "expected_months": 1}
-	call("POST", path+"/renew", renew, 2, 404)
-	call("POST", path+"/renew", renew, 1, 409)
+	call("POST", path+"/renew", renew, 2, 410)
+	call("POST", path+"/renew", renew, 1, 410)
 	topup := map[string]any{"amount_minor": 10000, "request_key": "topup-request-001"}
 	result := call("POST", "/api/wallet/topups", topup, 1, 200)
 	orderNo := result["order_no"].(string)
@@ -211,52 +205,14 @@ func TestWalletAndRenewalIntegration(t *testing.T) {
 	if wallet["balance"] != float64(100) || len(wallet["ledger"].([]any)) != 1 {
 		t.Fatal("充值未正确幂等入账")
 	}
-	result = call("POST", path+"/renew", renew, 1, 200)
-	if result["balance"] != float64(55) || result["renewal_date"] != "2030-02-28" {
-		t.Fatal("扣费或续订日期错误")
-	}
-	call("POST", path+"/renew", renew, 1, 200)
-	// 两个续订请求竞争剩余余额，最多只有一个成功。
-	var wg sync.WaitGroup
-	codes := make(chan int, 2)
-	for _, key := range []string{"renewal-concurrent-1", "renewal-concurrent-2"} {
-		wg.Add(1)
-		go func(key string) {
-			defer wg.Done()
-			body := fmt.Sprintf(`{"request_key":%q,"expected_cost":45,"expected_months":1}`, key)
-			r := httptest.NewRequest("POST", path+"/renew", strings.NewReader(body))
-			r.Header.Set("Authorization", "Bearer "+s.token(1))
-			w := httptest.NewRecorder()
-			routes.ServeHTTP(w, r)
-			codes <- w.Code
-		}(key)
-	}
-	wg.Wait()
-	close(codes)
-	success := 0
-	for code := range codes {
-		if code == 200 {
-			success++
-		} else if code != 409 {
-			t.Fatalf("续订状态 %d", code)
-		}
-	}
-	if success != 1 {
-		t.Fatal("余额不足仍重复扣币")
-	}
+	call("POST", path+"/renew", renew, 1, 410)
 	wallet = call("GET", "/api/wallet", nil, 1, 200)
-	if wallet["balance"] != float64(10) || len(wallet["ledger"].([]any)) != 3 {
-		t.Fatal("续订幂等或余额计算错误")
+	if wallet["balance"] != float64(100) || len(wallet["ledger"].([]any)) != 1 {
+		t.Fatal("停用续订后不得扣除代币")
 	}
-	renewals := wallet["renewals"].([]any)
-	if len(renewals) != 2 {
-		t.Fatal("扣款记录数量错误")
-	}
-	for _, value := range renewals {
-		record := value.(map[string]any)
-		if record["account_label"] != "工作账号" || record["tokens"] != float64(45) || record["months"] != float64(1) || record["balance_after"] == nil {
-			t.Fatal("扣款记录缺少账号快照或金额信息")
-		}
+	// 历史扣款记录仍可读取，删除账号不影响已保存的名称快照。
+	if _, err = db.Exec(`INSERT INTO account_renewals(user_id,request_key,account_id,tokens,renewal_date,account_label,months) VALUES(1,'legacy-renewal',$1,45,'2030-02-28','工作账号',1)`, aid); err != nil {
+		t.Fatal(err)
 	}
 	call("DELETE", path, nil, 1, 204)
 	wallet = call("GET", "/api/wallet", nil, 1, 200)
