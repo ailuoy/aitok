@@ -33,3 +33,8 @@ coverage/
 *.log
 *.pid
 *.pid.lock
+
+# Syncthing 本机控制文件、文件夹标记与传输临时文件
+.stignore
+.stfolder/
+.syncthing.*.tmp

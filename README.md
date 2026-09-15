@@ -8,6 +8,8 @@ bash run-dev.sh
 
 前端地址为 `http://localhost:15680`，后端使用 `15681`，PostgreSQL 使用 `15682`。
 
+后端使用 Go Kratos v2.9.2，由 Kratos HTTP Server 注册路由，Kratos App 管理启动及 SIGINT/SIGTERM 优雅停机（最多等待 5 秒）。HTTP 服务与路由集中在 `backend/cmd/server/http.go`，业务处理函数继续使用标准 `http.HandlerFunc`，保留原有 REST JSON、鉴权和 CORS 协议。监听地址由 `BACKEND_ADDR` 配置，默认 `:15681`；关闭框架默认的 1 秒请求超时，由业务控制外部调用时限。
+
 ## 本地 Docker 启动
 
 需要 Docker、Docker Compose（支持 `up --wait`）和 `lsof`（用于释放端口，macOS 通常已自带），无需在宿主机安装 Go 或 Node.js：

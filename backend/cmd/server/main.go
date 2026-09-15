@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"log"
 	"math/big"
 	"net/http"
@@ -18,6 +17,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	khttp "github.com/go-kratos/kratos/v2/transport/http"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 type Server struct {
@@ -37,61 +39,33 @@ type User struct {
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		dsn = "postgres://postgres:postgres@localhost:15682/getgpt?sslmode=disable"
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
+	defer db.Close()
 	config, err := loadBillingConfig()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	browser := &browserRuntime{}
 	defer browser.Close()
 	s := &Server{db: db, secret: secret(), admin: loadAdminConfig(), mailer: newMailer(), billing: config, stripe: newStripeGateway(config.SecretKey), browser: browser}
 	if err := db.Ping(); err != nil {
-		log.Fatal("数据库连接失败: ", err)
+		return fmt.Errorf("数据库连接失败: %w", err)
 	}
-	mux := s.routes()
-	h := cors(mux)
 	addr := envDefault("BACKEND_ADDR", ":15681")
-	log.Printf("getgpt api listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, h))
-}
-
-func (s *Server) routes() *http.ServeMux {
-	mux := http.NewServeMux()
-	// 仅检查 HTTP 服务存活，不访问数据库或执行迁移。
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, map[string]string{"status": "ok"}, http.StatusOK)
-	})
-	mux.HandleFunc("/api/register", s.register)
-	mux.HandleFunc("/api/login", s.login)
-	mux.HandleFunc("/api/send-code", s.sendCode)
-	mux.HandleFunc("/api/login-code", s.loginCode)
-	mux.HandleFunc("/api/forgot-password", s.forgotPassword)
-	mux.HandleFunc("/api/reset-password", s.resetPassword)
-	mux.HandleFunc("/api/me", s.me)
-	mux.HandleFunc("/api/users", s.users)
-	mux.HandleFunc("/api/users/", s.users)
-	mux.HandleFunc("/api/accounts", s.accounts)
-	mux.HandleFunc("/api/accounts/", s.accountAction)
-	mux.HandleFunc("/api/bank-cards", s.bankCards)
-	mux.HandleFunc("/api/bank-cards/", s.bankCards)
-	mux.HandleFunc("/api/browser-assistant", s.browserAssistant)
-	mux.HandleFunc("/api/browser-assistant/", s.browserAssistant)
-	mux.HandleFunc("/api/addresses", s.addresses)
-	mux.HandleFunc("/api/account-groups", s.accountGroups)
-	mux.HandleFunc("/api/account-groups/", s.accountGroups)
-	mux.HandleFunc("/api/addresses/", s.addresses)
-	mux.HandleFunc("/api/wallet", s.walletDashboard)
-	mux.HandleFunc("/api/wallet/topups", s.createCheckout)
-	mux.HandleFunc("/api/wallet/topups/", s.syncPayment)
-	mux.HandleFunc("/api/stripe/webhook", s.stripeWebhook)
-	return mux
+	return newApp(s.routes(khttp.Address(addr))).Run()
 }
 
 func secret() []byte {
@@ -100,18 +74,6 @@ func secret() []byte {
 		log.Fatal("请在 .env 配置 JWT_SECRET（至少 32 个字符）")
 	}
 	return []byte(v)
-}
-func cors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 func jsonBody(r *http.Request, v any) error { return json.NewDecoder(r.Body).Decode(v) }
 func reply(w http.ResponseWriter, v any, status int) {
