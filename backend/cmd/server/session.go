@@ -162,9 +162,12 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 	w.Header().Set("Cache-Control", "no-store")
 	var encrypted, email string
 	var err error
-	// 后台管理员可更新账号 Session；旧版凭据导出接口仍仅限所有者。
+	// 所有浏览器凭据导出均要求管理员身份和一次性 TOTP。
 	if launch {
-		err = s.db.QueryRowContext(r.Context(), `SELECT COALESCE(session_ciphertext,''),email FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND user_id=$2`, accountID, userID).Scan(&encrypted, &email)
+		if !s.consumeTOTP(w, r, userID, r.Header.Get("X-Aitok-TOTP"), false) {
+			return
+		}
+		encrypted, email, err = s.managedAccount(r.Context(), userID, accountID)
 	} else {
 		encrypted, email, err = s.managedAccount(r.Context(), userID, accountID)
 	}
@@ -218,7 +221,7 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "账号加密未配置，请联系管理员"}, 503)
 		return
 	}
-	result, err := s.db.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET session_ciphertext=$1 WHERE id=$2 AND deleted_at IS NULL AND COALESCE(session_ciphertext,'')=$3`, encoded, accountID, encrypted)
+	result, err := s.db.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),session_ciphertext=$1 WHERE id=$2 AND deleted_at IS NULL AND COALESCE(session_ciphertext,'')=$3`, encoded, accountID, encrypted)
 	if err != nil {
 		reply(w, map[string]string{"error": "更新 Session 失败"}, 500)
 		return

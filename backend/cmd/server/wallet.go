@@ -15,6 +15,8 @@ type ledgerEntry struct {
 }
 
 type topupOrder struct {
+	RefundedMinor   int64     `json:"refunded_minor"`
+	DisputeStatus   string    `json:"dispute_status"`
 	OrderNo         string    `json:"order_no"`
 	AmountMinor     int64     `json:"amount_minor"`
 	Tokens          int64     `json:"tokens"`
@@ -73,14 +75,14 @@ func (s *Server) walletDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	orders := []topupOrder{}
-	rows, err = s.db.QueryContext(r.Context(), `SELECT order_no,amount_minor,tokens,status,created_at,quantity,COALESCE(unit_amount_minor,amount_minor) FROM topup_orders WHERE user_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100`, id)
+	rows, err = s.db.QueryContext(r.Context(), `SELECT order_no,amount_minor,tokens,status,created_at,quantity,COALESCE(unit_amount_minor,amount_minor),refunded_minor,dispute_status FROM topup_orders WHERE user_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 100`, id)
 	if err != nil {
 		reply(w, map[string]string{"error": "读取充值订单失败"}, 500)
 		return
 	}
 	for rows.Next() {
 		var order topupOrder
-		if err = rows.Scan(&order.OrderNo, &order.AmountMinor, &order.Tokens, &order.Status, &order.CreatedAt, &order.Quantity, &order.UnitAmountMinor); err != nil {
+		if err = rows.Scan(&order.OrderNo, &order.AmountMinor, &order.Tokens, &order.Status, &order.CreatedAt, &order.Quantity, &order.UnitAmountMinor, &order.RefundedMinor, &order.DisputeStatus); err != nil {
 			break
 		}
 		orders = append(orders, order)

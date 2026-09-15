@@ -29,11 +29,8 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.URL.Path == "/api/users" && r.Method == "GET" {
 		query := strings.TrimSpace(r.URL.Query().Get("q"))
-		page := 1
-		if value := r.URL.Query().Get("page"); value != "" {
-			page, err = strconv.Atoi(value)
-		}
-		if err != nil || page < 1 || page > 100000 || utf8.RuneCountInString(query) > 200 {
+		page, size, valid := pageParameters(r)
+		if !valid || utf8.RuneCountInString(query) > 200 {
 			reply(w, map[string]string{"error": "搜索内容或页码无效"}, 400)
 			return
 		}
@@ -43,7 +40,7 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "读取用户失败"}, 500)
 			return
 		}
-		rows, err := s.db.QueryContext(r.Context(), `SELECT id,email,COALESCE(role,''),created_at FROM users`+filter+` ORDER BY id DESC LIMIT 20 OFFSET $4`, adminIdentity, s.admin.Username, query, (page-1)*20)
+		rows, err := s.db.QueryContext(r.Context(), `SELECT id,email,COALESCE(role,''),created_at FROM users`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $4`, adminIdentity, s.admin.Username, query, (page-1)*size, size)
 		if err != nil {
 			reply(w, map[string]string{"error": "读取用户失败"}, 500)
 			return
@@ -66,10 +63,19 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "读取用户失败"}, 500)
 			return
 		}
-		reply(w, map[string]any{"users": users, "total": total, "page": page, "page_size": 20}, 200)
+		reply(w, map[string]any{"users": users, "total": total, "page": page, "page_size": size}, 200)
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/users/"), "/")
+	if len(parts) == 2 && parts[1] == "access" {
+		target, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil || target < 1 {
+			http.NotFound(w, r)
+			return
+		}
+		s.userAccess(w, r, target)
+		return
+	}
 	if len(parts) != 2 || parts[1] != "role" {
 		http.NotFound(w, r)
 		return
@@ -89,7 +95,7 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	}
 	// 超管身份由环境配置保留，角色接口不能创建或降级超级管理员。
 	var saved string
-	err = s.db.QueryRowContext(r.Context(), `UPDATE users SET role=$1 WHERE id=$2 AND deleted_at IS NULL AND email<>$3 RETURNING role`, input.Role, target, adminIdentity).Scan(&saved)
+	err = s.db.QueryRowContext(r.Context(), `UPDATE users SET updated_at=NOW(),role=$1 WHERE id=$2 AND deleted_at IS NULL AND email<>$3 RETURNING role`, input.Role, target, adminIdentity).Scan(&saved)
 	if errors.Is(err, sql.ErrNoRows) {
 		reply(w, map[string]string{"error": "用户不存在或为不可修改的超级管理员"}, 404)
 		return

@@ -60,6 +60,9 @@ func TestManagedAccountBrowserIntegration(t *testing.T) {
 		if user != 0 {
 			r.Header.Set("Authorization", "Bearer "+s.token(user))
 		}
+		if method == "POST" && (strings.HasSuffix(path, "/browser") || strings.HasSuffix(path, "/browser-session")) && s.permitted(r.Context(), user, "accounts") {
+			r.Header.Set("X-Aitok-TOTP", browserTestOTP(t, s, user))
+		}
 		w := httptest.NewRecorder()
 		s.routes().ServeHTTP(w, r)
 		if w.Code != status {
@@ -92,7 +95,7 @@ func TestManagedAccountBrowserIntegration(t *testing.T) {
 		t.Fatal("代理与原始 Session 未正确加密保存")
 	}
 	updated := strings.ReplaceAll(raw, "original-secret", "updated-secret")
-	call("PATCH", path+"/session", 1, map[string]string{"session_json": updated}, 200)
+	call("PATCH", path+"/session", 3, map[string]string{"session_json": updated}, 200)
 	call("GET", path+"/browser", 3, nil, 200)
 	w = call("POST", path+"/browser", 3, map[string]any{"environment_id": "tampered"}, 200)
 	params := worker.params[len(worker.params)-1]
@@ -111,8 +114,8 @@ func TestManagedAccountBrowserIntegration(t *testing.T) {
 	}
 	call("PATCH", path+"/browser", 3, map[string]string{"proxy_url": "https://invalid"}, 400)
 	call("POST", "/api/accounts/999/browser", 3, map[string]any{}, 404)
-	call("POST", path+"/browser-session", 3, nil, 404)
-	call("POST", path+"/browser-session", 1, nil, 200)
+	call("POST", path+"/browser-session", 3, nil, 200)
+	call("POST", path+"/browser-session", 1, nil, 403)
 }
 
 func TestBrowserRuntimeCancelledRequest(t *testing.T) {

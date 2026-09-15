@@ -103,7 +103,7 @@ func (s *Server) accountGroups(w http.ResponseWriter, r *http.Request) {
 			status = 201
 			err = s.db.QueryRowContext(r.Context(), `INSERT INTO account_groups(user_id,name) SELECT id,$2 FROM users WHERE id=$1 AND deleted_at IS NULL RETURNING id,user_id,name`, in.UserID, in.Name).Scan(&g.ID, &g.UserID, &g.Name)
 		} else {
-			err = s.db.QueryRowContext(r.Context(), `UPDATE account_groups SET name=$1 WHERE id=$2 AND deleted_at IS NULL AND (user_id=$3 OR $4) RETURNING id,user_id,name`, in.Name, id, user, admin).Scan(&g.ID, &g.UserID, &g.Name)
+			err = s.db.QueryRowContext(r.Context(), `UPDATE account_groups SET updated_at=NOW(),name=$1 WHERE id=$2 AND deleted_at IS NULL AND (user_id=$3 OR $4) RETURNING id,user_id,name`, in.Name, id, user, admin).Scan(&g.ID, &g.UserID, &g.Name)
 		}
 		if err != nil {
 			groupError(w, err)
@@ -119,7 +119,7 @@ func (s *Server) accountGroups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer tx.Rollback()
-		result, err := tx.ExecContext(r.Context(), `UPDATE account_groups SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
+		result, err := tx.ExecContext(r.Context(), `UPDATE account_groups SET updated_at=NOW(),deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
 		if err != nil {
 			groupError(w, err)
 			return
@@ -133,7 +133,7 @@ func (s *Server) accountGroups(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		if _, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET group_id=NULL WHERE group_id=$1 AND deleted_at IS NULL`, id); err != nil {
+		if _, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),group_id=NULL WHERE group_id=$1 AND deleted_at IS NULL`, id); err != nil {
 			groupError(w, err)
 			return
 		}
@@ -176,7 +176,7 @@ func (s *Server) setAccountGroup(w http.ResponseWriter, r *http.Request, user, i
 		}
 	}
 	var groupID *int64
-	err = tx.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts a SET group_id=$1 WHERE a.id=$2 AND a.deleted_at IS NULL AND (a.user_id=$3 OR $4) AND ($1::bigint IS NULL OR EXISTS (SELECT 1 FROM account_groups g WHERE g.id=$1 AND g.deleted_at IS NULL AND g.user_id=a.user_id)) RETURNING group_id`, in.GroupID, id, user, admin).Scan(&groupID)
+	err = tx.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts a SET updated_at=NOW(),group_id=$1 WHERE a.id=$2 AND a.deleted_at IS NULL AND (a.user_id=$3 OR $4) AND ($1::bigint IS NULL OR EXISTS (SELECT 1 FROM account_groups g WHERE g.id=$1 AND g.deleted_at IS NULL AND g.user_id=a.user_id)) RETURNING group_id`, in.GroupID, id, user, admin).Scan(&groupID)
 	if err != nil {
 		groupError(w, err)
 		return
@@ -198,7 +198,7 @@ func (s *Server) recordAccountLogin(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	var at time.Time
-	err := s.db.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts SET last_login_at=GREATEST(last_login_at,$1) WHERE id=$2 AND deleted_at IS NULL AND user_id=$3 RETURNING last_login_at`, in.At, id, user).Scan(&at)
+	err := s.db.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),last_login_at=GREATEST(last_login_at,$1) WHERE id=$2 AND deleted_at IS NULL AND (user_id=$3 OR $4) RETURNING last_login_at`, in.At, id, user, s.permitted(r.Context(), user, "accounts")).Scan(&at)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
 		return

@@ -1,0 +1,19 @@
+import Pagination from './Pagination';
+import React, { useEffect, useState } from 'react';
+import { request } from './api';
+import Dialog from './Dialog';
+import DataTable from './DataTable';
+import { formatUTC8 } from './time';
+import { formatCardUSD } from './BankCardLedger';
+
+export default function PaymentExceptions({ token }) {
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
+  const [rows, setRows] = useState([]), [page, setPage] = useState(1), [revision, refresh] = useState(0), [error, setError] = useState('');
+  const [confirm, setConfirm] = useState(null), [busy, setBusy] = useState(false), [reason, setReason] = useState('');
+  useEffect(() => { const c = new AbortController(); request('/payment-exceptions?page=' + page + '&page_size=' + pageSize, token, { signal: c.signal }).then(v => { if (!c.signal.aborted) { setRows(v.exceptions); setTotal(v.total); } }).catch(e => { if (!c.signal.aborted) setError(e.message); }); return () => c.abort(); }, [token, page, pageSize, revision]);
+  async function act() { if (busy) return; setBusy(true); setError(''); try { await request('/payment-exceptions', token, { method: 'POST', body: { id: confirm.row.id, action: confirm.action, reason } }); setConfirm(null); refresh(v => v + 1); } catch (e) { setError(e.message); } finally { setBusy(false); } }
+  return <section className="account-section"><div className="section-title"><h2>支付退款与异常</h2><button className="outline small" onClick={() => refresh(v => v + 1)}>刷新</button></div><p className="muted">Stripe 退款申请由具有退款权限的管理员确认。退款回调回收对应代币；余额不足保留待处理事项，核对后可再次回收。</p>{error && <p className="error" role="alert">{error}</p>}<DataTable label="支付退款与异常" columns={['时间', '充值订单', '类型', '金额 USD', '状态', '说明', '操作']} empty={!rows.length && '暂无退款申请或支付异常。'}>{rows.map(row => <tr key={row.id}><td>{formatUTC8(row.created_at)}</td><td className="table-text">{row.order_no}</td><td>{{ refund_request: '退款申请', refund: '代币回收', refund_result: '渠道退款结果', dispute: '拒付争议' }[row.kind]}</td><td>{formatCardUSD(row.amount_minor)}</td><td>{{ pending: '待处理', processing: '结果待确认', submitted: '已提交渠道', resolved: '已处理', rejected: '已拒绝', failed: '渠道失败' }[row.status] || row.status}</td><td className="table-text">{row.detail}</td><td><div className="row-actions">{row.kind === 'refund_request' && ['pending', 'processing', 'submitted'].includes(row.status) && <button className="outline small" onClick={() => { setReason(''); setConfirm({ row, action: 'approve' }); }}>{row.status === 'processing' ? '原申请重试' : '批准原路退款'}</button>}{row.kind === 'refund_request' && row.status === 'pending' && <button className="text-btn danger" onClick={() => { setReason(''); setConfirm({ row, action: 'reject' }); }}>拒绝申请</button>}{['refund','dispute'].includes(row.kind) && row.status === 'pending' && <button className="outline small" onClick={() => { setReason(''); setConfirm({ row, action: 'reconcile' }); }}>重新核对代币回收</button>}</div></td></tr>)}</DataTable><Pagination page={page} pageSize={pageSize} total={total} onPageChange={setPage} onPageSizeChange={setPageSize} disabled={false} />
+    {confirm && <Dialog title="确认处理支付事项" onClose={() => { if (!busy) setConfirm(null); }}><p>{confirm.row.order_no} · {formatCardUSD(confirm.row.amount_minor)}</p><p>{confirm.action === 'approve' ? '确认后将调用 Stripe 向原支付方式退款。请核对订单和金额；结果不明确时仅重试此申请。' : confirm.action === 'reject' ? '请填写拒绝退款的原因。' : '将核对对应退款并回收尚未回收的代币，保留所有原始流水。'}</p><label>处理说明<textarea value={reason} onChange={e => setReason(e.target.value)} maxLength={1000} /></label>{error && <p className="error">{error}</p>}<div className="browser-buttons"><button className="primary" disabled={busy || (confirm.action === 'reject' && !reason.trim())} onClick={act}>{busy ? '处理中…' : '确认处理'}</button><button className="outline" disabled={busy} onClick={() => setConfirm(null)}>取消</button></div></Dialog>}
+  </section>;
+}

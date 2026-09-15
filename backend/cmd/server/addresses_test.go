@@ -81,10 +81,10 @@ func TestAddressCRUDIntegration(t *testing.T) {
 	if _, err := db.Exec(`UPDATE addresses SET source_data=$1 WHERE id=$2`, `{"Full_Name":"Test User","Telephone":"555-0100","Extra_Field":"kept","CVV2":"123"}`, created.Address.ID); err != nil {
 		t.Fatal(err)
 	}
-	call("GET", path, 1, nil, 404)
-	call("PATCH", path, 1, input, 404)
-	call("DELETE", path, 1, nil, 404)
-	call("GET", "/api/addresses", 1, nil, 200)
+	call("GET", path, 1, nil, 403)
+	call("PATCH", path, 1, input, 403)
+	call("DELETE", path, 1, nil, 403)
+	call("GET", "/api/addresses", 1, nil, 403)
 
 	call("POST", "/api/addresses", 3, input, 409)
 	input["address_line1"] = "  100  test road "

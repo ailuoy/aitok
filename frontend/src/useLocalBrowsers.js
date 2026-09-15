@@ -11,7 +11,7 @@ export default function useLocalBrowsers(accounts, userID, token, setAccounts) {
   const recorded = useRef({});
   const recording = useRef(new Set());
   const [loginError, setLoginError] = useState('');
-  const accountIDs = JSON.stringify(accounts.filter(account => account.user_id === userID).map(account => account.id));
+  const accountIDs = JSON.stringify(accounts.map(account => account.id));
   const update = useCallback((id, status) => {
     versions.current[id] = (versions.current[id] || 0) + 1;
     setStates(current => ({ ...current, [id]: status }));
@@ -21,7 +21,7 @@ export default function useLocalBrowsers(accounts, userID, token, setAccounts) {
       const at = status.authenticated_at;
       const key = `${userID}:${id}:${at}`;
       if (!at || recorded.current[key] || recording.current.has(key)) continue;
-      if (!accounts.some(account => String(account.id) === id && account.user_id === userID)) continue;
+      if (!accounts.some(account => String(account.id) === id)) continue;
       recording.current.add(key);
       request('/accounts/' + id + '/login', token, { method: 'POST', body: { logged_in_at: at } })
         .then(data => { recorded.current[key] = true; setLoginError(''); setAccounts(current => current.map(account => String(account.id) === id ? { ...account, last_login_at: data.last_login_at } : account)); })

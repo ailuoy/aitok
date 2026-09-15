@@ -129,6 +129,8 @@ test('无密钥启动器管理代理并把账号绑定的认证代理交给浏�
   const reloaded = await new ProxyStore(store.directory).load();
   assert.equal(reloaded.history(id).total, history.total);
   assert.equal((await call('/proxy-history?page=0')).status, 400);
+  assert.equal((await call('/proxy-history?page_size=101')).status, 400);
+  assert.equal((await (await call('/proxy-history?page_size=50')).json()).page_size, 50);
   const failedInput = { ...input, host: 'failed.example' };
   const failed = await (await call('/proxies/test', 'POST', failedInput)).json();
   assert.equal(failed.result.ok, false);
@@ -144,6 +146,8 @@ test('代理使用历史分页、并发写入和代理筛选不丢记录', async
   await store.recordUsage({ ...proxy, id: 'proxy-b' }, { action: 'get_ip', ok: false });
   assert.equal(store.history('proxy-a').records.length, 20);
   assert.equal(store.history('proxy-a', 2).records.length, 5);
+  assert.equal(store.history('proxy-a', 1, 50).records.length, 25);
+  assert.equal(store.history('proxy-a', 2, 50).records.length, 0);
   assert.equal(store.history('proxy-b').records.length, 1);
   assert.equal(store.history('').total, 26);
   assert.ok(!JSON.stringify(store.history('')).includes('never-log'));

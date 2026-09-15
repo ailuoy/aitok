@@ -38,7 +38,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let browserState = 'closed';
   let groups = [], loginWrites = 0, authenticatedAt;
   let savedProxy = '';
-  let addressRows = Array.from({ length: 21 }, (_, index) => ({ id: index + 1, address_line1: `${index + 1} Test Street`, address_line2: '', city: 'Portland', state: 'OR', postal_code: '97201', country: 'US', source_url: 'https://www.meiguodizhi.com/usa-address/oregon', source_data: { Full_Name: 'Test User', Occupation: 'Engineer', Extra_Field: 'Preserved value', CVV2: '123' }, can_edit: true }));
+  let twoFactorEnabled = false;
+  const otpHeaders = [];
+  let addressRows = Array.from({ length: 21 }, (_, index) => ({ id: index + 1, address_line1: index === 0 ? '4111 Gateway [Road]' : `${index + 1} Test Street`, address_line2: '', city: 'Portland', state: 'OR', postal_code: '97201', country: 'US', source_url: 'https://www.meiguodizhi.com/usa-address/oregon', source_data: { Full_Name: 'Test User', Occupation: 'Engineer', Extra_Field: 'Preserved value', CVV2: '123' }, can_edit: true }));
   const addressWrites = [];
   let bankCards = [];
   const bankWrites = [];
@@ -46,6 +48,10 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let ledgerResponseLost = false;
   const userRows = [{ id: 3, username: 'admin', email: '', role: 'super_admin', created_at: '2026-09-01T00:00:00Z' }, { id: 1, email: 'member@example.com', role: '', created_at: '2026-09-02T00:00:00Z' }];
   const roleWrites = [];
+  let rechargePackages=[], rechargeOrders=[];
+  let phpRate='0.01589', phpCNYRate='0.1067';
+  const operationWrites=[];
+  const adminActivities=[];
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
   await cdp.send('Network.enable', {}, sessionId);
@@ -60,13 +66,22 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       const { requestId, request } = message.params;
       const url = new URL(request.url);
       requests.push(request.url);
+      if (request.method === 'POST' && /^\/api\/accounts\/\d+\/(browser|browser-session)$/.test(url.pathname)) {
+        otpHeaders.push(Object.entries(request.headers).find(([key])=>key.toLowerCase()==='x-aitok-totp')?.[1]);
+      }
       let data = {};
       let responseCode = request.method === 'OPTIONS' ? 204 : 200;
       if (url.origin === 'http://127.0.0.1:15683') {
         localRequests.push(request);
-        if (url.pathname === '/health') data = { status: 'ok', version: 2 };
+        if (url.pathname === '/activity-export') data = {device_id:'test-device',events:[],next_cursor:0};
+        else if (url.pathname === '/health') data = { status: 'ok', version: 2 };
         else if (url.pathname === '/proxies/parse') data = { items: [{ line: 1, proxy: { host: '203.0.113.10', port: 1080, username: 'proxy-user', password: 'proxy-secret', name: 'Imported' } }] };
-        else if (url.pathname === '/proxy-history') data = { records: [{ id: 'usage-1', action: 'open', ok: true, email: account.email, created_at: '2026-09-15T00:30:00Z' }], total: 1, page: 1, page_size: 20 };
+        else if (url.pathname === '/proxy-history') {
+          // 模拟未重启的旧启动器，忽略 page_size，前端需合并旧分页。
+          const page = Number(url.searchParams.get('page') || 1);
+          const records = Array.from({ length: 61 }, (_, i) => ({ id: 'usage-' + i, action: 'open', ok: true, email: account.email, created_at: '2026-09-15T00:30:00Z' }));
+          data = { records: records.slice((page - 1) * 20, page * 20), total: records.length, page, page_size: 20 };
+        }
         else if (url.pathname.startsWith('/proxies')) {
           const input = request.postData ? JSON.parse(request.postData) : {};
           if (request.method === 'POST' && url.pathname === '/proxies') { proxyPassword = input.password; proxies.push({ ...input, password: undefined, has_password: Boolean(input.password), id: 'proxy-1' }); }
@@ -94,7 +109,42 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
           if (request.method === 'DELETE') localState = 'closed';
           data = { state: localState, authenticated_at: authenticatedAt };
         }
-      } else if (url.pathname.startsWith('/api/users')) {
+      } else if (url.pathname === '/api/two-factor') {
+        const input = request.postData ? JSON.parse(request.postData) : {};
+        if (input.action === 'setup') data = {secret:'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',otpauth_url:'otpauth://totp/AiTok:test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=AiTok'};
+        else { if (input.action === 'confirm') twoFactorEnabled = true; data = {enabled:twoFactorEnabled}; }
+      } else if (url.pathname === '/api/admin-activity') {
+        if (request.method === 'POST') adminActivities.push(JSON.parse(request.postData));
+        responseCode=204;
+      } else if (url.pathname.startsWith('/api/packages')) {
+        const input=request.postData?JSON.parse(request.postData):{};
+        if(request.method==='POST') rechargePackages.push({...input,id:1});
+        if(request.method==='PATCH') rechargePackages[0]={...rechargePackages[0],...input};
+        if(request.method==='DELETE') rechargePackages=[];
+        const rate={id:1,rate:phpRate,cny_rate:phpCNYRate,source:'https://www.exchangerate-api.com',effective_at:new Date().toISOString(),synced_at:new Date().toISOString()};
+        data={packages:rechargePackages.map(p=>p.auto_usd?{...p,sale_usd_minor:Math.round(p.original_amount_minor*Number(phpRate)),sale_cny_minor:Math.round(p.original_amount_minor*Number(phpCNYRate)),cny_price_ready:true,price_ready:true,exchange_rate:rate}:p),can_manage:true,exchange_rate:rate,exchange_rate_fresh:true};
+      } else if (url.pathname.startsWith('/api/orders')) {
+        const input=request.postData?JSON.parse(request.postData):{};
+        if(request.method==='POST') {
+          operationWrites.push(input);
+          if(url.pathname==='/api/orders') rechargeOrders.push({id:1,order_no:'order-smoke-1',account_email:account.email,package_snapshot:rechargePackages[0],period_start:input.period_start,period_end:'2030-02-01',payment_status:'unpaid',fulfillment_status:'pending',sale_usd_minor:20000,wallet_tokens:100,cost_usd_minor:0,refunded_usd_minor:0,version:0});
+          else {
+            const order=rechargeOrders[0];order.version++;
+            if(input.action==='collect')order.payment_status='paid';
+            if(input.action==='purchase'){order.cost_usd_minor=15000;order.fulfillment_status='verifying'}
+            if(input.action==='verify')order.fulfillment_status='completed';
+            if(input.action==='refund'){order.payment_status='partial_refund';order.refunded_usd_minor=5000}
+          }
+        }
+        data=url.pathname==='/api/orders/1'?{order:rechargeOrders[0],events:[]}:{orders:rechargeOrders,total:rechargeOrders.length,can_manage:true,can_finance:true,can_refund:true};
+      } else if (url.pathname==='/api/notices') data={notices:[]};
+      else if (url.pathname==='/api/audit') data={events:[
+        {id:2,actor:'audit@example.com',actor_id:3,entity_type:'admin_request',entity_id:0,action:'DELETE /api/accounts/1',created_at:'2026-09-15T00:00:00Z',after_data:{source:'server',page:'/admin/accounts',resource:'/api/accounts/1',result:'failure',status:403}},
+        {id:1,actor:'audit@example.com',actor_id:3,entity_type:'admin_ui',entity_id:3,action:'访问页面',created_at:'2026-09-15T00:00:00Z',after_data:{source:'browser',page:'/admin/accounts',result:'visited'}},
+      ]};
+      else if (url.pathname==='/api/proxy-activity') data={events:[],records:[]};
+      else if (url.pathname==='/api/payment-exceptions') data={exceptions:[]};
+      else if (url.pathname.startsWith('/api/users')) {
         if (request.method === 'PATCH') { const input = JSON.parse(request.postData); roleWrites.push(input); userRows[1].role = input.role; data = { role: input.role }; }
         else data = { users: userRows, total: userRows.length, page: 1, page_size: 20 };
       } else if (url.pathname.startsWith('/api/account-groups')) {
@@ -138,9 +188,10 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         if (request.method === 'POST') addressRows.unshift({ ...input, id: 100, source_url: '', can_edit: true });
         if (request.method === 'PATCH') addressRows = addressRows.map(address => address.id === id ? { ...address, ...input } : address);
         if (request.method === 'DELETE') addressRows = addressRows.filter(address => address.id !== id);
-        const rows = addressRows.filter(address => JSON.stringify(address).toLowerCase().includes((url.searchParams.get('q') || '').toLowerCase()));
+        const rows = addressRows.filter(address => JSON.stringify(address).toLowerCase().includes((url.searchParams.get('q') || '').toLowerCase()) || (url.searchParams.get('state_codes') || '').split(',').includes(address.state));
         const page = Number(url.searchParams.get('page') || 1);
-        data = { addresses: rows.slice((page - 1) * 20, page * 20), total: rows.length, page, page_size: 20 };
+        const pageSize = Number(url.searchParams.get('page_size') || 20);
+        data = { addresses: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, page_size: pageSize };
       } else if (url.pathname === '/api/accounts/1' && request.method === 'DELETE') { accountDeletes++;
       } else if (url.pathname === '/api/accounts/1/browser-session') {
         if (request.method === 'POST') exportCount++;
@@ -149,7 +200,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       } else if (url.pathname === '/api/me') data = { user, accounts: [account] };
       else if (url.pathname === '/api/accounts') {
         if (request.method === 'POST') imported.push(JSON.parse(request.postData));
-        data = { accounts: [account], account };
+        const group=url.searchParams.get('group');
+        const accountRows=(!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
+        data = { accounts: accountRows, account, total:accountRows.length, page:1, page_size:20 };
       } else if (url.pathname === '/api/wallet') data = { balance: 0, orders: [], ledger: [], renewals: [], renewal_token_cost: 20, renewal_months: 1, topup_options: [{ amount_minor: 100, tokens: 1 }], tokens_per_usd: 1, stripe_enabled: false };
       else if (url.pathname === '/api/accounts/1/browser') {
         if (request.method === 'PATCH' || request.method === 'POST') {
@@ -164,7 +217,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         requestId, responseCode,
         responseHeaders: [
           { name: 'Content-Type', value: 'application/json' }, { name: 'Access-Control-Allow-Origin', value: '*' },
-          { name: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, X-AiTok-Client' },
+          { name: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, X-AiTok-Client, X-Aitok-Page, X-Aitok-TOTP' },
           { name: 'Access-Control-Allow-Methods', value: 'GET, POST, PATCH, DELETE, OPTIONS' },
           { name: 'Access-Control-Allow-Private-Network', value: 'true' },
         ],
@@ -187,8 +240,14 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
     }
     assert.fail(`页面等待超时：${expression}；${await evaluate('document.body.innerText')}`);
   };
-  const click = text => evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === ${JSON.stringify(text)}).click()`);
-  const fill = (selector, value, type = 'HTMLInputElement') => evaluate(`(() => { const element = document.querySelector(${JSON.stringify(selector)}); Object.getOwnPropertyDescriptor(${type}.prototype, 'value').set.call(element, ${JSON.stringify(value)}); element.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  const click = async text => {
+    await wait(`Array.from(document.querySelectorAll('button')).some(button => button.textContent === ${JSON.stringify(text)} && !button.disabled)`);
+    return evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === ${JSON.stringify(text)} && !button.disabled).click()`);
+  };
+  const fill = async (selector, value, type = 'HTMLInputElement') => {
+    await wait(`document.querySelector(${JSON.stringify(selector)}) instanceof ${type}`);
+    return evaluate(`(() => { const element = document.querySelector(${JSON.stringify(selector)}); Object.getOwnPropertyDescriptor(${type}.prototype, 'value').set.call(element, ${JSON.stringify(value)}); element.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  };
   const select = async (label, text, query = '', keyboard = false) => {
     await evaluate(`Array.from(document.querySelectorAll('button[role=combobox]')).find(button => button.getAttribute('aria-label') === ${JSON.stringify(label)}).click()`);
     await wait('Boolean(document.querySelector(".select-search input"))');
@@ -201,7 +260,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("工作账号")');
   await wait('location.pathname === "/admin/accounts"');
   assert.equal(await evaluate('Boolean(document.querySelector("header nav"))'), false);
-  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"), a => a.getAttribute("href"))'), ['/admin/accounts', '/admin/proxies', '/admin/addresses', '/admin/bank-cards', '/admin/users']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"), a => a.getAttribute("href"))'), ['/admin/accounts', '/admin/orders', '/admin/packages', '/admin/notices', '/admin/proxy-activity', '/admin/proxies', '/admin/addresses', '/admin/bank-cards', '/admin/payment-exceptions', '/admin/audit', '/admin/users']);
   assert.equal(await evaluate('document.querySelector(".admin-sidebar").getBoundingClientRect().left'), 0);
   assert.equal(await evaluate('document.querySelector(".admin-content").getBoundingClientRect().left'), 208);
   assert.equal(await evaluate('document.querySelector(".account-row").tagName'), 'TR');
@@ -210,11 +269,84 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
     assert.ok(await evaluate('Math.abs(document.querySelector(".accounts-table th.table-actions").getBoundingClientRect().left - document.querySelector(".account-row td.table-actions").getBoundingClientRect().left) < 1'));
   }
   await evaluate('document.querySelector(".data-table-wrap").scrollLeft = 0');
+  // 新充值页面使用真实构建产物，资金接口在浏览器边界全部模拟。
+  await evaluate('document.querySelector(".workspace-nav a[href$=packages]").click()');
+  await wait('document.body.innerText.includes("尚未配置套餐")');
+  await click('新增套餐');
+  await fill('input[name=name]','测试 Plus');
+  await fill('input[name=original_amount]','1000.00');
+  await fill('input[name=sale_usd]','200.00');
+  await fill('input[name=wallet_tokens]','100');
+  await click('确认并保存');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("测试 Plus")');
+  assert.equal(rechargePackages[0].original_amount_minor,100000);
+  await evaluate('document.querySelector(".workspace-nav a[href$=orders]").click()');
+  await wait('document.body.innerText.includes("暂无充值订单")');
+  await click('创建充值订单');
+  await select('订单账号',account.email);
+  await select('订单套餐','测试 Plus · $200.00 / 1个月');
+  await fill('input[name=period_start]','2030-01-01');
+  await click('确认并保存');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("order-smoke-1")');
+  await click('收款 / 钱包付款');
+  await fill('input[name=reference]','customer-paid-1');
+  await fill('textarea[name=evidence]','receipt', 'HTMLTextAreaElement');
+  await click('确认并保存');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("已收款")');
+  bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000}];
+  await click('官网扣款');
+  await select('订单付款卡','运营测试卡 · 4242 · $1,000.00');
+  await fill('input[name=amount_usd]','150.00');
+  await fill('input[name=reference]','official-paid-1');
+  await fill('textarea[name=evidence]','official receipt', 'HTMLTextAreaElement');
+  await click('确认并保存');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("待开通核验")');
+  await click('核验开通');
+  await fill('textarea[name=evidence]','subscription receipt', 'HTMLTextAreaElement');
+  await click('确认并保存');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("开通完成")');
+  await click('退款');
+  await fill('input[name=amount_usd]','50.00');
+  await fill('input[name=reference]','refund-paid-1');
+  await fill('textarea[name=reason]','partial refund', 'HTMLTextAreaElement');
+  await fill('textarea[name=evidence]','refund receipt', 'HTMLTextAreaElement');
+  await click('确认并保存');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("部分退款")');
+  assert.deepEqual(operationWrites.slice(1).map(v=>v.action),['collect','purchase','verify','refund']);
+  assert.equal(operationWrites[0].expected_sale_usd_minor,20000);
+  assert.equal(operationWrites[2].card_id,9);
+  assert.ok(operationWrites.every(v=>v.request_key));
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},sessionId);
+  assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth'));
+  await writeFile(join(directory,'recharge-orders-mobile.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false},sessionId);
+  await evaluate('document.querySelector(".workspace-nav a[href$=packages]").click()');
+  await wait('document.body.innerText.includes("测试 Plus")');
+  await click('编辑');
+  await select('美元定价方式','PHP 每日汇率折算');
+  await fill('input[name=original_amount]','999.00');
+  await wait('document.querySelector("input[aria-label=\\"折算 USD\\"]")?.value === "15.87"');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=\\"折算 USD\\"]").readOnly'),true);
+  assert.equal(await evaluate('document.querySelector("input[name=currency]").readOnly'),true);
+  await click('确认并保存');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("每日汇率折算") && document.body.innerText.includes("$15.87")');
+  assert.equal(await evaluate('document.querySelector(".admin-content").innerText.includes("人民币 CNY")'),true);
+  assert.equal(await evaluate('document.querySelector(".admin-content").innerText.includes("106.59")'),true);
+  assert.equal(rechargePackages[0].auto_usd,true);
+  assert.equal(rechargePackages[0].original_amount_minor,99900);
+  phpRate='0.02000';phpCNYRate='0.12000';
+  await click('刷新');
+  await wait('document.body.innerText.includes("$19.98") && document.body.innerText.includes("119.88")');
+  assert.equal(rechargeOrders[0].sale_usd_minor,20000);
+  await writeFile(join(directory,'php-package-pricing.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  bankCards=[];
+  await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").click()');
+  await wait('Boolean(document.querySelector(".account-toolbar"))');
   const sidebarShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'admin-sidebar.png'), Buffer.from(sidebarShot.data, 'base64'));
   await evaluate('document.querySelector(".workspace-nav a[href$=users]").click()');
   await wait('Boolean(document.querySelector(".user-manager tbody tr"))');
-  assert.equal(await evaluate('document.querySelectorAll(".user-manager button[role=combobox]").length'), 1);
+  assert.equal(await evaluate('document.querySelectorAll(".user-manager tbody button[role=combobox]").length'), 1);
   await select('用户 member@example.com 的角色', '管理员');
   await wait('document.querySelector("dialog")?.innerText.includes("确认修改角色")');
   assert.equal(roleWrites.length, 0);
@@ -222,7 +354,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('!document.querySelector("dialog")');
   await select('用户 member@example.com 的角色', '管理员');
   await click('确认修改');
-  await wait('!document.querySelector("dialog") && document.querySelector(".user-manager button[role=combobox]").innerText.includes("管理员")');
+  await wait('!document.querySelector("dialog") && document.querySelector(".user-manager tbody button[role=combobox]").innerText.includes("管理员")');
   assert.deepEqual(roleWrites, [{ role: 'admin' }]);
   const usersShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'admin-users.png'), Buffer.from(usersShot.data, 'base64'));
@@ -286,22 +418,81 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(account.group_id, null);
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   await select('筛选账号分组', '全部分组 · 1');
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".account-section button")).some(button => button.textContent === "批量导入")'), false);
   await click('添加账号');
   await wait('Boolean(document.querySelector("dialog textarea"))');
-  const raw = JSON.stringify({ user: { email: 'chat@example.com', name: '工作账号' }, accessToken: 'test-only' });
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog input[name=email]"))'), false);
+  await fill('textarea', JSON.stringify({ accessToken: 'test-only' }), 'HTMLTextAreaElement');
+  await wait('document.querySelector("dialog input[name=email]")?.required');
+  const emailToken = 'header.' + Buffer.from(JSON.stringify({ 'https://api.openai.com/profile': { email: 'jwt@example.com' } })).toString('base64url') + '.signature';
+  await fill('textarea', JSON.stringify({ user: { email: 'other@example.com' }, accessToken: emailToken }), 'HTMLTextAreaElement');
+  await wait('!document.querySelector("dialog input[name=email]") && document.querySelector("dialog").innerText.includes("jwt@example.com")');
+  await fill('textarea', '', 'HTMLTextAreaElement');
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog input[name=email]"))'), false);
+  const raw = JSON.stringify({ user: { email: 'chat@example.com', name: '工作账号' }, accessToken: 'test-only', sessionToken: 'test-cookie' });
   await fill('textarea', raw, 'HTMLTextAreaElement');
   await wait('document.querySelector("dialog").innerText.includes("识别到账号：chat@example.com")');
-  assert.equal(await evaluate('document.querySelector("input[name=email]").required'), false);
+  const dropFiles = files => evaluate(`(() => {
+    const transfer = new DataTransfer();
+    for (const file of ${JSON.stringify(files)}) transfer.items.add(new File([file.content], file.name, { type: 'application/json' }));
+    const field = document.querySelector('.json-field');
+    field.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    return !field.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+  })()`);
+  for (const [files, message] of [
+    [[{ name: 'session.txt', content: raw }], '请选择 .json 文件'],
+    [[{ name: 'session.json', content: '{broken' }], '无法读取有效 JSON'],
+    [[{ name: 'session.json', content: '[]' }], '单个非空 Session 对象'],
+    [[{ name: 'session.json', content: 'x'.repeat(240001) }], '不能超过 240 KB'],
+    [[{ name: 'one.json', content: raw }, { name: 'two.json', content: raw }], '一次拖入一个 JSON 文件'],
+  ]) {
+    assert.equal(await dropFiles(files), true);
+    await wait(`document.querySelector('.json-field .error')?.textContent.includes(${JSON.stringify(message)})`);
+    assert.equal(await evaluate('document.querySelector("textarea").value'), raw);
+  }
+  await fill('textarea', '', 'HTMLTextAreaElement');
+  assert.equal(await dropFiles([{name:'session.json',content:'\uFEFF'+raw}]),true);
+  await wait(`document.querySelector('textarea').value === ${JSON.stringify(raw)} && !document.querySelector('.json-field .error')`);
+  await wait('document.querySelector("dialog").innerText.includes("识别到账号：chat@example.com")');
+  assert.equal(imported.length,0);
+  assert.equal(await evaluate('Boolean(document.querySelector("input[name=email]"))'), false);
   await click('格式化 JSON');
   assert.ok((await evaluate('document.querySelector("textarea").value')).includes('\n'));
   assert.ok(await evaluate('Boolean(document.querySelector(".json-key")) && Boolean(document.querySelector(".json-string"))'));
-  await fill('input[name=session_cookie]', 'test-cookie');
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog input[name=session_cookie],dialog input[name=label]"))'), false);
   const jsonEditorShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'json-editor.png'), Buffer.from(jsonEditorShot.data, 'base64'));
   await click('保存');
   await wait('!document.querySelector("dialog")');
-  assert.equal(imported.length, 1); assert.deepEqual(JSON.parse(imported[0].session_json), { ...JSON.parse(raw), sessionToken: 'test-cookie' }); assert.equal(imported[0].email, '');
+  assert.equal(imported.length, 1); assert.deepEqual(JSON.parse(imported[0].session_json), JSON.parse(raw)); assert.equal(imported[0].email, ''); assert.equal(imported[0].label, undefined);
   await evaluate('document.querySelector(".workspace-nav a[href$=addresses]").click()');
+  await wait('document.querySelectorAll(".address-row").length === 20');
+  assert.equal(await evaluate('document.querySelector(".address-row td:nth-child(3)").textContent'), 'Oregon');
+  await evaluate('document.querySelector(".sidebar-collapse").click()');
+  await wait('document.querySelector(".admin-content").getBoundingClientRect().left === 64');
+  assert.equal(await evaluate('localStorage.getItem("admin-sidebar-collapsed")'), 'true');
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelectorAll(".address-row").length === 20 && document.querySelector(".admin-content").getBoundingClientRect().left === 64');
+  const collapsedShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+  await writeFile(join(directory, 'sidebar-collapsed.png'), Buffer.from(collapsedShot.data, 'base64'));
+  await evaluate('document.querySelector(".sidebar-collapse").click()');
+  await wait('document.querySelector(".admin-content").getBoundingClientRect().left === 208');
+  await evaluate(`document.querySelector('.pagination-number[aria-label="第 2 页"]').click()`);
+  await wait('document.querySelectorAll(".address-row").length === 1');
+  await select('每页条数', '50 条 / 页');
+  await wait('document.querySelectorAll(".address-row").length === 21');
+  assert.ok(requests.some(value => value.includes('/addresses?') && value.includes('page_size=50') && value.includes('page=1')));
+  await select('每页条数', '20 条 / 页');
+  await wait('document.querySelectorAll(".address-row").length === 20');
+  for (const query of ['111', '[Road]', 'Oregon']) {
+    await fill('input[aria-label=搜索地址]', query); await click('搜索');
+    await wait(`document.querySelector('.address-table mark')?.textContent === ${JSON.stringify(query)}`);
+    if (query === '111') {
+      const highlightShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+      await writeFile(join(directory, 'address-highlight.png'), Buffer.from(highlightShot.data, 'base64'));
+    }
+  }
+  await fill('input[aria-label=搜索地址]', ''); await click('搜索');
   await wait('document.querySelectorAll(".address-row").length === 20');
   assert.equal(await evaluate('Boolean(document.querySelector(".address-row a"))'), false);
   await click('完整资料');
@@ -311,7 +502,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate('document.querySelector(".address-source-details").innerText.includes("Preserved value")'), true);
   assert.equal(await evaluate('document.querySelector(".address-source-details").innerText.includes("生成安全码")'), true);
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
-  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".address-table thead th"), item => item.textContent)'), ['账单姓名', '街道 / 公寓', '城市', '州 / 省', '邮编', '国家 / 地区', '电话 / 邮箱', '操作']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".address-table thead th"), item => item.textContent)'), ['姓名', '国家 / 地区', '州', '城市', '街道', '邮编', '电话', '操作']);
   assert.equal(await evaluate('document.querySelector(".address-row").innerText.includes("未填写")'), true);
   await click('下一页');
   await wait('document.querySelectorAll(".address-row").length === 1');
@@ -376,6 +567,18 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector("dialog").innerText.includes("代理配置已加密保存")');
   assert.equal(savedProxy, 'socks5://u:p@proxy.example:1080');
   await click('打开浏览器');
+  await wait('Boolean(document.querySelector(".two-factor input[type=password]"))');
+  assert.equal(launches.length,0);
+  await fill('.two-factor input[type=password]', 'test-password');
+  await click('生成绑定二维码');
+  await wait('Boolean(document.querySelector(".totp-qr"))');
+  assert.equal(await evaluate('document.querySelector(".totp-qr").src.startsWith("data:image/png")'),true);
+  await writeFile(join(directory,'two-factor-setup.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  await fill('.two-factor input[inputmode=numeric]', '123456');
+  await click('确认绑定');
+  await wait('document.querySelector(".two-factor")?.innerText.includes("两步验证已启用")');
+  await fill('.two-factor input[inputmode=numeric]', '654321');
+  await click('验证并打开浏览器');
   await wait('document.querySelector(".browser-status-row strong")?.textContent === "已打开"');
   assert.equal(launches.length, 1); assert.deepEqual(launches[0], {});
   assert.ok(!requests.some(url => url.includes('/browser-session')));
@@ -389,14 +592,26 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('关闭浏览器');
   await wait('!document.querySelector("dialog")');
 
-  // 普通用户能打开自己的账号，但不能操作后台桌面或他人的本机凭据。
+  // 普通用户只有账号入口，管理列、行操作和其他路由均不可访问。
   user.id = 1; user.role = 'user'; user.username = '';
   await cdp.send('Page.reload', {}, sessionId);
   await wait('document.body.innerText.includes("工作账号")');
-  assert.equal(await evaluate('document.body.innerText.includes("浏览器管理")'), false);
-  assert.equal(await evaluate('Boolean(document.querySelector(".workspace-nav a[href$=addresses]"))'), true);
-  assert.equal(exportCount, 0);
-  assert.equal(await evaluate('Boolean(document.querySelector(".workspace-nav a[href$=users]"))'), false);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"),a=>a.getAttribute("href"))'),['/admin/accounts']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','上次登录（UTC+8）']);
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-actions,.account-toolbar,.stats"))'),false);
+  assert.equal(await evaluate('Boolean(document.querySelector(".user-menu a[href$=wallet]"))'),false);
+  const requestMark = requests.length, localMark = localRequests.length;
+  await delay(2200);
+  assert.equal(localRequests.length,localMark);
+  assert.equal(exportCount,0);
+  assert.equal(await evaluate('document.querySelector(".user-accounts-table").scrollWidth <= document.querySelector(".data-table-wrap").clientWidth'),true);
+  await writeFile(join(directory,'user-accounts.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  await cdp.send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/admin/bank-cards'},sessionId);
+  await wait('document.body.innerText.includes("无权访问此页面")');
+  assert.equal(requests.slice(requestMark).some(url=>url.includes('/api/bank-cards')),false);
+  user.role = 'admin';
+  await cdp.send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/admin/accounts'},sessionId);
+  await wait('Boolean(document.querySelector(".account-toolbar"))');
   await evaluate('document.querySelector(".workspace-nav a[href$=bank-cards]").click()');
   await wait('Boolean(document.querySelector(".bank-card-manager"))');
   await click('添加银行卡');
@@ -448,6 +663,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector("dialog")?.innerText.includes("暂无流水")');
   await click('记录存入');
   await fill('input[aria-label="记账金额 USD"]', '500.00');
+  await fill('input[name=reference]', 'smoke-deposit');
   await click('核对并记账');
   assert.equal(ledgerWrites.length, 0);
   await click('返回修改');
@@ -460,10 +676,16 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(ledgerWrites[0].request_key, ledgerWrites[1].request_key);
   assert.equal(cardLedger.length, 1);
   await click('记录开通扣款');
+  await fill('input[name=reference]', 'smoke-subscription');
+  await fill('input[name=period_start]', '2030-01-01');
+  await fill('input[name=period_end]', '2030-02-01');
+  await fill('input[name=currency]', 'PHP');
+  await fill('input[name=original_amount]', '8919.64');
   await select('扣款关联账号', `${account.label} · ${account.email}`);
   await fill('input[aria-label="记账金额 USD"]', '150.25');
+  await fill('input[aria-label="记账备注"]', 'official receipt');
   await click('核对并记账');
-  assert.ok(await evaluate('document.querySelector(".card-ledger-confirm").innerText.includes("8,919.64")'));
+  assert.ok(await evaluate('document.querySelector(".card-ledger-confirm").innerText.includes("8919.64")'));
   await click('确认记账');
   await wait('document.querySelector(".card-ledger-table")?.innerText.includes("349.75")');
   assert.equal(bankCards[0].balance_usd_minor, 34975);
@@ -505,6 +727,10 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('Boolean(document.querySelector(".proxy-result.match"))');
   await click('使用记录');
   await wait('document.querySelector(".usage-row")?.innerText.includes("08:30:00")');
+  await select('每页条数', '50 条 / 页');
+  await wait('document.querySelectorAll(".usage-row").length === 50');
+  await click('下一页');
+  await wait('document.querySelectorAll(".usage-row").length === 11');
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   await click('获取 IP');
   await wait('Boolean(document.querySelector(".proxy-result.mismatch"))');
@@ -534,6 +760,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("代理选择已保存")');
   assert.equal(Object.values(bindings)[0], 'proxy-1');
   await click('打开账号');
+  await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  await fill('.two-factor input[inputmode=numeric]', '654321');
+  await click('验证并打开浏览器');
   await wait('document.querySelector(".browser-status-row strong")?.textContent === "已打开"');
   assert.equal(await evaluate('document.querySelector("dialog").innerText.includes("配对密钥")'), false);
   assert.equal(exportCount, 1); assert.equal(localLaunches.length, 1);
@@ -559,6 +788,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector(".account-actions").innerText.includes("打开账号")');
   assert.equal(localState, 'closed');
   await click('打开账号');
+  await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  await fill('.two-factor input[inputmode=numeric]', '654321');
+  await click('验证并打开浏览器');
   await wait('document.querySelector(".browser-status-row strong")?.textContent === "已打开"');
   assert.equal(localLaunches.length, 2);
   authenticatedAt = '2026-09-15T00:30:00Z'; localState = 'authenticated';
@@ -568,12 +800,18 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('!document.querySelector("dialog")');
   await wait('document.querySelector(".account-actions").innerText.includes("打开账号")');
   await click('打开账号');
+  await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  await fill('.two-factor input[inputmode=numeric]', '654321');
+  await click('验证并打开浏览器');
   await wait('document.querySelector(".browser-status-row strong")?.textContent === "已打开"');
   await click('关闭账号窗口');
   await wait('!document.querySelector("dialog")');
   await wait('document.querySelector(".account-actions").innerText.includes("打开账号")');
   exportExpired = true;
   await click('打开账号');
+  await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  await fill('.two-factor input[inputmode=numeric]', '654321');
+  await click('验证并打开浏览器');
   await wait('document.querySelector("dialog").innerText.includes("Session 已过期")');
   assert.equal(localLaunches.length, 3);
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
@@ -632,17 +870,35 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   account.user_id = 2;
   await cdp.send('Page.reload', {}, sessionId);
   await wait('document.body.innerText.includes("工作账号")');
-  assert.equal(await evaluate('Array.from(document.querySelectorAll(".account-actions button")).some(button => button.textContent === "打开账号")'), false);
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".account-actions button")).some(button => button.textContent === "打开账号")'), true);
   user.role = 'admin';
   const userRequestsBefore = requests.filter(url => url.includes('/api/users')).length;
   await cdp.send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port + '/admin/users' }, sessionId);
   await wait('document.body.innerText.includes("无权访问用户列表")');
   assert.equal(await evaluate('Boolean(document.querySelector(".workspace-nav a[href$=users]"))'), false);
   assert.equal(requests.filter(url => url.includes('/api/users')).length, userRequestsBefore);
+  await evaluate('document.querySelector(".workspace-nav a[href$=audit]").click()');
+  await wait('document.body.innerText.includes("HTTP 403")');
+  for (const text of ['前端上报','后端执行','已访问','失败','audit@example.com','/admin/accounts']) {
+    assert.equal(await evaluate(`document.querySelector('.admin-content').innerText.includes(${JSON.stringify(text)})`),true);
+  }
+  const auditShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+  await writeFile(join(directory, 'admin-audit.png'), Buffer.from(auditShot.data, 'base64'));
   await cdp.send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port + '/wallet?reference=legacy' }, sessionId);
   await wait('location.pathname === "/admin/wallet" && location.search === "?reference=legacy" && Boolean(document.querySelector(".wallet-grid"))');
   await cdp.send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port + '/features' }, sessionId);
   await wait('Boolean(document.querySelector("header nav"))');
+  await delay(200);
+  assert.ok(adminActivities.some(e => e.kind==='page_view' && e.page==='/admin/accounts'));
+  assert.ok(adminActivities.some(e => e.kind==='page_view' && e.page==='/admin/orders'));
+  assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='proxy_test' && e.result==='failure'));
+  assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='open_browser' && e.result==='success'));
+  assert.ok(adminActivities.some(e => e.kind==='click' && e.control==='delete'));
+  assert.ok(adminActivities.every(e=>Object.keys(e).every(k=>['request_key','page','kind','control','result'].includes(k))));
+  const auditPayload=JSON.stringify(adminActivities);
+  for (const secret of ['proxy-secret','4242424242424242','local-test-access']) assert.equal(auditPayload.includes(secret),false);
+  assert.ok(adminActivities.every(e=>e.page.startsWith('/admin/') && !e.page.includes('?')));
+  assert.ok(otpHeaders.length >= 5 && otpHeaders.every(code=>code === '654321'));
   assert.deepEqual(errors, []);
   t.diagnostic(`页面截图：${directory}`);
 });

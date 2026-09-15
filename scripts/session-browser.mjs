@@ -72,6 +72,7 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy 
         try { input = JSON.parse(Buffer.concat(chunks).toString()); } catch { send(400, { error: 'JSON 格式错误' }); return; }
         if (!input || typeof input !== 'object' || Array.isArray(input)) { send(400, { error: 'JSON 格式错误' }); return; }
       }
+      if(request.method==='GET' && request.url?.startsWith('/activity-export?')) { const cursor=Number(new URL(request.url,'http://localhost').searchParams.get('cursor')||0);if(!Number.isSafeInteger(cursor)||cursor<0){send(400,{error:'游标无效'});return}await store.queue;send(200,store.exportActivity(cursor));return; }
       if (request.url === '/proxies' && request.method === 'GET') { send(200, store.list()); return; }
       if (request.url === '/proxies/parse' && request.method === 'POST') {
         const lines = typeof input.text === 'string' ? input.text.split(/\r?\n/).map(line => line.trim()).filter(Boolean) : [];
@@ -85,9 +86,11 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy 
       if (request.method === 'GET' && request.url?.startsWith('/proxy-history?')) {
         const query = new URL(request.url, 'http://localhost').searchParams;
         const page = Number(query.get('page') || 1);
+        const pageSize = Number(query.get('page_size') || 20);
+        if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) { send(400, { error: '每页条数无效' }); return; }
         if (!Number.isInteger(page) || page < 1 || page > 100000) { send(400, { error: '页码无效' }); return; }
         await store.queue;
-        send(200, store.history(query.get('proxy_id'), page)); return;
+        send(200, store.history(query.get('proxy_id'), page, pageSize)); return;
       }
       if (request.url === '/proxies/test' && request.method === 'POST') {
         if (testing.size >= 5) { send(429, { error: '代理正在测试，请稍后重试' }); return; }

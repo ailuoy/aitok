@@ -79,7 +79,9 @@ SELECT setval(pg_get_serial_sequence('users','id'),100);`)
 	for _, role := range []string{"super_admin", "", "invalid"} {
 		call("PATCH", "/api/users/1/role", 3, map[string]string{"role": role}, 400)
 	}
+	check := expectTimestampUpdate(t, db, "users", "id=1")
 	call("PATCH", "/api/users/1/role", 3, map[string]string{"role": "admin"}, 200)
+	check()
 	if call("GET", "/api/me", 1, nil, 200)["user"].(map[string]any)["role"] != "admin" {
 		t.Fatal("角色修改未生效")
 	}
@@ -109,11 +111,13 @@ SELECT setval(pg_get_serial_sequence('users','id'),100);`)
 	}
 	call("GET", "/api/users?page=0", 3, nil, 400)
 	card := map[string]any{"label": "Owned card", "cardholder": "Test User", "number": "4242424242424242", "exp_month": 12, "exp_year": time.Now().Year() + 1}
+	call("POST", "/api/bank-cards", 1, card, 403)
+	db.Exec("UPDATE users SET role='admin' WHERE id=1")
 	id := call("POST", "/api/bank-cards", 1, card, 201)["card"].(map[string]any)["id"].(float64)
 	path := fmt.Sprintf("/api/bank-cards/%.0f", id)
 	var before string
 	db.QueryRow(`SELECT number_fingerprint FROM bank_cards WHERE id=$1`, id).Scan(&before)
-	call("GET", path, 4, nil, 404)
+	call("GET", path, 4, nil, 403)
 	call("GET", path, 2, nil, 200)
 	card["notes"] = "管理员编辑"
 	call("PATCH", path, 2, card, 200)

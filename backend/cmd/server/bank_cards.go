@@ -16,17 +16,22 @@ import (
 )
 
 type BankCard struct {
-	ID              int64  `json:"id"`
-	Label           string `json:"label"`
-	Platform        string `json:"platform"`
-	Notes           string `json:"notes"`
-	Cardholder      string `json:"cardholder"`
-	Number          string `json:"number,omitempty"`
-	Last4           string `json:"last4"`
-	Brand           string `json:"brand"`
-	ExpMonth        int    `json:"exp_month"`
-	ExpYear         int    `json:"exp_year"`
-	BalanceUSDMinor int64  `json:"balance_usd_minor"`
+	Status          string     `json:"status"`
+	Reserved        int64      `json:"reserved_usd_minor"`
+	DailyLimit      int64      `json:"daily_limit_usd_minor"`
+	LowBalance      int64      `json:"low_balance_usd_minor"`
+	DeletedAt       *time.Time `json:"deleted_at"`
+	ID              int64      `json:"id"`
+	Label           string     `json:"label"`
+	Platform        string     `json:"platform"`
+	Notes           string     `json:"notes"`
+	Cardholder      string     `json:"cardholder"`
+	Number          string     `json:"number,omitempty"`
+	Last4           string     `json:"last4"`
+	Brand           string     `json:"brand"`
+	ExpMonth        int        `json:"exp_month"`
+	ExpYear         int        `json:"exp_year"`
+	BalanceUSDMinor int64      `json:"balance_usd_minor"`
 }
 
 func (c *BankCard) normalize() bool {
@@ -76,11 +81,11 @@ func (c *BankCard) normalize() bool {
 	return true
 }
 
-const bankCardColumns = `id,label,cardholder,last4,brand,exp_month,exp_year,platform,notes,balance_usd_minor`
+const bankCardColumns = `id,label,cardholder,last4,brand,exp_month,exp_year,platform,notes,balance_usd_minor,status,reserved_usd_minor,daily_limit_usd_minor,low_balance_usd_minor,deleted_at`
 
 func scanBankCard(row interface{ Scan(...any) error }) (BankCard, error) {
 	var c BankCard
-	err := row.Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.BalanceUSDMinor)
+	err := row.Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.BalanceUSDMinor, &c.Status, &c.Reserved, &c.DailyLimit, &c.LowBalance, &c.DeletedAt)
 	return c, err
 }
 func cardError(w http.ResponseWriter, err error) {
@@ -103,7 +108,7 @@ func cardError(w http.ResponseWriter, err error) {
 func (s *Server) readCard(r *http.Request, user, id int64, admin bool) (BankCard, error) {
 	var c BankCard
 	var encrypted string
-	err := s.db.QueryRowContext(r.Context(), `SELECT `+bankCardColumns+`,number_ciphertext FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND id=$2`, user, id, admin).Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.BalanceUSDMinor, &encrypted)
+	err := s.db.QueryRowContext(r.Context(), `SELECT `+bankCardColumns+`,number_ciphertext FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND id=$2`, user, id, admin).Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.BalanceUSDMinor, &c.Status, &c.Reserved, &c.DailyLimit, &c.LowBalance, &c.DeletedAt, &encrypted)
 	if err == nil {
 		c.Number, err = decryptSession(encrypted)
 	}
@@ -141,21 +146,21 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == "GET" && id == 0 {
 		query := strings.TrimSpace(r.URL.Query().Get("q"))
-		page := 1
-		if value := r.URL.Query().Get("page"); value != "" {
-			page, err = strconv.Atoi(value)
-		}
-		if err != nil || page < 1 || page > 100000 || utf8.RuneCountInString(query) > 200 {
+		page, size, valid := pageParameters(r)
+		if !valid || utf8.RuneCountInString(query) > 200 {
 			reply(w, map[string]string{"error": "搜索或页码无效"}, 400)
 			return
 		}
-		const filter = ` WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND strpos(lower(concat_ws(' ',label,cardholder,last4,brand,platform,notes)),lower($2))>0`
+		filter := ` WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND strpos(lower(concat_ws(' ',label,cardholder,last4,brand,platform,notes)),lower($2))>0`
+		if r.URL.Query().Get("archived") == "1" {
+			filter = strings.Replace(filter, "deleted_at IS NULL", "deleted_at IS NOT NULL", 1)
+		}
 		var total int
 		if err = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM bank_cards`+filter, user, query, admin).Scan(&total); err != nil {
 			cardError(w, err)
 			return
 		}
-		rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT 20 OFFSET $4`, user, query, admin, (page-1)*20)
+		rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $4`, user, query, admin, (page-1)*size, size)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -195,7 +200,7 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			cardError(w, err)
 			return
 		}
-		reply(w, map[string]any{"cards": cards, "platforms": platforms, "total": total, "page": page, "page_size": 20}, 200)
+		reply(w, map[string]any{"cards": cards, "platforms": platforms, "total": total, "page": page, "page_size": size, "can_manage": !admin || s.permitted(r.Context(), user, "cards"), "can_numbers": !admin || s.permitted(r.Context(), user, "card_numbers"), "can_finance": !admin || s.permitted(r.Context(), user, "finance")}, 200)
 		return
 	}
 	if r.Method == "GET" && id > 0 {
@@ -260,7 +265,7 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" && id > 0 {
-		result, err := s.db.ExecContext(r.Context(), `UPDATE bank_cards SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
+		result, err := s.db.ExecContext(r.Context(), `UPDATE bank_cards SET updated_at=NOW(),deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND reserved_usd_minor=0 AND (user_id=$2 OR $3)`, id, user, admin)
 		if err != nil {
 			cardError(w, err)
 			return

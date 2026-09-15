@@ -21,7 +21,7 @@ func (s *Server) routes(options ...khttp.ServerOption) *khttp.Server {
 		// 保留原有请求时限，由支付、浏览器等业务自行控制超时。
 		khttp.Timeout(0),
 		khttp.StrictSlash(false),
-		khttp.Filter(cors),
+		khttp.Filter(cors, s.securityFilter, s.auditFilter, s.accessFilter),
 		khttp.NotFoundHandler(http.NotFoundHandler()),
 	}, options...)
 	server := khttp.NewServer(options...)
@@ -34,6 +34,18 @@ func (s *Server) routes(options ...khttp.ServerOption) *khttp.Server {
 		}
 		reply(w, map[string]string{"status": "ok"}, http.StatusOK)
 	})
+	server.HandleFunc("/api/packages", s.packages)
+	server.HandlePrefix("/api/packages/", http.HandlerFunc(s.packages))
+	server.HandleFunc("/api/orders", s.rechargeOrders)
+	server.HandlePrefix("/api/orders/", http.HandlerFunc(s.rechargeOrders))
+	server.HandlePrefix("/api/card-operations/", http.HandlerFunc(s.cardOperations))
+	server.HandleFunc("/api/audit", s.audit)
+	server.HandleFunc("/api/admin-activity", s.adminActivity)
+	server.HandleFunc("/api/proxy-activity", s.proxyActivity)
+	server.HandleFunc("/api/payment-exceptions", s.paymentExceptions)
+	server.HandleFunc("/api/notices", s.notices)
+	server.HandleFunc("/api/order-operators", s.orderOperators)
+	server.HandleFunc("/api/logout", s.logout)
 	server.HandleFunc("/api/register", s.register)
 	server.HandleFunc("/api/login", s.login)
 	server.HandleFunc("/api/send-code", s.sendCode)
@@ -41,6 +53,7 @@ func (s *Server) routes(options ...khttp.ServerOption) *khttp.Server {
 	server.HandleFunc("/api/forgot-password", s.forgotPassword)
 	server.HandleFunc("/api/reset-password", s.resetPassword)
 	server.HandleFunc("/api/me", s.me)
+	server.HandleFunc("/api/two-factor", s.twoFactor)
 	server.HandleFunc("/api/users", s.users)
 	server.HandlePrefix("/api/users/", http.HandlerFunc(s.users))
 	server.HandleFunc("/api/accounts", s.accounts)
@@ -63,7 +76,7 @@ func (s *Server) routes(options ...khttp.ServerOption) *khttp.Server {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Aitok-Page, X-Aitok-TOTP")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

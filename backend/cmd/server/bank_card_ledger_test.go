@@ -30,7 +30,7 @@ func TestParseCardUSD(t *testing.T) {
 func TestBankCardLedgerIntegration(t *testing.T) {
 	t.Setenv("SESSION_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
 	db := walletTestDB(t)
-	if _, err := db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES(1,'owner@test.local','','user'),(2,'other@test.local','','user'),(3,'admin@test.local','','admin');INSERT INTO chatgpt_accounts(id,user_id,label,email) VALUES(1,1,'Account One','one@test.local'),(2,2,'Other Account','two@test.local'),(3,1,'Account Three','three@test.local')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES(1,'owner@test.local','','admin'),(2,'other@test.local','','user'),(3,'admin@test.local','','admin');INSERT INTO chatgpt_accounts(id,user_id,label,email) VALUES(1,1,'Account One','one@test.local'),(2,2,'Other Account','two@test.local'),(3,1,'Account Three','three@test.local')`); err != nil {
 		t.Fatal(err)
 	}
 	s := &Server{db: db, secret: []byte("ledger-test")}
@@ -61,8 +61,8 @@ func TestBankCardLedgerIntegration(t *testing.T) {
 	path := cardPath + "/ledger"
 	deposit := map[string]any{"kind": "deposit", "amount_usd": "500.00", "request_key": "initial-deposit-0001"}
 	call("GET", path, 0, nil, 401)
-	call("GET", path, 2, nil, 404)
-	call("POST", path, 2, deposit, 404)
+	call("GET", path, 2, nil, 403)
+	call("POST", path, 2, deposit, 403)
 	call("POST", path, 1, map[string]any{"kind": "deposit", "amount_usd": "1.111", "request_key": "invalid-amount-0001"}, 400)
 	opening := call("POST", path, 1, deposit, 201)["entry"].(map[string]any)
 	if opening["kind"] != "opening" || opening["balance_after_usd_minor"] != float64(50000) {
@@ -73,25 +73,27 @@ func TestBankCardLedgerIntegration(t *testing.T) {
 	}
 	deposit["amount_usd"] = "600.00"
 	call("POST", path, 1, deposit, 409)
-	charge := map[string]any{"kind": "subscription", "amount_usd": "150.25", "account_id": 2, "request_key": "account-charge-0001", "notes": "卡平台实际扣款"}
+	charge := map[string]any{"kind": "subscription", "amount_usd": "150.25", "account_id": 999, "request_key": "account-charge-0001", "notes": "卡平台实际扣款", "period_start": "2030-01-01", "period_end": "2030-02-01", "currency": "PHP", "original_amount_minor": 891964, "reference": "external-ledger-test-1"}
 	call("POST", path, 1, charge, 404)
 	charge["account_id"] = 1
 	charge["amount_usd"] = "501.00"
 	call("POST", path, 1, charge, 409)
 	charge["amount_usd"] = "150.25"
 	entry := call("POST", path, 1, charge, 201)["entry"].(map[string]any)
-	if entry["amount_usd_minor"] != float64(-15025) || entry["balance_after_usd_minor"] != float64(34975) || entry["original_php_minor"] != float64(891964) || entry["account_email"] != "one@test.local" {
+	if entry["amount_usd_minor"] != float64(-15025) || entry["balance_after_usd_minor"] != float64(34975) || entry["original_amount_minor"] != float64(891964) || entry["account_email"] != "one@test.local" {
 		t.Fatal("扣款、余额或原币快照错误")
 	}
 	call("POST", path, 1, charge, 200)
 	charge["request_key"] = "account-charge-0002"
 	call("POST", path, 1, charge, 409)
+	db.Exec("UPDATE users SET role='admin' WHERE id=2")
 	otherCard := call("POST", "/api/bank-cards", 2, cardInput, 201)["card"].(map[string]any)
 	otherPath := fmt.Sprintf("/api/bank-cards/%.0f/ledger", otherCard["id"])
 	deposit["amount_usd"] = "500.00"
 	call("POST", otherPath, 2, deposit, 201)
 	call("POST", otherPath, 3, charge, 409)
 	charge["account_id"] = 2
+	charge["reference"] = "external-ledger-test-2"
 	charge["request_key"] = "admin-charge-00001"
 	call("POST", otherPath, 3, charge, 201)
 	statement := call("GET", path, 1, nil, 200)

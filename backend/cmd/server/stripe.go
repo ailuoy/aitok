@@ -138,7 +138,7 @@ func (s *Server) createCheckout(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "创建 Stripe 支付页面失败，请重试"}, 502)
 		return
 	}
-	_, err = s.db.ExecContext(r.Context(), `UPDATE topup_orders SET session_id=$1,checkout_url=$2 WHERE order_no=$3 AND deleted_at IS NULL AND status='pending'`, session.ID, session.URL, orderNo)
+	_, err = s.db.ExecContext(r.Context(), `UPDATE topup_orders SET updated_at=NOW(),session_id=$1,checkout_url=$2 WHERE order_no=$3 AND deleted_at IS NULL AND status='pending'`, session.ID, session.URL, orderNo)
 	if err != nil {
 		reply(w, map[string]string{"error": "保存支付订单失败，请重试"}, 500)
 		return
@@ -167,6 +167,11 @@ func (s *Server) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch event.Type {
+	case stripe.EventTypeRefundCreated, stripe.EventTypeRefundUpdated, stripe.EventTypeRefundFailed, stripe.EventTypeChargeRefunded, stripe.EventTypeChargeDisputeCreated, stripe.EventTypeChargeDisputeClosed:
+		if err = s.applyPaymentAdjustment(r.Context(), event); err != nil {
+			reply(w, map[string]string{"error": "退款或拒付核对失败"}, 500)
+			return
+		}
 	case stripe.EventTypeCheckoutSessionCompleted, stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded, stripe.EventTypeCheckoutSessionExpired, stripe.EventTypeCheckoutSessionAsyncPaymentFailed:
 		var session stripe.CheckoutSession
 		if err = json.Unmarshal(event.Data.Raw, &session); err != nil {
@@ -211,14 +216,19 @@ func (s *Server) applyStripeSession(ctx context.Context, eventType stripe.EventT
 	}
 	// 订单状态与唯一流水标识共同防止不同事件对同一支付重复入账。
 	if status == "paid" {
-		return nil
+		if session.PaymentIntent != nil && session.PaymentIntent.ID != "" {
+			if _, err = tx.ExecContext(ctx, `UPDATE topup_orders SET payment_intent=$2,updated_at=NOW() WHERE order_no=$1 AND payment_intent=''`, session.ClientReferenceID, session.PaymentIntent.ID); err != nil {
+				return err
+			}
+		}
+		return tx.Commit()
 	}
 	if eventType == stripe.EventTypeCheckoutSessionExpired || eventType == stripe.EventTypeCheckoutSessionAsyncPaymentFailed {
 		next := "expired"
 		if eventType == stripe.EventTypeCheckoutSessionAsyncPaymentFailed {
 			next = "failed"
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE topup_orders SET status=$1 WHERE order_no=$2 AND deleted_at IS NULL AND status='pending'`, next, session.ClientReferenceID)
+		_, err = tx.ExecContext(ctx, `UPDATE topup_orders SET updated_at=NOW(),status=$1 WHERE order_no=$2 AND deleted_at IS NULL AND status='pending'`, next, session.ClientReferenceID)
 		if err != nil {
 			return err
 		}
@@ -231,7 +241,7 @@ func (s *Server) applyStripeSession(ctx context.Context, eventType stripe.EventT
 		return err
 	}
 	var balance int64
-	err = tx.QueryRowContext(ctx, `UPDATE wallets SET balance=balance+$1 WHERE user_id=$2 AND deleted_at IS NULL RETURNING balance`, tokens, id).Scan(&balance)
+	err = tx.QueryRowContext(ctx, `UPDATE wallets SET updated_at=NOW(),balance=balance+$1 WHERE user_id=$2 AND deleted_at IS NULL RETURNING balance`, tokens, id).Scan(&balance)
 	if err != nil {
 		return err
 	}
@@ -239,7 +249,11 @@ func (s *Server) applyStripeSession(ctx context.Context, eventType stripe.EventT
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE topup_orders SET status='paid' WHERE order_no=$1 AND deleted_at IS NULL`, session.ClientReferenceID)
+	intent := ""
+	if session.PaymentIntent != nil {
+		intent = session.PaymentIntent.ID
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE topup_orders SET updated_at=NOW(),status='paid',payment_intent=$2 WHERE order_no=$1 AND deleted_at IS NULL`, session.ClientReferenceID, intent)
 	if err != nil {
 		return err
 	}

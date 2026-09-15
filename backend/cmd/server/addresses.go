@@ -97,21 +97,23 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "搜索内容过长"}, 400)
 			return
 		}
-		page := 1
-		if value := r.URL.Query().Get("page"); value != "" {
-			page, err = strconv.Atoi(value)
-			if err != nil || page < 1 || page > 100000 {
-				reply(w, map[string]string{"error": "页码无效"}, 400)
-				return
-			}
+		page, size, valid := pageParameters(r)
+		if !valid {
+			reply(w, map[string]string{"error": "分页参数无效"}, 400)
+			return
 		}
-		const filter = ` WHERE deleted_at IS NULL AND (user_id=$1 OR user_id IS NULL OR $2) AND strpos(lower(concat_ws(' ',full_name,address_line1,address_line2,city,state,postal_code,country,source_data->>'Telephone',source_data->>'Temporary_mail')),lower($3)) > 0`
+		stateCodes := r.URL.Query().Get("state_codes")
+		if len(stateCodes) > 200 {
+			reply(w, map[string]string{"error": "搜索参数无效"}, 400)
+			return
+		}
+		const filter = ` WHERE deleted_at IS NULL AND (user_id=$1 OR user_id IS NULL OR $2) AND (strpos(lower(concat_ws(' ',full_name,address_line1,address_line2,city,state,postal_code,country,source_data->>'Telephone',source_data->>'Temporary_mail')),lower($3)) > 0 OR (upper(country)='US' AND upper(state)=ANY(string_to_array($4,','))))`
 		var total int
-		if err = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM addresses`+filter, user, admin, query).Scan(&total); err != nil {
+		if err = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM addresses`+filter, user, admin, query, stateCodes).Scan(&total); err != nil {
 			addressError(w, err)
 			return
 		}
-		rows, err := s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses`+filter+` ORDER BY updated_at DESC,id DESC LIMIT 20 OFFSET $4`, user, admin, query, (page-1)*20)
+		rows, err := s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses`+filter+` ORDER BY updated_at DESC,id DESC LIMIT $6 OFFSET $5`, user, admin, query, stateCodes, (page-1)*size, size)
 		if err != nil {
 			addressError(w, err)
 			return
@@ -131,7 +133,7 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 			addressError(w, err)
 			return
 		}
-		reply(w, map[string]any{"addresses": items, "total": total, "page": page, "page_size": 20}, 200)
+		reply(w, map[string]any{"addresses": items, "total": total, "page": page, "page_size": size}, 200)
 		return
 	}
 	if r.Method == http.MethodGet && id > 0 {
@@ -169,7 +171,7 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete && id > 0 {
-		result, err := s.db.ExecContext(r.Context(), `UPDATE addresses SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
+		result, err := s.db.ExecContext(r.Context(), `UPDATE addresses SET updated_at=NOW(),deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
 		if err != nil {
 			addressError(w, err)
 			return

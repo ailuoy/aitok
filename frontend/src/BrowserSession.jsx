@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { request } from './api';
 import Select from './Select';
+import TwoFactor from './TwoFactor';
 
 export const stateLabels = { closed: '未打开', authenticated: '已确认登录', login_required: '需要网页登录', unverified: '登录待确认', starting: '正在启动', checking_ip: '已打开 · 核对 IP 中', ip_check_failed: 'IP 核对未通过', opened: '已打开', api_verified: '账号接口已验证', rejected: '上游未接受凭据', signed_out: '已退出会话适配', closing: '正在关闭', unavailable: '浏览器服务不可用', error: '会话适配失败' };
 
 export default function BrowserSession({ account, token, onClosed }) {
+  const [verifying, setVerifying] = useState(false);
   const [proxyMode, setProxyMode] = useState('saved');
   const [proxy, setProxy] = useState('');
   const [settings, setSettings] = useState(null);
@@ -39,23 +41,25 @@ export default function BrowserSession({ account, token, onClosed }) {
     return () => { mounted.current = false; controller.abort(); clearTimeout(timer); };
   }, [endpoint, token]);
 
-  async function act(action) {
+  async function act(action, totpCode) {
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true); setError(''); setMessage('');
     try {
       const body = proxyMode === 'saved' ? {} : { proxy_url: proxyMode === 'direct' ? '' : proxy.trim() };
       if (action !== 'stop' && proxyMode === 'socks5' && !proxy.trim()) throw new Error('请填写 SOCKS5 代理地址');
-      const data = await request(endpoint, token, { method: action === 'start' ? 'POST' : action === 'save' ? 'PATCH' : 'DELETE', ...(action === 'stop' ? {} : { body }) });
+      const data = await request(endpoint, token, { totpCode, method: action === 'start' ? 'POST' : action === 'save' ? 'PATCH' : 'DELETE', ...(action === 'stop' ? {} : { body }) });
       if (mounted.current) {
         if (data.browser) setStatus(data.browser);
+        if (action === 'start') setVerifying(false);
         setSettings(data.settings); setProxyMode('saved'); setProxy('');
         if (action === 'save') setMessage('代理配置已加密保存，下次打开浏览器时使用。');
       }
-    } catch (error) { if (mounted.current) setError(error.message); }
+    } catch (error) { if (action === 'start') throw error; if (mounted.current) setError(error.message); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
   }
 
   const running = status && !['closed', 'unavailable'].includes(status.state);
+  if (verifying && !running) return <div className="browser-session"><p className="muted">{account.label} · {account.email}</p><TwoFactor token={token} onVerify={code => act('start', code)} onCancel={() => setVerifying(false)} /></div>;
   return <div className="browser-session">
     <p className="muted">{account.label} · {account.email}</p>
     <p className="notice">浏览器窗口将在后台所在电脑上打开，每个账号使用独立环境。恢复网页登录需要登录 Cookie；仅有 accessToken 时请在独立窗口中登录一次。</p>
@@ -66,6 +70,6 @@ export default function BrowserSession({ account, token, onClosed }) {
     <p className="muted">代理配置会随账号加密保存。更换代理或更新 Session 后，重新打开浏览器即可生效。</p>
     {message && <p className="success" role="status">{message}</p>}
     {error && <p className="error" role="alert">{error}</p>}
-    <div className="browser-buttons"><button className="outline" disabled={busy || running || proxyMode === 'saved'} onClick={() => act('save')}>保存代理</button><button className="primary" disabled={busy || running || !status} onClick={() => act('start')}>{busy ? '处理中…' : '打开浏览器'}</button><button className="outline" disabled={busy || !running} onClick={() => act('stop')}>关闭浏览器</button></div>
+    <div className="browser-buttons"><button className="outline" disabled={busy || running || proxyMode === 'saved'} onClick={() => act('save')}>保存代理</button><button className="primary" disabled={busy || running || !status} onClick={() => setVerifying(true)}>{busy ? '处理中…' : '打开浏览器'}</button><button className="outline" disabled={busy || !running} onClick={() => act('stop')}>关闭浏览器</button></div>
   </div>;
 }

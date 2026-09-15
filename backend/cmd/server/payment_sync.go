@@ -13,6 +13,10 @@ import (
 
 // 用户核验自己的订单；超管可处理漏回调订单。不接收客户端提供的支付结果或 Session ID。
 func (s *Server) syncPayment(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/refund") {
+		s.requestTopupRefund(w, r)
+		return
+	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(405)
 		return
@@ -46,7 +50,7 @@ func (s *Server) syncPayment(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "读取订单失败"}, 500)
 		return
 	}
-	if status != "pending" || !sessionID.Valid {
+	if (status != "pending" && status != "paid") || !sessionID.Valid {
 		reply(w, map[string]string{"status": status}, 200)
 		return
 	}

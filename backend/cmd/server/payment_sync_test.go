@@ -16,7 +16,7 @@ func TestRestartPreservesToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := []byte("same-persisted-key-before-and-after-restart")
-	before := &Server{secret: key}
+	before := &Server{db: db, secret: key}
 	token := before.token(42)
 	after := &Server{db: db, secret: append([]byte(nil), key...)}
 	r := httptest.NewRequest("GET", "/api/me", nil)
@@ -33,6 +33,7 @@ func TestPaymentQuantityAndReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := &fakeStripe{}
+	db.Exec("UPDATE users SET role='admin' WHERE id=1")
 	s := &Server{db: db, secret: []byte("test-key"), stripe: provider, billing: billingConfig{SecretKey: "sk_test_fake", WebhookSecret: "whsec_test", BaseURL: "http://localhost:15680", TokensPerUSD: 1, RenewalCost: 20, RenewalMonths: 1, Price1ID: "price_test_1", Price100ID: "price_test_100"}}
 	routes := s.routes()
 	call := func(method, path, body string, id int64, status int) map[string]any {
@@ -68,7 +69,7 @@ func TestPaymentQuantityAndReconciliation(t *testing.T) {
 		t.Fatal("订单金额和数量记录错误")
 	}
 	path := "/api/wallet/topups/" + order + "/sync"
-	call("POST", path, "", 2, 404)
+	call("POST", path, "", 2, 403)
 	if provider.readCalls != 0 {
 		t.Fatal("越权请求不应访问支付供应商")
 	}

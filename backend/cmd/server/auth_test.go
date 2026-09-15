@@ -15,7 +15,7 @@ func TestAdminConfigAndRejectedCredentials(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "")
 	t.Setenv("SUPER_ADMIN_USERNAME", "")
 	t.Setenv("SUPER_ADMIN_PASSWORD", "")
-	if got := loadAdminConfig(); got.Username != "admin" || got.Password != "123456" {
+	if got := loadAdminConfig(); got.Username != "admin" || got.Password != "" {
 		t.Fatal("默认超管配置错误")
 	}
 	t.Setenv("SUPER_ADMIN_USERNAME", "operator")
@@ -107,7 +107,11 @@ func TestAuthIntegration(t *testing.T) {
 	routes := s.routes()
 	call := func(path, body, token string, status int) map[string]any {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		method := http.MethodPost
+		if path == "/api/me" {
+			method = http.MethodGet
+		}
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+token)
 		w := httptest.NewRecorder()
 		routes.ServeHTTP(w, req)
@@ -145,6 +149,8 @@ func TestAuthIntegration(t *testing.T) {
 	call("/api/login-code", codeBody, "", 401)
 	call("/api/login", `{"email":"member@example.com","password":"`+deliveredCode+`"}`, "", 401)
 	call("/api/forgot-password", `{"email":"member@example.com"}`, "", 200)
+	check := expectTimestampUpdate(t, db, "users", "email='member@example.com'")
 	call("/api/reset-password", `{"email":"member@example.com","code":"`+deliveredCode+`","password":"new-password"}`, "", 200)
+	check()
 	call("/api/login", `{"email":"member@example.com","password":"new-password"}`, "", 200)
 }

@@ -34,7 +34,7 @@ for source_file in "${sources[@]}"; do
   # 003/004 的旧全量唯一索引已由 012 的活跃记录索引替代。
   # 重放时不能先重建旧索引，否则软删除后允许的同名记录会导致升级失败。
   sed '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$source_file" | awk '
-    /^CREATE UNIQUE INDEX IF NOT EXISTS (addresses_location_unique|account_groups_user_name_unique)([[:space:]]|$)/ { obsolete = 1 }
+    /^CREATE UNIQUE INDEX IF NOT EXISTS (addresses_location_unique|account_groups_user_name_unique|bank_card_ledger_subscription_idx)([[:space:]]|$)/ { obsolete = 1 }
     obsolete { if ($0 ~ /;[[:space:]]*$/) obsolete = 0; next }
     { print }
   '

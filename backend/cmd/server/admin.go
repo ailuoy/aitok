@@ -28,7 +28,7 @@ func envDefault(key, fallback string) string {
 func loadAdminConfig() adminConfig {
 	return adminConfig{
 		Username: envDefault("ADMIN_USERNAME", envDefault("SUPER_ADMIN_USERNAME", "admin")),
-		Password: envDefault("ADMIN_PASSWORD", envDefault("SUPER_ADMIN_PASSWORD", "123456")),
+		Password: envDefault("ADMIN_PASSWORD", envDefault("SUPER_ADMIN_PASSWORD", "")),
 	}
 }
 
@@ -54,6 +54,10 @@ func (s *Server) isAdmin(ctx context.Context, id int64) (bool, error) {
 }
 
 func (s *Server) loginAdmin(w http.ResponseWriter, r *http.Request, password string) {
+	if s.admin.Password == "" {
+		reply(w, map[string]string{"error": "管理员登录尚未配置"}, 503)
+		return
+	}
 	expected := sha256.Sum256([]byte(s.admin.Password))
 	actual := sha256.Sum256([]byte(password))
 	if subtle.ConstantTimeCompare(expected[:], actual[:]) != 1 {

@@ -1,11 +1,13 @@
-export const API = import.meta.env.VITE_API_URL || 'http://localhost:15681/api';
+import { API } from './apiConfig';
+import { adminAuditHeaders } from './adminActivity';
+export { API };
 
-export async function request(path, token, { method = 'GET', body, signal } = {}) {
+export async function request(path, token, { method = 'GET', body, signal, totpCode } = {}) {
   let response;
   try {
     response = await fetch(API + path, {
       method, signal,
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { ...adminAuditHeaders(), ...(totpCode ? { 'X-Aitok-TOTP': totpCode } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (error) {

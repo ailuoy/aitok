@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search } from 'lucide-react';
+import Highlight from './Highlight';
 
 // 统一下拉菜单：搜索、键盘选择、焦点恢复，弹层兼容原生 dialog。
 export default function Select({ value, onChange, options, label, disabled = false, name, placeholder = '请选择', searchPlaceholder = '输入关键词过滤…', onCreate, createLabel = '新建' }) {
@@ -46,7 +47,7 @@ export default function Select({ value, onChange, options, label, disabled = fal
     <button ref={button} type="button" className="select-trigger" role="combobox" aria-label={label} aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? id : undefined} disabled={disabled} onClick={() => { setQuery(''); setActive(0); setOpen(!open); }} onKeyDown={event => { if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); setQuery(''); setActive(0); setOpen(true); } }}><span>{selected?.label || placeholder}</span><ChevronDown size={15} /></button>
     {open && createPortal(<div className="select-popup" ref={popup} style={position} onKeyDown={keydown}>
       <div className="select-search"><Search size={15} /><input ref={search} aria-label={'过滤' + label} role="combobox" aria-autocomplete="list" aria-controls={id} aria-expanded="true" aria-activedescendant={filtered[active] ? id + '-' + active : undefined} placeholder={searchPlaceholder} value={query} onChange={event => { setQuery(event.target.value); setActive(0); }} /></div>
-      <div id={id} role="listbox" aria-label={label} className="select-options">{filtered.map((option, index) => <div id={id + '-' + index} key={option.value} role="option" aria-selected={String(option.value) === String(value ?? '')} aria-disabled={Boolean(option.disabled)} data-active={index === active} className="select-option" onPointerMove={() => setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(option)}><span>{option.label}</span>{String(option.value) === String(value ?? '') && <Check size={15} />}</div>)}{!filtered.length && <p className="select-empty">没有匹配项</p>}</div>
+      <div id={id} role="listbox" aria-label={label} className="select-options">{filtered.map((option, index) => <div id={id + '-' + index} key={option.value} role="option" aria-selected={String(option.value) === String(value ?? '')} aria-disabled={Boolean(option.disabled)} data-active={index === active} className="select-option" onPointerMove={() => setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(option)}><span><Highlight query={query}>{option.label}</Highlight></span>{String(option.value) === String(value ?? '') && <Check size={15} />}</div>)}{!filtered.length && <p className="select-empty">没有匹配项</p>}</div>
       {onCreate && <button type="button" className="select-create" onClick={() => { close(true); onCreate(query.trim()); }}>＋ {createLabel}</button>}
     </div>, button.current?.closest('dialog') || document.body)}
   </div>;

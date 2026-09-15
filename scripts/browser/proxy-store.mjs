@@ -1,6 +1,6 @@
 import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { parseProxy } from './proxy.mjs';
 
 export function proxyURL(proxy) {
@@ -125,9 +125,14 @@ export class ProxyStore {
     });
   }
 
-  history(proxyID, page = 1) {
+  exportActivity(cursor = 0) {
+    const history = this.data.history || [];
+    return { device_id: createHash('sha256').update(this.key).digest('hex').slice(0,32), events: history.slice(cursor,cursor+200), next_cursor: Math.min(cursor+200,history.length) };
+  }
+
+  history(proxyID, page = 1, pageSize = 20) {
     const rows = (this.data.history || []).filter(row => !proxyID || row.proxy_id === proxyID).slice().reverse();
-    return { records: rows.slice((page - 1) * 20, page * 20), total: rows.length, page, page_size: 20 };
+    return { records: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, page_size: pageSize };
   }
 
   recordLogin(environmentID, at) {

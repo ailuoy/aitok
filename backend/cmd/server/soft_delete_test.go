@@ -1,17 +1,15 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestSoftDeleteLifecycle(t *testing.T) {
@@ -20,12 +18,18 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO users(id,email,password_hash) VALUES(1,'soft@test.local',''),(2,'other@test.local',''),(3,'__superadmin__','');INSERT INTO chatgpt_accounts(id,user_id,label,email) VALUES(1,1,'Account','account@test.local')`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec("UPDATE users SET role='admin' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
 	s := &Server{db: db, secret: []byte("soft-delete-test")}
 	call := func(method, path string, user int64, body any, status int) map[string]any {
 		t.Helper()
 		encoded, _ := json.Marshal(body)
 		r := httptest.NewRequest(method, path, strings.NewReader(string(encoded)))
 		r.Header.Set("Authorization", "Bearer "+s.token(user))
+		if method == "POST" && (strings.HasSuffix(path, "/browser") || strings.HasSuffix(path, "/browser-session")) && s.permitted(r.Context(), user, "accounts") {
+			r.Header.Set("X-Aitok-TOTP", browserTestOTP(t, s, user))
+		}
 		w := httptest.NewRecorder()
 		s.routes().ServeHTTP(w, r)
 		if w.Code != status {
@@ -46,20 +50,31 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 	g := call("POST", "/api/account-groups", 1, map[string]any{"name": "Batch"}, 201)["group"].(map[string]any)
 	groupID := int64(g["id"].(float64))
 	groupPath := fmt.Sprintf("/api/account-groups/%d", groupID)
+	checkGroup := expectTimestampUpdate(t, db, "account_groups", "id=$1", groupID)
+	call("PATCH", groupPath, 1, map[string]any{"name": "Renamed"}, 200)
+	checkGroup()
+	checkAccount := expectTimestampUpdate(t, db, "chatgpt_accounts", "id=1")
 	call("PATCH", "/api/accounts/1/group", 1, map[string]any{"group_id": groupID}, 200)
-	call("DELETE", groupPath, 2, nil, 404)
+	checkAccount()
+	call("DELETE", groupPath, 2, nil, 403)
+	checkGroup = expectTimestampUpdate(t, db, "account_groups", "id=$1", groupID)
+	checkAccount = expectTimestampUpdate(t, db, "chatgpt_accounts", "id=1")
 	call("DELETE", groupPath, 1, nil, 204)
+	checkGroup()
+	checkAccount()
 	assertDeleted("account_groups", groupID)
 	var bound sql.NullInt64
 	if err := db.QueryRow(`SELECT group_id FROM chatgpt_accounts WHERE id=1`).Scan(&bound); err != nil || bound.Valid {
 		t.Fatal("软删除分组未解除绑定", err)
 	}
 	call("PATCH", "/api/accounts/1/group", 1, map[string]any{"group_id": groupID}, 404)
-	call("POST", "/api/account-groups", 1, map[string]any{"name": "Batch"}, 201)
+	call("POST", "/api/account-groups", 1, map[string]any{"name": "Renamed"}, 201)
 	if len(call("GET", "/api/account-groups", 1, nil, 200)["groups"].([]any)) != 1 {
 		t.Fatal("分组列表包含已删除数据")
 	}
+	checkAccount = expectTimestampUpdate(t, db, "chatgpt_accounts", "id=1")
 	call("DELETE", "/api/accounts/1", 1, nil, 204)
+	checkAccount()
 	assertDeleted("chatgpt_accounts", 1)
 	call("DELETE", "/api/accounts/1", 1, nil, 404)
 	call("POST", "/api/accounts/1/browser-session", 1, nil, 404)
@@ -81,7 +96,9 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 	a := call("POST", "/api/addresses", 1, address, 201)["address"].(map[string]any)
 	aid := int64(a["id"].(float64))
 	ap := fmt.Sprintf("/api/addresses/%d", aid)
+	checkAddress := expectTimestampUpdate(t, db, "addresses", "id=$1", aid)
 	call("DELETE", ap, 1, nil, 204)
+	checkAddress()
 	assertDeleted("addresses", aid)
 	call("GET", ap, 1, nil, 404)
 	call("PATCH", ap, 1, address, 404)
@@ -94,7 +111,9 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 	cid := int64(c["id"].(float64))
 	cp := fmt.Sprintf("/api/bank-cards/%d", cid)
 	call("POST", cp+"/ledger", 1, map[string]any{"kind": "deposit", "amount_usd": "100.00", "request_key": "soft-delete-deposit-1"}, 201)
+	checkCard := expectTimestampUpdate(t, db, "bank_cards", "id=$1", cid)
 	call("DELETE", cp, 1, nil, 204)
+	checkCard()
 	assertDeleted("bank_cards", cid)
 	call("GET", cp, 1, nil, 404)
 	if call("GET", cp+"/ledger", 1, nil, 200)["balance_usd_minor"] != float64(10000) {
@@ -107,7 +126,7 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 	}
 	call("POST", "/api/bank-cards", 1, card, 201)
 	// 删除用户后旧令牌失效；相同邮箱的新用户不会继承旧用户资产。
-	if _, err := db.Exec(`UPDATE users SET deleted_at=NOW() WHERE id=1`); err != nil {
+	if _, err := db.Exec(`UPDATE users SET deleted_at=NOW(),updated_at=NOW() WHERE id=1 AND deleted_at IS NULL`); err != nil {
 		t.Fatal(err)
 	}
 	assertDeleted("users", 1)
@@ -117,12 +136,15 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 	if _, err := db.Exec(`INSERT INTO users(id,email,password_hash) VALUES(10,'soft@test.local','')`); err != nil {
 		t.Fatal(err)
 	}
-	if call("GET", "/api/bank-cards", 10, nil, 200)["total"] != float64(0) {
-		t.Fatal("重复邮箱错误继承原资产")
+	call("GET", "/api/bank-cards", 10, nil, 403)
+	var inherited int
+	db.QueryRow("SELECT count(*) FROM bank_cards WHERE user_id=10").Scan(&inherited)
+	if inherited != 0 {
+		t.Fatal("新用户继承了旧用户卡片")
 	}
 }
 
-func TestAllTablesMaintainTimestampsAndRejectHardDelete(t *testing.T) {
+func TestAllTablesHaveTimestampsWithoutDatabaseLogic(t *testing.T) {
 	db := walletTestDB(t)
 	rows, err := db.Query(`SELECT relname FROM pg_class WHERE relnamespace=pg_my_temp_schema() AND relkind='r' ORDER BY relname`)
 	if err != nil {
@@ -137,54 +159,37 @@ func TestAllTablesMaintainTimestampsAndRejectHardDelete(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if len(tables) != 12 {
-		t.Fatalf("应有12张表，实际%d", len(tables))
+	if len(tables) != 21 {
+		t.Fatalf("应有21张表，实际%d", len(tables))
 	}
 	for _, table := range tables {
 		var count int
 		if err = db.QueryRow(`SELECT count(*) FROM pg_attribute WHERE attrelid=$1::regclass AND attname IN ('created_at','updated_at','deleted_at') AND atttypid='timestamptz'::regtype`, table).Scan(&count); err != nil || count != 3 {
 			t.Fatalf("%s 缺少统一时间字段", table)
 		}
-		for _, query := range []string{`DELETE FROM ` + table, `TRUNCATE ` + table + ` CASCADE`} {
-			tx, err := db.Begin()
-			if err != nil {
-				t.Fatal(err)
-			}
-			_, err = tx.Exec(query)
-			tx.Rollback()
-			var pg *pgconn.PgError
-			if !errors.As(err, &pg) || pg.Code != "23514" {
-				t.Fatalf("%s 未阻止物理删除: %v", table, err)
-			}
-		}
 	}
-	var created, updated time.Time
-	if err = db.QueryRow(`INSERT INTO users(email,password_hash,created_at,updated_at) VALUES('timestamps@test.local','','2000-01-01','2000-01-01') RETURNING created_at,updated_at`).Scan(&created, &updated); err != nil {
-		t.Fatal(err)
-	}
-	var afterCreated, afterUpdated time.Time
-	if err = db.QueryRow(`UPDATE users SET password_hash='new',created_at=NOW() WHERE email='timestamps@test.local' RETURNING created_at,updated_at`).Scan(&afterCreated, &afterUpdated); err != nil {
-		t.Fatal(err)
-	}
-	if !created.Equal(afterCreated) || !afterUpdated.After(updated) {
-		t.Fatal("创建时间应保持不变，更新时间应自动推进")
+	var triggers int
+	if err = db.QueryRow(`SELECT count(*) FROM pg_trigger tr JOIN pg_proc p ON p.oid=tr.tgfoid JOIN pg_class c ON c.oid=tr.tgrelid WHERE c.relnamespace=pg_my_temp_schema() AND NOT tr.tgisinternal`).Scan(&triggers); err != nil || triggers != 0 {
+		t.Fatal("时间维护不能依赖数据库触发器", err)
 	}
 }
 
 func TestConsumedEmailCodeIsSoftDeleted(t *testing.T) {
 	db := walletTestDB(t)
 	s := &Server{db: db}
-	if _, err := db.Exec(`INSERT INTO email_codes(email,purpose,code,expires_at) VALUES('code@test.local','login',$1,NOW()+INTERVAL '1 hour')`, hash("123456")); err != nil {
+	if err := s.storeEmailCode(context.Background(), "code@test.local", "login", hash("123456"), time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
+	check := expectTimestampUpdate(t, db, "email_codes", "email='code@test.local' AND deleted_at IS NULL")
 	if !s.verifyCode("code@test.local", "login", "123456") || s.verifyCode("code@test.local", "login", "123456") {
 		t.Fatal("验证码应只能消费一次")
 	}
+	check()
 	var total, deleted int
 	if err := db.QueryRow(`SELECT count(*),count(deleted_at) FROM email_codes`).Scan(&total, &deleted); err != nil || total != 1 || deleted != 1 {
 		t.Fatal("验证码消费没有保留原记录", err)
 	}
-	if _, err := db.Exec(`INSERT INTO email_codes(email,purpose,code,expires_at) VALUES('code@test.local','login',$1,NOW()+INTERVAL '1 hour') ON CONFLICT(email,purpose) WHERE deleted_at IS NULL DO UPDATE SET code=EXCLUDED.code,expires_at=EXCLUDED.expires_at`, hash("654321")); err != nil {
+	if err := s.storeEmailCode(context.Background(), "code@test.local", "login", hash("654321"), time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if !s.verifyCode("code@test.local", "login", "654321") {
@@ -192,5 +197,60 @@ func TestConsumedEmailCodeIsSoftDeleted(t *testing.T) {
 	}
 	if err := db.QueryRow(`SELECT count(*),count(deleted_at) FROM email_codes`).Scan(&total, &deleted); err != nil || total != 2 || deleted != 2 {
 		t.Fatal("新验证码覆盖了历史记录", err)
+	}
+}
+
+// 仅操作 walletTestDB 创建的临时表；用固定旧时间避免依赖 sleep 和时钟精度。
+func expectTimestampUpdate(t *testing.T, db *sql.DB, table, predicate string, args ...any) func() {
+	t.Helper()
+	var identity string
+	if err := db.QueryRow(`UPDATE `+table+` SET created_at='2000-01-01',updated_at='2000-01-01' WHERE `+predicate+` RETURNING created_at::text`, args...).Scan(&identity); err != nil {
+		t.Fatal(err)
+	}
+	// 不通过 deleted_at 定位，软删除后也检查原行。
+	predicate = strings.ReplaceAll(predicate, " AND deleted_at IS NULL", "")
+	return func() {
+		t.Helper()
+		var created string
+		var updated bool
+		if err := db.QueryRow(`SELECT created_at::text,updated_at>created_at FROM `+table+` WHERE `+predicate, args...).Scan(&created, &updated); err != nil || created != identity || !updated {
+			t.Fatalf("%s 更新必须保留创建时间并推进更新时间: %v", table, err)
+		}
+	}
+}
+
+func TestReissuedEmailCodePreservesHistory(t *testing.T) {
+	db := walletTestDB(t)
+	s := &Server{db: db}
+	ctx := context.Background()
+	if err := s.storeEmailCode(ctx, "code@test.local", "login", hash("123456"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟新码插入失败，事务必须恢复旧码的活跃状态。
+	if _, err := db.Exec(`ALTER TABLE email_codes ADD CONSTRAINT test_code_hash CHECK (code <> 'rejected')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.storeEmailCode(ctx, "code@test.local", "login", "rejected", time.Now().Add(time.Hour)); err == nil {
+		t.Fatal("新验证码插入应失败")
+	}
+	var stillActive bool
+	if err := db.QueryRow(`SELECT deleted_at IS NULL FROM email_codes WHERE id=1`).Scan(&stillActive); err != nil || !stillActive {
+		t.Fatal("保存失败不应使旧验证码失效", err)
+	}
+	check := expectTimestampUpdate(t, db, "email_codes", "id=1")
+	if err := s.storeEmailCode(ctx, "code@test.local", "login", hash("654321"), time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	var original string
+	var deleted, active int
+	if err := db.QueryRow(`SELECT code FROM email_codes WHERE id=1 AND deleted_at IS NOT NULL`).Scan(&original); err != nil || original != hash("123456") {
+		t.Fatal("重发验证码覆盖了原记录", err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FILTER (WHERE deleted_at IS NOT NULL),count(*) FILTER (WHERE deleted_at IS NULL) FROM email_codes`).Scan(&deleted, &active); err != nil || deleted != 1 || active != 1 {
+		t.Fatal("重发后应保留一个失效记录和一个活跃记录", err)
+	}
+	if s.verifyCode("code@test.local", "login", "123456") || !s.verifyCode("code@test.local", "login", "654321") {
+		t.Fatal("重发后只能消费新验证码")
 	}
 }

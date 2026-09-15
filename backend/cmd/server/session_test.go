@@ -82,6 +82,9 @@ func TestAccountSessionIntegration(t *testing.T) {
 		body, _ := json.Marshal(input)
 		r := httptest.NewRequest(method, path, strings.NewReader(string(body)))
 		r.Header.Set("Authorization", "Bearer "+s.token(user))
+		if method == "POST" && (strings.HasSuffix(path, "/browser") || strings.HasSuffix(path, "/browser-session")) && s.permitted(r.Context(), user, "accounts") {
+			r.Header.Set("X-Aitok-TOTP", browserTestOTP(t, s, user))
+		}
 		w := httptest.NewRecorder()
 		s.routes().ServeHTTP(w, r)
 		if w.Code != status {
@@ -96,19 +99,19 @@ func TestAccountSessionIntegration(t *testing.T) {
 		t.Fatal("未自动填充导入账号")
 	}
 	path := fmt.Sprintf("/api/accounts/%d", result.Account.ID)
-	for _, user := range []int64{2, 3} {
-		call("POST", path+"/browser-session", user, nil, 404)
+	for _, user := range []int64{1, 2} {
+		call("POST", path+"/browser-session", user, nil, 403)
 	}
-	call("PATCH", path+"/session", 2, map[string]string{"session_json": raw}, 404)
+	call("PATCH", path+"/session", 2, map[string]string{"session_json": raw}, 403)
 	call("PATCH", path+"/session", 3, map[string]string{"session_json": raw}, 200)
-	w = call("POST", path+"/browser-session", 1, nil, 200)
+	w = call("POST", path+"/browser-session", 3, nil, 200)
 	if w.Header().Get("Cache-Control") != "no-store" || strings.Contains(w.Body.String(), "refresh-test") || !strings.Contains(w.Body.String(), "access-test") {
 		t.Fatal("浏览器会话缓存策略或凭据范围错误")
 	}
 	call("POST", "/api/accounts", 1, map[string]string{"email": "wrong@example.com", "session_json": raw}, 400)
-	call("PATCH", path+"/session", 1, map[string]string{"session_json": strings.ReplaceAll(raw, "chat@example.com", "wrong@example.com")}, 409)
-	call("PATCH", path+"/session", 1, map[string]string{"session_json": strings.ReplaceAll(raw, "2099", "2020")}, 200)
-	call("POST", path+"/browser-session", 1, nil, 422)
-	call("PATCH", path+"/session", 1, map[string]string{"session_json": raw}, 200)
-	call("POST", path+"/browser-session", 1, nil, 200)
+	call("PATCH", path+"/session", 3, map[string]string{"session_json": strings.ReplaceAll(raw, "chat@example.com", "wrong@example.com")}, 409)
+	call("PATCH", path+"/session", 3, map[string]string{"session_json": strings.ReplaceAll(raw, "2099", "2020")}, 200)
+	call("POST", path+"/browser-session", 3, nil, 422)
+	call("PATCH", path+"/session", 3, map[string]string{"session_json": raw}, 200)
+	call("POST", path+"/browser-session", 3, nil, 200)
 }

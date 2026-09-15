@@ -90,6 +90,9 @@ func (s *Server) accountBrowser(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "仅管理员可以操作后台电脑的浏览器"}, 403)
 		return
 	}
+	if r.Method == "POST" && !s.consumeTOTP(w, r, userID, r.Header.Get("X-Aitok-TOTP"), false) {
+		return
+	}
 	var encrypted, email string
 	err = s.db.QueryRowContext(r.Context(), `SELECT COALESCE(session_ciphertext,''),email FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL`, accountID).Scan(&encrypted, &email)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -129,7 +132,7 @@ func (s *Server) accountBrowser(w http.ResponseWriter, r *http.Request, userID, 
 				reply(w, map[string]string{"error": "无法加密代理配置"}, 503)
 				return
 			}
-			result, err := s.db.ExecContext(ctx, `UPDATE chatgpt_accounts SET session_ciphertext=$1 WHERE id=$2 AND deleted_at IS NULL AND session_ciphertext=$3`, encoded, accountID, encrypted)
+			result, err := s.db.ExecContext(ctx, `UPDATE chatgpt_accounts SET updated_at=NOW(),session_ciphertext=$1 WHERE id=$2 AND deleted_at IS NULL AND session_ciphertext=$3`, encoded, accountID, encrypted)
 			if err != nil {
 				reply(w, map[string]string{"error": "保存代理失败"}, 500)
 				return
@@ -179,7 +182,7 @@ func (s *Server) accountBrowser(w http.ResponseWriter, r *http.Request, userID, 
 		AuthenticatedAt *time.Time `json:"authenticated_at"`
 	}
 	if json.Unmarshal(result, &status) == nil && status.AuthenticatedAt != nil {
-		if _, err = s.db.ExecContext(ctx, `UPDATE chatgpt_accounts SET last_login_at=GREATEST(last_login_at,$1) WHERE id=$2 AND deleted_at IS NULL`, status.AuthenticatedAt, accountID); err != nil {
+		if _, err = s.db.ExecContext(ctx, `UPDATE chatgpt_accounts SET updated_at=NOW(),last_login_at=GREATEST(last_login_at,$1) WHERE id=$2 AND deleted_at IS NULL`, status.AuthenticatedAt, accountID); err != nil {
 			reply(w, map[string]string{"error": "登录时间保存失败，请重试"}, 500)
 			return
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -13,7 +14,11 @@ import (
 
 // 独立作用域的短期只读凭证，仅交给本机进程，不注入 ChatGPT 页面。
 func (s *Server) assistantToken(user, account int64) string {
-	body := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("assistant:%d:%d:%d", user, account, time.Now().Add(12*time.Hour).Unix())))
+	stamp, err := s.sessionStamp(context.Background(), user)
+	if err != nil {
+		return ""
+	}
+	body := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("assistant:%d:%d:%d:%s", user, account, time.Now().Add(12*time.Hour).Unix(), stamp)))
 	mac := hmac.New(sha256.New, s.secret)
 	mac.Write([]byte(body))
 	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
@@ -44,12 +49,22 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var user, account, expiry int64
-	if _, err = fmt.Sscanf(string(raw), "assistant:%d:%d:%d", &user, &account, &expiry); err != nil || time.Now().Unix() > expiry {
+	var stamp string
+	if _, err = fmt.Sscanf(string(raw), "assistant:%d:%d:%d:%s", &user, &account, &expiry, &stamp); err != nil || time.Now().Unix() > expiry {
+		unauthorized()
+		return
+	}
+	current, e := s.sessionStamp(r.Context(), user)
+	if e != nil || !hmac.Equal([]byte(stamp), []byte(current)) {
+		unauthorized()
+		return
+	}
+	if !s.permitted(r.Context(), user, "accounts") {
 		unauthorized()
 		return
 	}
 	var exists bool
-	if err = s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND user_id=$2 AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL))`, account, user).Scan(&exists); err != nil || !exists {
+	if err = s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL))`, account, user).Scan(&exists); err != nil || !exists {
 		unauthorized()
 		return
 	}
@@ -59,9 +74,20 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		c, err := s.readCard(r, user, id, false)
+		c, err := s.readCard(r, user, id, true)
 		if err != nil {
 			cardError(w, err)
+			return
+		}
+		var usable bool
+		err = s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM bank_cards WHERE id=$1 AND deleted_at IS NULL AND status='active' AND (exp_year,exp_month)>=(EXTRACT(YEAR FROM NOW())::int,EXTRACT(MONTH FROM NOW())::int))`, id).Scan(&usable)
+		if err != nil || !usable {
+			reply(w, map[string]string{"error": "卡片已冻结、失效或过期，请选择其他卡片"}, 409)
+			return
+		}
+		role, roleErr := s.role(r.Context(), user)
+		if roleErr != nil || (role == "admin" && !s.permitted(r.Context(), user, "card_numbers")) {
+			w.WriteHeader(403)
 			return
 		}
 		reply(w, map[string]any{"card": c}, 200)
@@ -72,7 +98,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cards := []BankCard{}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards WHERE deleted_at IS NULL AND user_id=$1 ORDER BY id DESC LIMIT 500`, user)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards WHERE deleted_at IS NULL AND status='active' AND (exp_year,exp_month)>=(EXTRACT(YEAR FROM NOW())::int,EXTRACT(MONTH FROM NOW())::int) ORDER BY id DESC LIMIT 500`)
 	if err != nil {
 		cardError(w, err)
 		return
@@ -93,7 +119,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addresses := []Address{}
-	rows, err = s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE deleted_at IS NULL AND (user_id=$1 OR user_id IS NULL) ORDER BY id DESC LIMIT 1000`, user)
+	rows, err = s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE deleted_at IS NULL ORDER BY id DESC LIMIT 1000`)
 	if err != nil {
 		addressError(w, err)
 		return

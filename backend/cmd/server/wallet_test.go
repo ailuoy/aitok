@@ -148,14 +148,17 @@ func TestWalletAndRenewalIntegration(t *testing.T) {
 	}
 	call("PATCH", path+"/renewal-date", map[string]string{"renewal_date": "2030-01-31"}, 1, 403)
 	call("PATCH", path+"/renewal-date", map[string]string{"renewal_date": "2030-02-30"}, 3, 400)
+	checkAccount := expectTimestampUpdate(t, db, "chatgpt_accounts", "id=$1", aid)
 	call("PATCH", path+"/renewal-date", map[string]string{"renewal_date": "2030-01-31"}, 3, 200)
+	checkAccount()
 	var auditCount int
 	db.QueryRow(`SELECT count(*) FROM renewal_date_audit`).Scan(&auditCount)
 	if auditCount != 1 {
 		t.Fatal("管理员日期修改未记录")
 	}
 	renew := map[string]any{"request_key": "renewal-request-001", "expected_cost": 45, "expected_months": 1}
-	call("POST", path+"/renew", renew, 2, 410)
+	call("POST", path+"/renew", renew, 2, 403)
+	db.Exec("UPDATE users SET role='admin' WHERE id=1")
 	call("POST", path+"/renew", renew, 1, 410)
 	topup := map[string]any{"amount_minor": 10000, "request_key": "topup-request-001"}
 	result := call("POST", "/api/wallet/topups", topup, 1, 200)
@@ -195,6 +198,8 @@ func TestWalletAndRenewalIntegration(t *testing.T) {
 	if webhookRequest("invalid") != 400 {
 		t.Fatal("伪造 Webhook 未拒绝")
 	}
+	checkWallet := expectTimestampUpdate(t, db, "wallets", "user_id=1")
+	checkOrder := expectTimestampUpdate(t, db, "topup_orders", "order_no=$1", orderNo)
 	stamp := fmt.Sprint(time.Now().Unix())
 	mac := hmac.New(sha256.New, []byte(s.billing.WebhookSecret))
 	mac.Write([]byte(stamp + "." + string(payload)))
@@ -202,6 +207,8 @@ func TestWalletAndRenewalIntegration(t *testing.T) {
 	if webhookRequest(signature) != 200 || webhookRequest(signature) != 200 {
 		t.Fatal("合法 Webhook 或重复回调失败")
 	}
+	checkWallet()
+	checkOrder()
 	// 不同事件 ID 或异步成功事件仍不能对同一订单重复入账。
 	if err := s.applyStripeSession(context.Background(), stripe.EventTypeCheckoutSessionAsyncPaymentSucceeded, session); err != nil {
 		t.Fatal(err)
@@ -210,6 +217,7 @@ func TestWalletAndRenewalIntegration(t *testing.T) {
 	if wallet["balance"] != float64(100) || len(wallet["ledger"].([]any)) != 1 {
 		t.Fatal("充值未正确幂等入账")
 	}
+	db.Exec("UPDATE users SET role='admin' WHERE id=1")
 	call("POST", path+"/renew", renew, 1, 410)
 	wallet = call("GET", "/api/wallet", nil, 1, 200)
 	if wallet["balance"] != float64(100) || len(wallet["ledger"].([]any)) != 1 {

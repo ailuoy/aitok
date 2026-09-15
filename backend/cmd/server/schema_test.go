@@ -44,6 +44,7 @@ func temporarySchemaSQL(script string) string {
 	script = strings.ReplaceAll(script, "CREATE TABLE IF NOT EXISTS", "CREATE TEMP TABLE IF NOT EXISTS")
 	for _, name := range []string{"aitok_touch_timestamps", "aitok_prevent_hard_delete"} {
 		script = strings.ReplaceAll(script, "FUNCTION "+name+"(", "FUNCTION pg_temp."+name+"(")
+		script = strings.ReplaceAll(script, "FUNCTION IF EXISTS "+name+"(", "FUNCTION IF EXISTS pg_temp."+name+"(")
 	}
 	return script
 }
@@ -101,6 +102,33 @@ func TestSchemaSnapshotMatchesMigrations(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if _, err = tx.Exec(`SET LOCAL search_path TO pg_temp`); err != nil {
+			t.Fatal(err)
+		}
+		// information_schema 将隔离测试表标为 LOCAL TEMPORARY，生产表为 BASE TABLE。
+		verify := strings.ReplaceAll(read("../../migrations/verify.sql"), "t.table_type = 'BASE TABLE'", "t.table_type = 'LOCAL TEMPORARY'")
+		checks, err := tx.Query(verify)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkedTables := 0
+		for checks.Next() {
+			var database, schema, table, status, missing, invalid, triggers string
+			if err = checks.Scan(&database, &schema, &table, &status, &missing, &invalid, &triggers); err != nil {
+				t.Fatal(err)
+			}
+			if status != "OK" {
+				t.Errorf("%s 结构核对失败: %s %s %s %s", table, status, missing, invalid, triggers)
+			}
+			checkedTables++
+		}
+		if err = checks.Err(); err != nil {
+			t.Fatal(err)
+		}
+		checks.Close()
+		if checkedTables != 21 {
+			t.Fatalf("结构核对应覆盖全部21张表，实际%d", checkedTables)
+		}
 		rows, err := tx.Query(schemaDefinitionQuery)
 		if err != nil {
 			t.Fatal(err)
@@ -134,10 +162,18 @@ func TestSchemaSnapshotMatchesMigrations(t *testing.T) {
 INSERT INTO account_groups(user_id,name,deleted_at) VALUES(9002,'same name',NOW()),(9002,'same name',NULL);
 INSERT INTO addresses(address_line1,city,state,postal_code,deleted_at) VALUES('1 Test Road','Portland','OR','97201',NOW()),('1 Test Road','Portland','OR','97201',NULL);
 INSERT INTO bank_cards(user_id,label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,deleted_at) VALUES(9002,'Card','Test','test','test','4242','Visa',12,2030,NOW()),(9002,'Card','Test','test','test','4242','Visa',12,2030,NULL);`
+	multiCycleHistory := duplicateHistory + `
+INSERT INTO chatgpt_accounts(id,user_id,label,email) VALUES(9900,9002,'History','history@test.local');
+INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,balance_after_usd_minor,account_id,account_email,period_start,period_end,reversed_at,external_reference) VALUES
+(2,9002,'schema-cycle-reversed','subscription',-100,900,9900,'history@test.local','2030-01-01','2030-02-01',NOW(),'schema-original'),
+(2,9002,'schema-cycle-correct','subscription',-100,900,9900,'history@test.local','2030-01-01','2030-02-01',NULL,'schema-correct'),
+(2,9002,'schema-cycle-next','subscription',-100,800,9900,'history@test.local','2030-02-01','2030-03-01',NULL,'schema-next');`
 	for _, scenario := range []struct {
 		name    string
 		scripts []string
 	}{
+		{"人民币汇率历史后重复升级", []string{snapshot, `INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at) VALUES('PHP','USD',0.01589,'test',NOW()),('PHP','CNY',0.1067,'test',NOW());`, release, release}},
+		{"多周期与冲正历史后重复升级", []string{snapshot, multiCycleHistory, release, release}},
 		{"编号迁移", []string{chain.String()}},
 		{"上线 SQL", []string{release}},
 		{"快照后重复升级", []string{snapshot, release, release}},

@@ -16,20 +16,24 @@ import (
 )
 
 type Account struct {
-	ID          int64      `json:"id"`
-	UserID      int64      `json:"user_id"`
-	Label       string     `json:"label"`
-	Email       string     `json:"email"`
-	OwnerEmail  string     `json:"owner_email"`
-	CreatedAt   time.Time  `json:"created_at"`
-	RenewalDate *string    `json:"renewal_date"`
-	HasSession  bool       `json:"has_session"`
-	GroupID     *int64     `json:"group_id"`
-	LastLoginAt *time.Time `json:"last_login_at"`
+	ID                 int64      `json:"id"`
+	UserID             int64      `json:"user_id"`
+	Label              string     `json:"label"`
+	Email              string     `json:"email"`
+	OwnerEmail         string     `json:"owner_email"`
+	CreatedAt          time.Time  `json:"created_at"`
+	RenewalDate        *string    `json:"renewal_date"`
+	HasSession         bool       `json:"has_session"`
+	GroupID            *int64     `json:"group_id"`
+	VerifiedPlan       string     `json:"verified_plan"`
+	VerifiedAt         *time.Time `json:"verified_at"`
+	SubscriptionEndsAt *string    `json:"subscription_ends_at"`
+	RenewalEnabled     bool       `json:"renewal_enabled"`
+	LastLoginAt        *time.Time `json:"last_login_at"`
 }
 
 func (s *Server) listAccounts(ctx context.Context, id int64, admin bool) ([]Account, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.user_id,a.label,a.email,u.email,a.created_at,a.renewal_date::text,COALESCE(a.session_ciphertext,'')<>'',a.group_id,a.last_login_at FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) ORDER BY a.id DESC`, id, admin)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.user_id,a.label,a.email,u.email,a.created_at,a.renewal_date::text,COALESCE(a.session_ciphertext,'')<>'',a.group_id,a.last_login_at,a.verified_plan,a.verified_at,a.subscription_ends_at::text,a.renewal_enabled FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) ORDER BY a.id DESC`, id, admin)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +41,7 @@ func (s *Server) listAccounts(ctx context.Context, id int64, admin bool) ([]Acco
 	result := []Account{}
 	for rows.Next() {
 		var a Account
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Label, &a.Email, &a.OwnerEmail, &a.CreatedAt, &a.RenewalDate, &a.HasSession, &a.GroupID, &a.LastLoginAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Label, &a.Email, &a.OwnerEmail, &a.CreatedAt, &a.RenewalDate, &a.HasSession, &a.GroupID, &a.LastLoginAt, &a.VerifiedPlan, &a.VerifiedAt, &a.SubscriptionEndsAt, &a.RenewalEnabled); err != nil {
 			return nil, err
 		}
 		if a.OwnerEmail == adminIdentity {
@@ -80,12 +84,16 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "用户不存在"}, 401)
 			return
 		}
+		if r.URL.Query().Get("paged") == "1" {
+			s.accountPage(w, r, id, admin)
+			return
+		}
 		accounts, err := s.listAccounts(r.Context(), id, admin)
 		if err != nil {
 			reply(w, map[string]string{"error": "读取账号失败"}, 500)
 			return
 		}
-		reply(w, map[string]any{"accounts": accounts}, 200)
+		reply(w, map[string]any{"accounts": accountViews(accounts, admin)}, 200)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -131,13 +139,12 @@ func (s *Server) accounts(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "账号加密未配置，请联系管理员"}, 503)
 		return
 	}
-	a := Account{UserID: id, Label: in.Label, Email: in.Email, HasSession: true}
-	err = s.db.QueryRowContext(r.Context(), `INSERT INTO chatgpt_accounts(user_id,label,email,session_ciphertext) VALUES($1,$2,$3,$4) RETURNING id,created_at`, id, in.Label, in.Email, encrypted).Scan(&a.ID, &a.CreatedAt)
+	a, err := s.insertAccount(r.Context(), id, in.Label, in.Email, encrypted)
 	if err != nil {
-		reply(w, map[string]string{"error": "保存账号失败"}, 500)
+		reply(w, map[string]string{"error": "该邮箱账号已存在或保存失败，请核对原账号"}, 409)
 		return
 	}
-	reply(w, map[string]any{"account": a}, 201)
+	reply(w, map[string]any{"account": accountView(a, s.permitted(r.Context(), id, "accounts"))}, 201)
 }
 
 func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
@@ -146,10 +153,26 @@ func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "请先登录"}, 401)
 		return
 	}
+	if !s.permitted(r.Context(), id, "accounts") {
+		reply(w, map[string]string{"error": "仅管理员可以管理账号"}, 403)
+		return
+	}
+	if r.URL.Path == "/api/accounts/export" {
+		if r.Method != "GET" {
+			w.WriteHeader(405)
+			return
+		}
+		s.accountPage(w, r, id, s.permitted(r.Context(), id, "accounts"))
+		return
+	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/accounts/"), "/")
 	aid, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil || aid <= 0 {
 		http.NotFound(w, r)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "subscription" {
+		s.subscriptionSettings(w, r, id, aid)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "renew" && r.Method == http.MethodPost {
@@ -185,7 +208,7 @@ func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "用户不存在"}, 401)
 		return
 	}
-	result, err := s.db.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, aid, id, admin)
+	result, err := s.db.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, aid, id, admin)
 	if err != nil {
 		reply(w, map[string]string{"error": "删除失败"}, 500)
 		return
@@ -233,7 +256,7 @@ func (s *Server) setRenewalDate(w http.ResponseWriter, r *http.Request, id, aid 
 		return
 	}
 	if err == nil {
-		_, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET renewal_date=$1 WHERE id=$2 AND deleted_at IS NULL`, date, aid)
+		_, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),renewal_date=$1 WHERE id=$2 AND deleted_at IS NULL`, date, aid)
 	}
 	if err == nil {
 		_, err = tx.ExecContext(r.Context(), `INSERT INTO renewal_date_audit(account_id,admin_id,previous_date,renewal_date) VALUES($1,$2,$3,$4)`, aid, id, previous, date)
@@ -246,4 +269,19 @@ func (s *Server) setRenewalDate(w http.ResponseWriter, r *http.Request, id, aid 
 		return
 	}
 	reply(w, map[string]string{"message": "续订日期已更新"}, 200)
+}
+
+// 用户列表只返回允许展示的字段，管理字段不下发到客户端。
+func accountView(a Account, admin bool) any {
+	if admin {
+		return a
+	}
+	return map[string]any{"id": a.ID, "label": a.Label, "email": a.Email, "last_login_at": a.LastLoginAt}
+}
+func accountViews(accounts []Account, admin bool) []any {
+	result := make([]any, 0, len(accounts))
+	for _, a := range accounts {
+		result = append(result, accountView(a, admin))
+	}
+	return result
 }
