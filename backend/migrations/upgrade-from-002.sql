@@ -1,0 +1,711 @@
+-- AiTok：截图旧版八张表（000–002）升级至 025。
+-- 2026-09-16，按项目历史迁移整理；截图未展示的约束按原项目定义处理。
+-- 仅适用于 public schema；如线上手工改过约束/索引，请先导出实际结构核对。
+-- 执行前备份数据库并停止旧应用写入；升级完成后部署新版应用。
+-- 不删除表、字段或业务行；保留余额、流水、订单号、Session 及原创建时间。
+-- 补齐独立 ID、时间字段、软删除字段和新业务表；未知历史时间使用迁移时间。
+-- 保留历史表的物理字段顺序，不通过重建表调整顺序。
+-- 不创建外键、触发器、函数或存储过程；移除项目旧版已知同名对象。
+-- 单事务，任何 SQL 或末尾结构检查失败均不能提交；客户端需遇错停止。
+-- 兼容不接受 DDL 混合查询结果集的客户端：本文件不返回结果集。
+-- 校验使用会话临时表 CHECK 约束；无错误且 COMMIT 成功后单独执行 verify.sql。
+-- 除本文件外，无需再重复执行 release.sql 或 003–025 编号迁移。
+
+BEGIN;
+SET LOCAL search_path TO public, pg_catalog;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 确认连接到了包含旧版八张表的数据库，并阻止升级期间继续写入。
+LOCK TABLE users, chatgpt_accounts, email_codes, wallets, topup_orders,
+    wallet_ledger, account_renewals, renewal_date_audit IN ACCESS EXCLUSIVE MODE;
+
+-- 仅在当前会话暂存校验状态，不是业务表，不产生持久化数据。
+CREATE TEMP TABLE aitok_upgrade_guard (
+    phase TEXT PRIMARY KEY,
+    passed BOOLEAN NOT NULL,
+    CONSTRAINT aitok_upgrade_schema_check CHECK (passed)
+) ON COMMIT DROP;
+
+-- 前置校验只核对截图中可确认的列及类型；允许已补充的新列，便于重试。
+INSERT INTO pg_temp.aitok_upgrade_guard(phase, passed)
+WITH expected(table_name, columns) AS (VALUES
+('users', '{"id":"bigint","email":"text","password_hash":"text","created_at":"timestamp with time zone"}'::jsonb),
+('chatgpt_accounts', '{"id":"bigint","user_id":"bigint","label":"text","email":"text","api_key":"text","created_at":"timestamp with time zone","session_ciphertext":"text","renewal_date":"date"}'::jsonb),
+('email_codes', '{"email":"text","purpose":"text","code":"text","expires_at":"timestamp with time zone"}'::jsonb),
+('wallets', '{"user_id":"bigint","balance":"bigint"}'::jsonb),
+('topup_orders', '{"order_no":"text","user_id":"bigint","request_key":"text","amount_minor":"bigint","tokens":"bigint","currency":"text","status":"text","session_id":"text","checkout_url":"text","created_at":"timestamp with time zone","quantity":"integer","unit_amount_minor":"bigint","price_id":"text"}'::jsonb),
+('wallet_ledger', '{"id":"bigint","user_id":"bigint","amount":"bigint","balance_after":"bigint","kind":"text","reference":"text","description":"text","created_at":"timestamp with time zone"}'::jsonb),
+('account_renewals', '{"user_id":"bigint","request_key":"text","account_id":"bigint","tokens":"bigint","renewal_date":"date","created_at":"timestamp with time zone","account_label":"text","months":"integer"}'::jsonb),
+('renewal_date_audit', '{"id":"bigint","account_id":"bigint","admin_id":"bigint","previous_date":"date","renewal_date":"date","created_at":"timestamp with time zone"}'::jsonb)
+)
+SELECT 'legacy_columns', bool_and(COALESCE((
+    SELECT jsonb_object_agg(a.attname, format_type(a.atttypid, a.atttypmod))
+    FROM pg_class c JOIN pg_attribute a ON a.attrelid=c.oid
+    WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=e.table_name
+      AND c.relkind='r' AND a.attnum>0 AND NOT a.attisdropped
+), '{}'::jsonb) @> e.columns)
+FROM expected e;
+
+-- 来源：003_addresses.sql
+
+-- 地址库独立于账号与账单；采集来源仅作为地址溯源信息。
+CREATE TABLE IF NOT EXISTS addresses (
+  id BIGSERIAL PRIMARY KEY,
+  address_line1 TEXT NOT NULL CHECK (length(address_line1) BETWEEN 1 AND 200),
+  address_line2 TEXT NOT NULL DEFAULT '' CHECK (length(address_line2) <= 200),
+  city TEXT NOT NULL CHECK (length(city) BETWEEN 1 AND 100),
+  state TEXT NOT NULL CHECK (length(state) BETWEEN 1 AND 100),
+  postal_code TEXT NOT NULL CHECK (length(postal_code) BETWEEN 1 AND 20),
+  country TEXT NOT NULL DEFAULT 'US' CHECK (country ~ '^[A-Z]{2}$'),
+  source_url TEXT NOT NULL DEFAULT '',
+  source_key TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- 来源：004_account_groups_and_login.sql
+
+CREATE TABLE IF NOT EXISTS account_groups (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS group_id BIGINT;
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS chatgpt_accounts_group_id_idx ON chatgpt_accounts(group_id);
+
+
+-- 来源：005_bank_cards_and_address_owners.sql
+
+ALTER TABLE addresses ADD COLUMN IF NOT EXISTS user_id BIGINT;
+CREATE INDEX IF NOT EXISTS addresses_user_id_idx ON addresses(user_id);
+CREATE TABLE IF NOT EXISTS bank_cards (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 80),
+  cardholder TEXT NOT NULL CHECK (length(cardholder) BETWEEN 1 AND 120),
+  number_ciphertext TEXT NOT NULL,
+  number_fingerprint TEXT NOT NULL,
+  last4 TEXT NOT NULL CHECK (last4 ~ '^[0-9]{4}$'),
+  brand TEXT NOT NULL,
+  exp_month INTEGER NOT NULL CHECK (exp_month BETWEEN 1 AND 12),
+  exp_year INTEGER NOT NULL CHECK (exp_year BETWEEN 2000 AND 9999),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, number_fingerprint)
+);
+
+
+-- 来源：006_address_full_name.sql
+
+-- 旧地址未采集姓名，保留空值供用户补充。
+ALTER TABLE addresses ADD COLUMN IF NOT EXISTS full_name TEXT NOT NULL DEFAULT '' CHECK (length(full_name) <= 120);
+
+
+-- 来源：007_address_source_data.sql
+
+-- 保留生成器返回的完整资料，基础地址字段仍可独立编辑。
+ALTER TABLE addresses ADD COLUMN IF NOT EXISTS source_data JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(source_data) = 'object');
+
+
+-- 来源：008_bank_card_platform_and_notes.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 旧银行卡保持空平台、空备注，不回填或改写已有付款信息。
+ALTER TABLE bank_cards
+  ADD COLUMN IF NOT EXISTS platform TEXT NOT NULL DEFAULT '' CHECK (length(platform) <= 80),
+  ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 1000);
+
+
+-- 来源：009_user_roles.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 兼容历史空角色；超级管理员由固定内部身份和环境配置确定。
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'user' CHECK (role IN ('', 'user', 'admin'));
+
+
+-- 来源：010_bank_card_ledger.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- USD 使用整数美分；历史卡片从零开始，不推算已有余额。
+ALTER TABLE bank_cards ADD COLUMN IF NOT EXISTS balance_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (balance_usd_minor BETWEEN 0 AND 1000000000000);
+CREATE TABLE IF NOT EXISTS bank_card_ledger (
+  id BIGSERIAL PRIMARY KEY,
+  card_id BIGINT NOT NULL,
+  actor_id BIGINT NOT NULL,
+  request_key TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('opening', 'deposit', 'subscription')),
+  amount_usd_minor BIGINT NOT NULL CHECK (amount_usd_minor <> 0 AND abs(amount_usd_minor) <= 1000000000000),
+  balance_after_usd_minor BIGINT NOT NULL CHECK (balance_after_usd_minor BETWEEN 0 AND 1000000000000),
+  account_id BIGINT,
+  account_label TEXT NOT NULL DEFAULT '',
+  account_email TEXT NOT NULL DEFAULT '',
+  original_php_minor BIGINT,
+  notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 1000),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (card_id, request_key),
+  CHECK ((kind IN ('opening', 'deposit') AND amount_usd_minor > 0 AND account_id IS NULL AND original_php_minor IS NULL)
+    OR (kind = 'subscription' AND amount_usd_minor < 0 AND account_id IS NOT NULL AND original_php_minor > 0))
+);
+CREATE INDEX IF NOT EXISTS bank_card_ledger_history_idx ON bank_card_ledger(card_id, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_opening_idx ON bank_card_ledger(card_id) WHERE kind = 'opening';
+-- 一次账号开通只记一笔，跨银行卡同样不能重复扣款。
+
+
+-- 来源：011_table_comments.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 为已有数据库补齐表说明，与 schema.sql 中的注释保持一致。
+COMMENT ON TABLE users IS '平台用户：保存登录邮箱、密码哈希和用户角色；超级管理员使用后端配置及固定内部身份。';
+COMMENT ON TABLE account_groups IS '账号分组：按用户管理一批 ChatGPT 账号，组名在同一用户下忽略大小写唯一。';
+COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：记录所属用户、加密 Session、分组、续订日期和上次登录时间；api_key 为历史兼容字段。';
+COMMENT ON TABLE email_codes IS '邮箱验证码：按邮箱及用途保存验证码哈希和过期时间。';
+COMMENT ON TABLE wallets IS '代币钱包：保存平台用户的代币余额，与银行卡 USD 资金账本独立。';
+COMMENT ON TABLE topup_orders IS '钱包充值订单：记录 Stripe 付款状态、USD 最小货币单位金额、代币数量、价格和幂等请求。';
+COMMENT ON TABLE wallet_ledger IS '代币钱包流水：记录代币收支、交易后余额及业务引用，保留历史充值和续订记录。';
+COMMENT ON TABLE account_renewals IS '历史账号续订记录：保存代币扣款、续订日期及账号快照；账号删除后仍保留。';
+COMMENT ON TABLE renewal_date_audit IS '续订日期审计：记录管理员设置账号续订日期前后的值和操作时间。';
+COMMENT ON TABLE addresses IS '账单地址库：保存姓名、地址及完整来源资料；无所属用户的记录为共享地址。';
+COMMENT ON TABLE bank_cards IS '银行卡：保存所属用户、加密卡号、卡平台、备注及 USD 美分记账余额；不保存安全码。';
+COMMENT ON TABLE bank_card_ledger IS '银行卡 USD 对账流水：记录初始余额、存入、账号开通支出及交易后余额，保存账号和 PHP 原价快照，按请求和账号防重复扣款。';
+
+
+-- 来源：012_soft_delete_timestamps.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 未记录过的历史时间使用迁移时间，不猜测既往业务时间。
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE account_groups
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE chatgpt_accounts
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE email_codes
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE wallets
+  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE topup_orders
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE wallet_ledger
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE account_renewals
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE renewal_date_audit
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE addresses
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE bank_cards
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+ALTER TABLE bank_card_ledger
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+-- 活跃数据使用部分唯一索引；财务幂等键继续跨软删除记录唯一。
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_active_unique ON users(email) WHERE deleted_at IS NULL;
+ALTER TABLE email_codes ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+ALTER TABLE email_codes DROP CONSTRAINT IF EXISTS email_codes_pkey;
+ALTER TABLE email_codes ADD CONSTRAINT email_codes_pkey PRIMARY KEY(id);
+CREATE UNIQUE INDEX IF NOT EXISTS email_codes_active_unique ON email_codes(email,purpose) WHERE deleted_at IS NULL;
+DROP INDEX IF EXISTS account_groups_user_name_unique;
+CREATE UNIQUE INDEX IF NOT EXISTS account_groups_user_name_active_unique ON account_groups(user_id,lower(name)) WHERE deleted_at IS NULL;
+DROP INDEX IF EXISTS addresses_location_unique;
+CREATE UNIQUE INDEX IF NOT EXISTS addresses_location_active_unique ON addresses(lower(address_line1),lower(address_line2),lower(city),lower(state),lower(postal_code),country) WHERE deleted_at IS NULL;
+ALTER TABLE bank_cards DROP CONSTRAINT IF EXISTS bank_cards_user_id_number_fingerprint_key;
+CREATE UNIQUE INDEX IF NOT EXISTS bank_cards_fingerprint_active_unique ON bank_cards(user_id,number_fingerprint) WHERE deleted_at IS NULL;
+
+-- 取消物理级联删除；分组软删除时由事务解除活跃账号的分组绑定。
+
+ALTER TABLE account_groups DROP CONSTRAINT IF EXISTS account_groups_user_id_fkey;
+
+ALTER TABLE chatgpt_accounts DROP CONSTRAINT IF EXISTS chatgpt_accounts_user_id_fkey;
+
+ALTER TABLE addresses DROP CONSTRAINT IF EXISTS addresses_user_id_fkey;
+
+ALTER TABLE bank_cards DROP CONSTRAINT IF EXISTS bank_cards_user_id_fkey;
+
+ALTER TABLE chatgpt_accounts DROP CONSTRAINT IF EXISTS chatgpt_accounts_group_id_fkey;
+
+-- 所有表统一维护更新时间，并保留首次创建时间。
+
+-- 业务表禁止物理删除和清空；删除必须写 deleted_at。
+
+
+
+-- 来源：013_application_timestamps.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 012 已补齐全部业务表的三个时间字段。
+-- 应用在更新及软删除时显式写 updated_at，创建时间仅在 INSERT 时设置。
+-- 必须与补齐时间维护逻辑的后端一同上线。
+DROP TRIGGER IF EXISTS users_touch_timestamps ON users;
+DROP TRIGGER IF EXISTS account_groups_touch_timestamps ON account_groups;
+DROP TRIGGER IF EXISTS chatgpt_accounts_touch_timestamps ON chatgpt_accounts;
+DROP TRIGGER IF EXISTS email_codes_touch_timestamps ON email_codes;
+DROP TRIGGER IF EXISTS wallets_touch_timestamps ON wallets;
+DROP TRIGGER IF EXISTS topup_orders_touch_timestamps ON topup_orders;
+DROP TRIGGER IF EXISTS wallet_ledger_touch_timestamps ON wallet_ledger;
+DROP TRIGGER IF EXISTS account_renewals_touch_timestamps ON account_renewals;
+DROP TRIGGER IF EXISTS renewal_date_audit_touch_timestamps ON renewal_date_audit;
+DROP TRIGGER IF EXISTS addresses_touch_timestamps ON addresses;
+DROP TRIGGER IF EXISTS bank_cards_touch_timestamps ON bank_cards;
+DROP TRIGGER IF EXISTS bank_card_ledger_touch_timestamps ON bank_card_ledger;
+DROP FUNCTION IF EXISTS aitok_touch_timestamps();
+
+
+-- 来源：014_application_integrity.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 仅移除数据库业务约束；历史记录不删除。关联、时间及软删除由应用层维护。
+ALTER TABLE account_groups DROP CONSTRAINT IF EXISTS account_groups_user_id_fkey;
+ALTER TABLE chatgpt_accounts DROP CONSTRAINT IF EXISTS chatgpt_accounts_user_id_fkey;
+ALTER TABLE chatgpt_accounts DROP CONSTRAINT IF EXISTS chatgpt_accounts_group_id_fkey;
+ALTER TABLE wallets DROP CONSTRAINT IF EXISTS wallets_user_id_fkey;
+ALTER TABLE topup_orders DROP CONSTRAINT IF EXISTS topup_orders_user_id_fkey;
+ALTER TABLE wallet_ledger DROP CONSTRAINT IF EXISTS wallet_ledger_user_id_fkey;
+ALTER TABLE account_renewals DROP CONSTRAINT IF EXISTS account_renewals_user_id_fkey;
+ALTER TABLE renewal_date_audit DROP CONSTRAINT IF EXISTS renewal_date_audit_admin_id_fkey;
+ALTER TABLE addresses DROP CONSTRAINT IF EXISTS addresses_user_id_fkey;
+ALTER TABLE bank_cards DROP CONSTRAINT IF EXISTS bank_cards_user_id_fkey;
+ALTER TABLE bank_card_ledger DROP CONSTRAINT IF EXISTS bank_card_ledger_card_id_fkey;
+DROP TRIGGER IF EXISTS users_prevent_hard_delete ON users;
+DROP TRIGGER IF EXISTS account_groups_prevent_hard_delete ON account_groups;
+DROP TRIGGER IF EXISTS chatgpt_accounts_prevent_hard_delete ON chatgpt_accounts;
+DROP TRIGGER IF EXISTS email_codes_prevent_hard_delete ON email_codes;
+DROP TRIGGER IF EXISTS wallets_prevent_hard_delete ON wallets;
+DROP TRIGGER IF EXISTS topup_orders_prevent_hard_delete ON topup_orders;
+DROP TRIGGER IF EXISTS wallet_ledger_prevent_hard_delete ON wallet_ledger;
+DROP TRIGGER IF EXISTS account_renewals_prevent_hard_delete ON account_renewals;
+DROP TRIGGER IF EXISTS renewal_date_audit_prevent_hard_delete ON renewal_date_audit;
+DROP TRIGGER IF EXISTS addresses_prevent_hard_delete ON addresses;
+DROP TRIGGER IF EXISTS bank_cards_prevent_hard_delete ON bank_cards;
+DROP TRIGGER IF EXISTS bank_card_ledger_prevent_hard_delete ON bank_card_ledger;
+DROP FUNCTION IF EXISTS aitok_prevent_hard_delete();
+
+
+-- 来源：015_recharge_operations.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT[];
+ALTER TABLE email_codes ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS verified_plan TEXT NOT NULL DEFAULT '';
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS subscription_ends_at DATE;
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS renewal_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE bank_cards ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','invalid'));
+ALTER TABLE bank_cards ADD COLUMN IF NOT EXISTS daily_limit_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (daily_limit_usd_minor>=0);
+ALTER TABLE bank_cards ADD COLUMN IF NOT EXISTS low_balance_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (low_balance_usd_minor>=0);
+ALTER TABLE bank_cards ADD COLUMN IF NOT EXISTS reserved_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (reserved_usd_minor>=0);
+ALTER TABLE topup_orders ADD COLUMN IF NOT EXISTS payment_intent TEXT NOT NULL DEFAULT '';
+ALTER TABLE topup_orders ADD COLUMN IF NOT EXISTS refunded_minor BIGINT NOT NULL DEFAULT 0 CHECK (refunded_minor>=0);
+ALTER TABLE topup_orders ADD COLUMN IF NOT EXISTS reversed_tokens BIGINT NOT NULL DEFAULT 0 CHECK (reversed_tokens>=0);
+ALTER TABLE topup_orders ADD COLUMN IF NOT EXISTS dispute_status TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS recharge_packages (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
+  plan TEXT NOT NULL CHECK (plan IN ('plus','pro_5x','pro_20x')),
+  region TEXT NOT NULL CHECK (length(region) BETWEEN 2 AND 80),
+  currency TEXT NOT NULL CHECK (currency ~ '^[A-Z]{3}$'),
+  original_amount_minor BIGINT NOT NULL CHECK (original_amount_minor>0),
+  sale_usd_minor BIGINT NOT NULL CHECK (sale_usd_minor>0),
+  wallet_tokens BIGINT NOT NULL DEFAULT 0 CHECK (wallet_tokens>=0),
+  months INTEGER NOT NULL CHECK (months BETWEEN 1 AND 36),
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+COMMENT ON TABLE recharge_packages IS '充值套餐：保存地区、原币价格、USD 售价、周期及可选钱包代币价格；订单保存购买时快照。';
+
+CREATE TABLE IF NOT EXISTS recharge_orders (
+  id BIGSERIAL PRIMARY KEY,
+  order_no TEXT NOT NULL UNIQUE,
+  user_id BIGINT NOT NULL,
+  account_id BIGINT NOT NULL,
+  account_email TEXT NOT NULL,
+  package_id BIGINT NOT NULL,
+  package_snapshot JSONB NOT NULL,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL CHECK (period_end>period_start),
+  sale_usd_minor BIGINT NOT NULL CHECK (sale_usd_minor>0),
+  wallet_tokens BIGINT NOT NULL DEFAULT 0,
+  payment_method TEXT NOT NULL DEFAULT '',
+  payment_status TEXT NOT NULL DEFAULT 'unpaid' CHECK (payment_status IN ('unpaid','paid','partial_refund','refunded')),
+  fulfillment_status TEXT NOT NULL DEFAULT 'pending' CHECK (fulfillment_status IN ('pending','processing','verifying','completed','failed','cancelled')),
+  payment_reference TEXT NOT NULL DEFAULT '',
+  purchase_reference TEXT NOT NULL DEFAULT '',
+  card_id BIGINT,
+  cost_usd_minor BIGINT NOT NULL DEFAULT 0,
+  refunded_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (refunded_usd_minor>=0 AND refunded_usd_minor<=sale_usd_minor),
+  refunded_tokens BIGINT NOT NULL DEFAULT 0,
+  assignee_id BIGINT,
+  evidence TEXT NOT NULL DEFAULT '',
+  failure_reason TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  request_key TEXT NOT NULL,
+  version BIGINT NOT NULL DEFAULT 0,
+  verified_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE(user_id,request_key)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_payment_reference_unique ON recharge_orders(payment_reference) WHERE payment_reference<>'';
+CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_purchase_reference_unique ON recharge_orders(purchase_reference) WHERE purchase_reference<>'';
+CREATE INDEX IF NOT EXISTS recharge_orders_owner_idx ON recharge_orders(user_id,id DESC);
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：客户收款、官网扣款与开通核验分别记录，按账号邮箱及周期防重，金额为 USD 美分。';
+
+CREATE TABLE IF NOT EXISTS operation_events (
+  id BIGSERIAL PRIMARY KEY,
+  actor_id BIGINT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id BIGINT NOT NULL,
+  action TEXT NOT NULL,
+  request_key TEXT NOT NULL,
+  before_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  after_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE(entity_type,entity_id,request_key)
+);
+CREATE INDEX IF NOT EXISTS operation_events_history_idx ON operation_events(entity_type,entity_id,id DESC);
+COMMENT ON TABLE operation_events IS '操作审计：记录操作者、操作及非敏感前后快照，同时保存订单操作幂等结果，不记录卡号、密码和 Session。';
+
+CREATE TABLE IF NOT EXISTS auth_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 0,
+  window_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+COMMENT ON TABLE auth_limits IS '认证限流：按不可逆摘要保存邮箱或来源的窗口计数，多进程共享，不保存明文凭据。';
+
+ALTER TABLE bank_card_ledger ADD COLUMN IF NOT EXISTS order_id BIGINT;
+ALTER TABLE bank_card_ledger ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
+ALTER TABLE bank_card_ledger ADD COLUMN IF NOT EXISTS reference_id BIGINT;
+ALTER TABLE bank_card_ledger ADD COLUMN IF NOT EXISTS external_reference TEXT NOT NULL DEFAULT '';
+ALTER TABLE bank_card_ledger ADD COLUMN IF NOT EXISTS period_start DATE;
+ALTER TABLE bank_card_ledger ADD COLUMN IF NOT EXISTS period_end DATE;
+ALTER TABLE bank_card_ledger ADD COLUMN IF NOT EXISTS currency TEXT NOT NULL DEFAULT 'USD';
+ALTER TABLE bank_card_ledger ADD COLUMN IF NOT EXISTS original_amount_minor BIGINT;
+ALTER TABLE bank_card_ledger DROP CONSTRAINT IF EXISTS bank_card_ledger_notes_check;
+ALTER TABLE bank_card_ledger ADD CONSTRAINT bank_card_ledger_notes_check CHECK (length(notes)<=4000);
+ALTER TABLE bank_card_ledger DROP CONSTRAINT IF EXISTS bank_card_ledger_kind_check;
+ALTER TABLE bank_card_ledger DROP CONSTRAINT IF EXISTS bank_card_ledger_check;
+ALTER TABLE bank_card_ledger ADD CONSTRAINT bank_card_ledger_kind_check CHECK (kind IN ('opening','deposit','subscription','refund','reversal','fee','adjustment'));
+ALTER TABLE bank_card_ledger DROP CONSTRAINT IF EXISTS bank_card_ledger_sign_check;
+ALTER TABLE bank_card_ledger ADD CONSTRAINT bank_card_ledger_sign_check CHECK ((kind IN ('opening','deposit','refund') AND amount_usd_minor>0) OR (kind IN ('subscription','fee') AND amount_usd_minor<0) OR kind IN ('reversal','adjustment'));
+DROP INDEX IF EXISTS bank_card_ledger_subscription_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_legacy_subscription_idx ON bank_card_ledger(account_id) WHERE kind='subscription' AND order_id IS NULL AND period_start IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_order_unique ON bank_card_ledger(order_id) WHERE kind='subscription' AND order_id IS NOT NULL AND reversed_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_reference_unique ON bank_card_ledger(external_reference) WHERE external_reference<>'';
+CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_reversal_unique ON bank_card_ledger(reference_id) WHERE kind='reversal';
+
+CREATE TABLE IF NOT EXISTS card_holds (
+  id BIGSERIAL PRIMARY KEY,
+  card_id BIGINT NOT NULL,
+  amount_usd_minor BIGINT NOT NULL CHECK (amount_usd_minor>0),
+  reference TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'held' CHECK (status IN ('held','released','settled')),
+  actor_id BIGINT NOT NULL,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE(card_id,reference)
+);
+COMMENT ON TABLE card_holds IS '卡片预授权：记录冻结、释放和结算；冻结占用可用余额，不计为已结算消费。';
+
+CREATE TABLE IF NOT EXISTS card_statement_rows (
+  id BIGSERIAL PRIMARY KEY,
+  card_id BIGINT NOT NULL,
+  external_reference TEXT NOT NULL,
+  amount_usd_minor BIGINT NOT NULL CHECK (amount_usd_minor<>0),
+  occurred_at TIMESTAMPTZ NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  resolution TEXT NOT NULL DEFAULT '',
+  actor_id BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE(card_id,external_reference)
+);
+COMMENT ON TABLE card_statement_rows IS '卡平台实际账单：按交易号去重导入，与系统流水逐笔比较；差异处理保留审计。';
+
+CREATE TABLE IF NOT EXISTS proxy_activity (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  device_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  data JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE(user_id,device_id,event_id)
+);
+COMMENT ON TABLE proxy_activity IS '本机代理操作同步：按用户设备去重保存使用事件，不上传代理密码或浏览器 Session。';
+
+CREATE TABLE IF NOT EXISTS payment_exceptions (
+  id BIGSERIAL PRIMARY KEY,
+  event_id TEXT NOT NULL UNIQUE,
+  order_no TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  amount_minor BIGINT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+COMMENT ON TABLE payment_exceptions IS '支付异常：记录 Stripe 退款、拒付与钱包余额不足待处理事项，保留事件幂等及处理状态。';
+
+COMMENT ON TABLE bank_card_ledger IS '银行卡 USD 资金流水：初始余额、存入、周期购买、退款、冲正及费用，记录实际原币价格和历史交易号，冲正不覆盖原流水。';
+COMMENT ON TABLE bank_cards IS '银行卡：加密卡号、平台、备注、USD 美分余额、冻结金额、可用状态和限额；不保存安全码。';
+COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、上次登录、人工续订日期及有订单凭据的订阅核验状态。';
+
+-- 来源：016_package_exchange_rates.sql
+-- 增量扩展；回退应用时保留新增结构，不自动删除汇率历史。
+SET LOCAL lock_timeout = '5s';
+
+ALTER TABLE recharge_packages ADD COLUMN IF NOT EXISTS auto_usd BOOLEAN NOT NULL DEFAULT FALSE;
+COMMENT ON TABLE recharge_packages IS '充值套餐：保存地区、原币价格、USD 售价、周期及可选钱包代币价格；auto_usd 套餐按最新 PHP/USD 汇率计算，订单保存购买时价格及汇率快照。';
+
+CREATE TABLE IF NOT EXISTS exchange_rates (
+    id BIGSERIAL PRIMARY KEY,
+    base_currency TEXT NOT NULL CHECK (base_currency = 'PHP'),
+    quote_currency TEXT NOT NULL CHECK (quote_currency = 'USD'),
+    rate NUMERIC(20,12) NOT NULL CHECK (rate >= 0.001 AND rate <= 0.1),
+    source TEXT NOT NULL,
+    effective_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS exchange_rates_latest_idx ON exchange_rates(base_currency,quote_currency,created_at DESC,id DESC) WHERE deleted_at IS NULL;
+COMMENT ON TABLE exchange_rates IS '每日汇率同步历史：rate 表示 1 PHP 折合 USD，保存来源、数据生效时间及同步时间；只追加，供套餐实时折算和订单快照追溯。';
+
+-- 来源：017_exchange_rates_cny.sql
+-- 扩展汇率币种；保留所有历史数据，不自动回退已支持的币种。
+SET LOCAL lock_timeout = '5s';
+ALTER TABLE exchange_rates DROP CONSTRAINT IF EXISTS exchange_rates_quote_currency_check;
+ALTER TABLE exchange_rates ADD CONSTRAINT exchange_rates_quote_currency_check CHECK (quote_currency IN ('USD','CNY'));
+ALTER TABLE exchange_rates DROP CONSTRAINT IF EXISTS exchange_rates_rate_check;
+ALTER TABLE exchange_rates ADD CONSTRAINT exchange_rates_rate_check CHECK (
+    (quote_currency='USD' AND rate >= 0.001 AND rate <= 0.1)
+    OR (quote_currency='CNY' AND rate >= 0.01 AND rate <= 1)
+);
+COMMENT ON TABLE exchange_rates IS '每日汇率同步历史：rate 表示 1 PHP 折合 quote_currency（USD 或 CNY）的金额；同批币种在一个事务内写入并共享生效与同步时间，保留来源及软删除历史，供套餐折算与订单快照追溯。';
+
+-- 来源：018_admin_two_factor.sql
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_ciphertext TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_ciphertext TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_expires_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT NOT NULL DEFAULT -1;
+COMMENT ON TABLE users IS '系统用户与角色；管理员验证器密钥加密保存，待绑定密钥限时确认，TOTP 时间步防重放；空角色按普通用户处理';
+
+-- 来源：019_order_lifecycle.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+ALTER TABLE recharge_orders ADD COLUMN IF NOT EXISTS order_status TEXT NOT NULL DEFAULT 'active'
+  CHECK (order_status IN ('active','refunded','discarded'));
+
+DROP INDEX IF EXISTS recharge_orders_cycle_unique;
+CREATE UNIQUE INDEX recharge_orders_cycle_unique ON recharge_orders(user_id,account_email,period_start,period_end)
+  WHERE order_status='active' AND payment_status<>'refunded' AND fulfillment_status<>'cancelled';
+
+-- 关联订单的扣款由订单唯一索引及应用层周期锁防重；结束订单允许新的订单重新记账。
+DROP INDEX IF EXISTS bank_card_ledger_cycle_unique;
+CREATE UNIQUE INDEX bank_card_ledger_cycle_unique ON bank_card_ledger(account_email,period_start,period_end)
+  WHERE kind='subscription' AND order_id IS NULL AND period_start IS NOT NULL AND reversed_at IS NULL;
+
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存下单 SKU 价格及汇率快照；正常、已退款、已废弃状态独立于资金记录，结束订单释放周期且禁止继续操作；金额为 USD 美分。';
+
+-- 来源：020_order_lifecycle_backfill.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 仅归类历史订单状态，保留订单号、金额、余额、流水及原操作记录；重复执行不改已结束订单。
+UPDATE recharge_orders o
+SET order_status=CASE
+    WHEN payment_status='refunded' OR EXISTS (
+      SELECT 1 FROM operation_events e WHERE e.entity_type='order' AND e.entity_id=o.id
+        AND e.action='refund_note' AND e.deleted_at IS NULL
+    ) THEN 'refunded'
+    ELSE 'discarded' END,
+    version=version+1, updated_at=NOW()
+WHERE o.order_status='active' AND o.deleted_at IS NULL AND (
+  payment_status='refunded' OR fulfillment_status='cancelled' OR EXISTS (
+    SELECT 1 FROM operation_events e WHERE e.entity_type='order' AND e.entity_id=o.id
+      AND e.action='refund_note' AND e.deleted_at IS NULL
+  )
+);
+
+-- 来源：021_order_receipts.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 历史收款币种及金额不可推算，保持未记录；新线下收款由应用一次写入快照。
+ALTER TABLE recharge_orders
+  ADD COLUMN IF NOT EXISTS received_currency TEXT NOT NULL DEFAULT '' CHECK (received_currency IN ('','CNY','USD')),
+  ADD COLUMN IF NOT EXISTS received_amount_minor BIGINT NOT NULL DEFAULT 0 CHECK (received_amount_minor>=0),
+  ADD COLUMN IF NOT EXISTS received_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (received_usd_minor>=0),
+  ADD COLUMN IF NOT EXISTS received_exchange_rate JSONB,
+  ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
+ALTER TABLE recharge_orders DROP CONSTRAINT IF EXISTS recharge_orders_receipt_complete;
+ALTER TABLE recharge_orders ADD CONSTRAINT recharge_orders_receipt_complete CHECK (
+  (received_currency='' AND received_amount_minor=0 AND received_usd_minor=0 AND received_exchange_rate IS NULL AND received_at IS NULL)
+  OR (received_currency IN ('CNY','USD') AND received_amount_minor>0 AND received_usd_minor>0 AND received_exchange_rate IS NOT NULL AND jsonb_typeof(received_exchange_rate)='object' AND received_at IS NOT NULL)
+);
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存下单 SKU 和汇率快照、CNY/USD 实收及收款汇率快照；毛利按实收减成本计算，历史未知实收不推算；退款或废弃释放周期且禁止继续操作，金额均为对应币种的分。';
+
+-- 来源：022_order_source.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 来源随订单保存；已有记录保持未填写，不推算或回填业务来源。
+ALTER TABLE recharge_orders
+  ADD COLUMN IF NOT EXISTS order_source TEXT NOT NULL DEFAULT '' CHECK (char_length(order_source)<=80);
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存订单来源、下单 SKU 和汇率快照、CNY/USD 实收及收款汇率快照；来源可自定义并从未删除订单汇总为下拉选项；毛利按实收减成本计算，历史未知实收不推算；退款或废弃释放周期且禁止继续操作，金额均为对应币种的分。';
+
+-- 来源：023_bank_card_wallet_address.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 钱包地址用于管理员转账时查看和复制，不自动发起任何资金操作。
+ALTER TABLE bank_cards
+  ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT '' CHECK (char_length(wallet_address)<=200);
+COMMENT ON TABLE bank_cards IS '银行卡：加密卡号、平台、备注、转账用钱包地址、USD 美分余额、冻结金额、可用状态和限额；钱包地址仅用于展示和复制，不自动转账；不保存安全码。';
+
+-- 来源：024_bank_card_cvc_wallet_qr.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 旧卡默认未填写；旧钱包地址保留，不将文本猜测转换成二维码。
+ALTER TABLE bank_cards
+  ADD COLUMN IF NOT EXISTS cvc_ciphertext TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS wallet_qr_image TEXT NOT NULL DEFAULT '' CHECK (octet_length(wallet_qr_image)<=2800000);
+COMMENT ON TABLE bank_cards IS '银行卡：加密卡号及安全码、平台、备注、钱包地址二维码截图、历史钱包地址、USD 美分余额、冻结金额、状态和限额；图片仅供人工转账使用，不自动付款。';
+
+-- 来源：025_table_ids.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 为所有存量行（含软删除历史）自动分配 ID；重放时保留已有 ID 和序列。
+-- 原业务主键改为全量唯一索引，保留业务防重及 ON CONFLICT 的行为。
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS wallets_user_id_key ON wallets(user_id);
+ALTER TABLE wallets DROP CONSTRAINT IF EXISTS wallets_pkey;
+ALTER TABLE wallets ADD CONSTRAINT wallets_pkey PRIMARY KEY(id);
+
+ALTER TABLE topup_orders ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS topup_orders_order_no_key ON topup_orders(order_no);
+ALTER TABLE topup_orders DROP CONSTRAINT IF EXISTS topup_orders_pkey;
+ALTER TABLE topup_orders ADD CONSTRAINT topup_orders_pkey PRIMARY KEY(id);
+
+ALTER TABLE account_renewals ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS account_renewals_user_id_request_key_key ON account_renewals(user_id,request_key);
+ALTER TABLE account_renewals DROP CONSTRAINT IF EXISTS account_renewals_pkey;
+ALTER TABLE account_renewals ADD CONSTRAINT account_renewals_pkey PRIMARY KEY(id);
+
+ALTER TABLE auth_limits ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS auth_limits_key_key ON auth_limits(key);
+ALTER TABLE auth_limits DROP CONSTRAINT IF EXISTS auth_limits_pkey;
+ALTER TABLE auth_limits ADD CONSTRAINT auth_limits_pkey PRIMARY KEY(id);
+
+
+
+-- 提交前检查：不符合时触发临时表 CHECK 约束，整个事务不能提交。
+INSERT INTO pg_temp.aitok_upgrade_guard(phase, passed)
+WITH upgrade_check(database_name,schema_name,table_name,status,missing,invalid,triggers,invalid_id) AS (
+-- 只读核对所有业务表、字段、独立自增 ID 主键、时间定义及禁用数据库特性。
+WITH required(table_name,column_names) AS (VALUES
+('users',ARRAY['id','email','password_hash','role','session_version','disabled','permissions','totp_ciphertext','totp_pending_ciphertext','totp_pending_expires_at','totp_enabled_at','totp_last_step','created_at','updated_at','deleted_at']),
+('account_groups',ARRAY['id','user_id','name','created_at','updated_at','deleted_at']),
+('chatgpt_accounts',ARRAY['id','user_id','label','email','api_key','session_ciphertext','renewal_date','group_id','last_login_at','verified_plan','verified_at','subscription_ends_at','renewal_enabled','created_at','updated_at','deleted_at']),
+('email_codes',ARRAY['id','email','purpose','code','expires_at','attempts','created_at','updated_at','deleted_at']),
+('wallets',ARRAY['id','user_id','balance','created_at','updated_at','deleted_at']),
+('topup_orders',ARRAY['id','order_no','user_id','request_key','amount_minor','tokens','currency','status','session_id','checkout_url','quantity','unit_amount_minor','price_id','payment_intent','refunded_minor','reversed_tokens','dispute_status','created_at','updated_at','deleted_at']),
+('wallet_ledger',ARRAY['id','user_id','amount','balance_after','kind','reference','description','created_at','updated_at','deleted_at']),
+('account_renewals',ARRAY['id','user_id','request_key','account_id','tokens','renewal_date','account_label','months','created_at','updated_at','deleted_at']),
+('renewal_date_audit',ARRAY['id','account_id','admin_id','previous_date','renewal_date','created_at','updated_at','deleted_at']),
+('addresses',ARRAY['id','address_line1','address_line2','city','state','postal_code','country','source_url','source_key','user_id','full_name','source_data','created_at','updated_at','deleted_at']),
+('bank_cards',ARRAY['id','user_id','label','cardholder','number_ciphertext','number_fingerprint','last4','brand','exp_month','exp_year','platform','notes','balance_usd_minor','status','daily_limit_usd_minor','low_balance_usd_minor','reserved_usd_minor','wallet_address','cvc_ciphertext','wallet_qr_image','created_at','updated_at','deleted_at']),
+('bank_card_ledger',ARRAY['id','card_id','actor_id','request_key','kind','amount_usd_minor','balance_after_usd_minor','account_id','account_label','account_email','original_php_minor','notes','order_id','reversed_at','reference_id','external_reference','period_start','period_end','currency','original_amount_minor','created_at','updated_at','deleted_at']),
+('recharge_packages',ARRAY['auto_usd','id','name','plan','region','currency','original_amount_minor','sale_usd_minor','wallet_tokens','months','enabled','notes','created_at','updated_at','deleted_at']),
+('recharge_orders',ARRAY['id','order_no','user_id','account_id','account_email','package_id','package_snapshot','period_start','period_end','sale_usd_minor','wallet_tokens','order_status','payment_method','payment_status','fulfillment_status','payment_reference','purchase_reference','card_id','cost_usd_minor','refunded_usd_minor','refunded_tokens','assignee_id','evidence','failure_reason','notes','request_key','version','verified_at','received_currency','received_amount_minor','received_usd_minor','received_exchange_rate','received_at','order_source','created_at','updated_at','deleted_at']),
+('operation_events',ARRAY['id','actor_id','entity_type','entity_id','action','request_key','before_data','after_data','created_at','updated_at','deleted_at']),
+('auth_limits',ARRAY['id','key','count','window_start','created_at','updated_at','deleted_at']),
+('card_holds',ARRAY['id','card_id','amount_usd_minor','reference','status','actor_id','notes','created_at','updated_at','deleted_at']),
+('card_statement_rows',ARRAY['id','card_id','external_reference','amount_usd_minor','occurred_at','description','resolution','actor_id','created_at','updated_at','deleted_at']),
+('proxy_activity',ARRAY['id','user_id','device_id','event_id','data','created_at','updated_at','deleted_at']),
+('exchange_rates',ARRAY['id','base_currency','quote_currency','rate','source','effective_at','created_at','updated_at','deleted_at']),
+('payment_exceptions',ARRAY['id','event_id','order_no','kind','amount_minor','status','detail','created_at','updated_at','deleted_at'])
+), checked AS (
+SELECT table_name,
+ ARRAY(SELECT name FROM unnest(column_names) name WHERE NOT EXISTS(SELECT 1 FROM information_schema.columns c WHERE c.table_schema=current_schema() AND c.table_name=r.table_name AND c.column_name=name)) missing,
+ ARRAY(SELECT c.column_name FROM information_schema.columns c WHERE c.table_schema=current_schema() AND c.table_name=r.table_name AND c.column_name IN ('created_at','updated_at','deleted_at') AND (c.data_type<>'timestamp with time zone' OR (c.column_name<>'deleted_at' AND (c.is_nullable<>'NO' OR c.column_default IS NULL)) OR (c.column_name='deleted_at' AND c.is_nullable<>'YES'))) invalid,
+ ARRAY(SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name AND NOT t.tgisinternal) triggers,
+ EXISTS(SELECT 1 FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name AND k.contype='f') has_fk,
+ NOT EXISTS(
+   SELECT 1 FROM pg_class c
+   JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='id' AND NOT a.attisdropped
+   JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
+   JOIN pg_constraint k ON k.conrelid=c.oid AND k.contype='p' AND k.conkey=ARRAY[a.attnum]
+   WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name
+     AND a.atttypid='bigint'::regtype AND a.attnotnull
+     AND pg_get_serial_sequence(format('%I.%I',current_schema(),r.table_name),'id') IS NOT NULL
+     AND pg_get_expr(d.adbin,d.adrelid) LIKE 'nextval(%'
+ ) invalid_id,
+ (r.table_name='exchange_rates' AND (SELECT count(*) FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name AND k.conname IN ('exchange_rates_quote_currency_check','exchange_rates_rate_check') AND pg_get_constraintdef(k.oid) LIKE '%CNY%')<>2) invalid_fx_constraints
+FROM required r
+)
+SELECT current_database(),current_schema(),table_name,CASE WHEN cardinality(missing)+cardinality(invalid)+cardinality(triggers)>0 OR has_fk OR invalid_fx_constraints OR invalid_id THEN 'INVALID' ELSE 'OK' END,missing,invalid,triggers,invalid_id FROM checked ORDER BY table_name
+)
+SELECT 'final_schema', count(*)=21 AND bool_and(status='OK')
+FROM upgrade_check;
+
+-- 仅移除本脚本创建的会话临时校验表；所有业务表和业务行保留。
+DROP TABLE pg_temp.aitok_upgrade_guard;
+COMMIT;

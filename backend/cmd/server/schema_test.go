@@ -79,6 +79,7 @@ func TestSchemaSnapshotMatchesMigrations(t *testing.T) {
 	}
 	snapshot := read("../../migrations/schema.sql")
 	release := read("../../migrations/release.sql")
+	legacyUpgrade := strings.ReplaceAll(read("../../migrations/upgrade-from-002.sql"), "SET LOCAL search_path TO public, pg_catalog;", "SET LOCAL search_path TO pg_temp;")
 	generated, err := exec.Command("bash", "../../../scripts/build-release-sql.sh").Output()
 	if err != nil {
 		t.Fatal(err)
@@ -192,6 +193,8 @@ INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,
 		name    string
 		scripts []string
 	}{
+		{"截图旧版八表增量升级", []string{read(files[0]), read(files[1]), read(files[2]), legacyUpgrade}},
+		{"截图旧版八表增量重复升级", []string{read(files[0]), read(files[1]), read(files[2]), legacyUpgrade, legacyUpgrade}},
 		{"退款废弃后同周期重建并重复升级", []string{snapshot, closedOrders, release, release}},
 		{"人民币汇率历史后重复升级", []string{snapshot, `INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at) VALUES('PHP','USD',0.01589,'test',NOW()),('PHP','CNY',0.1067,'test',NOW());`, release, release}},
 		{"多周期与冲正历史后重复升级", []string{snapshot, multiCycleHistory, release, release}},
