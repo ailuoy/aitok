@@ -24,6 +24,10 @@ type BankCard struct {
 	ID              int64      `json:"id"`
 	Label           string     `json:"label"`
 	Platform        string     `json:"platform"`
+	WalletAddress   string     `json:"wallet_address"`
+	WalletQR        string     `json:"wallet_qr_image"`
+	CVC             string     `json:"cvc,omitempty"`
+	HasCVC          bool       `json:"has_cvc"`
 	Notes           string     `json:"notes"`
 	Cardholder      string     `json:"cardholder"`
 	Number          string     `json:"number,omitempty"`
@@ -38,7 +42,8 @@ func (c *BankCard) normalize() bool {
 	c.Label = strings.Join(strings.Fields(c.Label), " ")
 	c.Platform = strings.Join(strings.Fields(c.Platform), " ")
 	c.Notes = strings.TrimSpace(c.Notes)
-	if utf8.RuneCountInString(c.Platform) > 80 || utf8.RuneCountInString(c.Notes) > 1000 {
+	c.WalletAddress = strings.TrimSpace(c.WalletAddress)
+	if utf8.RuneCountInString(c.Platform) > 80 || utf8.RuneCountInString(c.Notes) > 1000 || utf8.RuneCountInString(c.WalletAddress) > 200 {
 		return false
 	}
 	c.Cardholder = strings.Join(strings.Fields(c.Cardholder), " ")
@@ -81,11 +86,14 @@ func (c *BankCard) normalize() bool {
 	return true
 }
 
-const bankCardColumns = `id,label,cardholder,last4,brand,exp_month,exp_year,platform,notes,balance_usd_minor,status,reserved_usd_minor,daily_limit_usd_minor,low_balance_usd_minor,deleted_at`
+const bankCardColumns = `id,label,cardholder,last4,brand,exp_month,exp_year,platform,notes,wallet_address,balance_usd_minor,status,reserved_usd_minor,daily_limit_usd_minor,low_balance_usd_minor,deleted_at,wallet_qr_image,(cvc_ciphertext<>'') AS has_cvc`
 
+func (c *BankCard) scanDest(extra ...any) []any {
+	return append([]any{&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.WalletAddress, &c.BalanceUSDMinor, &c.Status, &c.Reserved, &c.DailyLimit, &c.LowBalance, &c.DeletedAt, &c.WalletQR, &c.HasCVC}, extra...)
+}
 func scanBankCard(row interface{ Scan(...any) error }) (BankCard, error) {
 	var c BankCard
-	err := row.Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.BalanceUSDMinor, &c.Status, &c.Reserved, &c.DailyLimit, &c.LowBalance, &c.DeletedAt)
+	err := row.Scan(c.scanDest()...)
 	return c, err
 }
 func cardError(w http.ResponseWriter, err error) {
@@ -107,10 +115,13 @@ func cardError(w http.ResponseWriter, err error) {
 
 func (s *Server) readCard(r *http.Request, user, id int64, admin bool) (BankCard, error) {
 	var c BankCard
-	var encrypted string
-	err := s.db.QueryRowContext(r.Context(), `SELECT `+bankCardColumns+`,number_ciphertext FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND id=$2`, user, id, admin).Scan(&c.ID, &c.Label, &c.Cardholder, &c.Last4, &c.Brand, &c.ExpMonth, &c.ExpYear, &c.Platform, &c.Notes, &c.BalanceUSDMinor, &c.Status, &c.Reserved, &c.DailyLimit, &c.LowBalance, &c.DeletedAt, &encrypted)
+	var encrypted, encryptedCVC string
+	err := s.db.QueryRowContext(r.Context(), `SELECT `+bankCardColumns+`,number_ciphertext,cvc_ciphertext FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND id=$2`, user, id, admin).Scan(c.scanDest(&encrypted, &encryptedCVC)...)
 	if err == nil {
 		c.Number, err = decryptSession(encrypted)
+	}
+	if err == nil && encryptedCVC != "" {
+		c.CVC, err = decryptSession(encryptedCVC)
 	}
 	return c, err
 }
@@ -151,7 +162,7 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "搜索或页码无效"}, 400)
 			return
 		}
-		filter := ` WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND strpos(lower(concat_ws(' ',label,cardholder,last4,brand,platform,notes)),lower($2))>0`
+		filter := ` WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND strpos(lower(concat_ws(' ',label,cardholder,last4,brand,platform,notes,wallet_address)),lower($2))>0`
 		if r.URL.Query().Get("archived") == "1" {
 			filter = strings.Replace(filter, "deleted_at IS NULL", "deleted_at IS NOT NULL", 1)
 		}
@@ -160,7 +171,12 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			cardError(w, err)
 			return
 		}
-		rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $4`, user, query, admin, (page-1)*size, size)
+		includeNumbers := r.URL.Query().Get("include_numbers") == "1" && r.URL.Query().Get("archived") != "1" && s.permitted(r.Context(), user, "card_numbers")
+		columns := bankCardColumns
+		if includeNumbers {
+			columns += ",number_ciphertext"
+		}
+		rows, err := s.db.QueryContext(r.Context(), `SELECT `+columns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $4`, user, query, admin, (page-1)*size, size)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -168,7 +184,16 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		cards := []BankCard{}
 		for rows.Next() {
-			c, err := scanBankCard(rows)
+			var c BankCard
+			var encrypted string
+			dest := c.scanDest()
+			if includeNumbers {
+				dest = c.scanDest(&encrypted)
+			}
+			err := rows.Scan(dest...)
+			if err == nil && includeNumbers {
+				c.Number, err = decryptSession(encrypted)
+			}
 			if err != nil {
 				cardError(w, err)
 				return
@@ -213,11 +238,53 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if (r.Method == "POST" && id == 0) || (r.Method == "PATCH" && id > 0) {
-		r.Body = http.MaxBytesReader(w, r.Body, 16384)
-		var c BankCard
-		if jsonBody(r, &c) != nil || !c.normalize() {
-			reply(w, map[string]string{"error": "请填写名称、持卡人、有效卡号及未过期的有效期；卡平台最多 80 字，备注最多 1000 字"}, 400)
+		r.Body = http.MaxBytesReader(w, r.Body, 3<<20)
+		var in struct {
+			BankCard
+			CVC           *string `json:"cvc"`
+			WalletQR      *string `json:"wallet_qr_image"`
+			WalletAddress *string `json:"wallet_address"`
+		}
+		if jsonBody(r, &in) != nil {
+			reply(w, map[string]string{"error": "银行卡数据格式无效或图片超过限制"}, 400)
 			return
+		}
+		c := in.BankCard
+		if in.WalletAddress != nil {
+			c.WalletAddress = *in.WalletAddress
+		}
+		if !c.normalize() {
+			reply(w, map[string]string{"error": "请填写名称、持卡人、有效卡号及未过期的有效期；卡平台最多 80 字，备注最多 1000 字，钱包地址最多 200 字"}, 400)
+			return
+		}
+		var encryptedCVC, walletQR, walletAddress any
+		if in.WalletAddress != nil {
+			walletAddress = c.WalletAddress
+		}
+		if in.CVC != nil {
+			value := strings.TrimSpace(*in.CVC)
+			if value != "" && !validCardCVC(value) {
+				reply(w, map[string]string{"error": "CVC 安全码须为 3 或 4 位数字"}, 400)
+				return
+			}
+			encryptedCVC = ""
+			if value != "" {
+				secret, e := encryptSession(value)
+				if e != nil {
+					reply(w, map[string]string{"error": "银行卡加密未配置"}, 503)
+					return
+				}
+				encryptedCVC = secret
+			}
+		}
+		if in.WalletQR != nil {
+			if *in.WalletQR != "" {
+				if e := validateImageDataURL(*in.WalletQR); e != nil {
+					reply(w, map[string]string{"error": e.Error()}, 400)
+					return
+				}
+			}
+			walletQR = *in.WalletQR
 		}
 		encrypted, err := encryptSession(c.Number)
 		if err != nil {
@@ -240,11 +307,11 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		mac := hmac.New(sha256.New, s.secret)
 		mac.Write([]byte("bank-card:" + strconv.FormatInt(owner, 10) + ":" + c.Number))
 		fingerprint := hex.EncodeToString(mac.Sum(nil))
-		args := []any{c.Label, c.Cardholder, encrypted, fingerprint, c.Last4, c.Brand, c.ExpMonth, c.ExpYear, owner, c.Platform, c.Notes}
-		query := `INSERT INTO bank_cards(label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,user_id,platform,notes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING ` + bankCardColumns
+		args := []any{c.Label, c.Cardholder, encrypted, fingerprint, c.Last4, c.Brand, c.ExpMonth, c.ExpYear, owner, c.Platform, c.Notes, walletAddress, encryptedCVC, walletQR}
+		query := `INSERT INTO bank_cards(label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,user_id,platform,notes,wallet_address,cvc_ciphertext,wallet_qr_image) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12,''),COALESCE($13,''),COALESCE($14,'')) RETURNING ` + bankCardColumns
 		status := 201
 		if id > 0 {
-			query = `UPDATE bank_cards SET label=$1,cardholder=$2,number_ciphertext=$3,number_fingerprint=$4,last4=$5,brand=$6,exp_month=$7,exp_year=$8,platform=$10,notes=$11,updated_at=NOW() WHERE deleted_at IS NULL AND user_id=$9 AND id=$12 AND (number_fingerprint=$4 OR NOT EXISTS(SELECT 1 FROM bank_card_ledger WHERE card_id=$12)) RETURNING ` + bankCardColumns
+			query = `UPDATE bank_cards SET label=$1,cardholder=$2,number_ciphertext=$3,number_fingerprint=$4,last4=$5,brand=$6,exp_month=$7,exp_year=$8,platform=$10,notes=$11,wallet_address=COALESCE($12,wallet_address),cvc_ciphertext=COALESCE($13,cvc_ciphertext),wallet_qr_image=COALESCE($14,wallet_qr_image),updated_at=NOW() WHERE deleted_at IS NULL AND user_id=$9 AND id=$15 AND (number_fingerprint=$4 OR NOT EXISTS(SELECT 1 FROM bank_card_ledger WHERE card_id=$15)) RETURNING ` + bankCardColumns
 			args = append(args, id)
 			status = 200
 		}
@@ -283,4 +350,16 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(405)
+}
+
+func validCardCVC(value string) bool {
+	if len(value) != 3 && len(value) != 4 {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }

@@ -158,6 +158,10 @@ func exchangeSchedule(now time.Time) time.Time {
 }
 
 func (s *Server) syncExchangeRate(ctx context.Context, now time.Time, fetch func(context.Context) (*ExchangeRate, error)) error {
+	return s.syncExchangeRateAfter(ctx, now, exchangeSchedule(now), fetch)
+}
+
+func (s *Server) syncExchangeRateAfter(ctx context.Context, now, since time.Time, fetch func(context.Context) (*ExchangeRate, error)) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -174,7 +178,7 @@ func (s *Server) syncExchangeRate(ctx context.Context, now time.Time, fetch func
 	if err != nil {
 		return err
 	}
-	if last.fresh(now) && last.CNYRate != "" && !last.SyncedAt.Before(exchangeSchedule(now)) {
+	if last.fresh(now) && last.CNYRate != "" && !last.SyncedAt.Before(since) {
 		return nil
 	}
 	rate, err := fetch(ctx)

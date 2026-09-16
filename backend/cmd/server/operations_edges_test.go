@@ -22,7 +22,7 @@ func TestOrderPermissionAndMonthEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Server{db: db, secret: []byte("test")}
-	for _, action := range []string{"verify", "assign", "retry", "refund"} {
+	for _, action := range []string{"verify", "retry", "refund_note"} {
 		r := httptest.NewRequest("POST", "/api/orders/1", strings.NewReader(`{"action":"`+action+`","request_key":"permission-test-key"}`))
 		r.Header.Set("Authorization", "Bearer "+s.token(1))
 		w := httptest.NewRecorder()
@@ -139,12 +139,12 @@ func TestDisputeLossRecoveryAndLateCreated(t *testing.T) {
 	}
 }
 
-func TestPurchaseReversalAndFollowingCycle(t *testing.T) {
+func TestPurchaseReversalAndReplacementOrder(t *testing.T) {
 	db := walletTestDB(t)
 	_, err := db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES(1,'operator@test.local','','admin');
  INSERT INTO chatgpt_accounts(id,user_id,label,email,verified_plan,verified_at,subscription_ends_at) VALUES(1,1,'Account','chat@test.local','plus',NOW(),'2030-02-01');
  INSERT INTO bank_cards(id,user_id,label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,balance_usd_minor) VALUES(1,1,'Card','User','encrypted','fingerprint','4242','Visa',12,2035,8500);
- INSERT INTO recharge_orders(id,order_no,user_id,account_id,account_email,package_id,package_snapshot,period_start,period_end,sale_usd_minor,request_key,payment_status,fulfillment_status,card_id,cost_usd_minor,purchase_reference,verified_at) VALUES(1,'order-1',1,1,'chat@test.local',1,'{}','2030-01-01','2030-02-01',2000,'order-key-1','paid','completed',1,1500,'original-purchase',NOW()),(2,'order-2',1,1,'chat@test.local',1,'{}','2030-02-01','2030-03-01',2000,'order-key-2','paid','pending',NULL,0,'',NULL);
+ INSERT INTO recharge_orders(id,order_no,user_id,account_id,account_email,package_id,package_snapshot,period_start,period_end,sale_usd_minor,request_key,payment_status,fulfillment_status,card_id,cost_usd_minor,purchase_reference,verified_at) VALUES(1,'order-1',1,1,'chat@test.local',1,'{"plan":"plus","months":1}','2030-01-01','2030-02-01',2000,'order-key-1','paid','completed',1,1500,'original-purchase',NOW()),(2,'order-2',1,1,'chat@test.local',1,'{"plan":"plus","months":1}','2030-02-01','2030-03-01',2000,'order-key-2','paid','pending',NULL,0,'',NULL);
  INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,balance_after_usd_minor) VALUES(1,1,'opening-test-key','opening',10000,10000);
  INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,balance_after_usd_minor,order_id,account_id,account_email,period_start,period_end,external_reference) VALUES(1,1,'purchase-test-key','subscription',-1500,8500,1,1,'chat@test.local','2030-01-01','2030-02-01','original-purchase');`)
 	if err != nil {
@@ -171,16 +171,19 @@ func TestPurchaseReversalAndFollowingCycle(t *testing.T) {
 	if cost != 0 || verified {
 		t.Fatal("reversal did not clear order verification", cost, verified)
 	}
-	purchase := `{"action":"purchase","card_id":1,"amount_usd":"15.00","reference":"original-purchase","evidence":"receipt","version":1,"request_key":"correct-purchase-key"}`
+	purchase := `{"action":"purchase","card_id":1,"reference":"original-purchase","evidence":"receipt","version":1,"request_key":"correct-purchase-key"}`
 	call("/api/orders/1", purchase, 409)
 	purchase = strings.ReplaceAll(purchase, "original-purchase", "corrected-purchase")
 	call("/api/orders/1", purchase, 200)
 	purchase = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(purchase, `"version":1`, `"version":0`), "correct-purchase-key", "next-purchase-key"), "corrected-purchase", "next-purchase")
+	call("/api/orders/2", purchase, 409)
+	// 两笔今日扣款占同一周期，原订单废弃后才允许新订单扣款开通。
+	call("/api/orders/1", `{"action":"discard","reason":"重新开通","version":2,"request_key":"discard-corrected-order"}`, 200)
 	call("/api/orders/2", purchase, 200)
 	var balance, sum int64
 	db.QueryRow(`SELECT balance_usd_minor FROM bank_cards WHERE id=1`).Scan(&balance)
 	db.QueryRow(`SELECT sum(amount_usd_minor) FROM bank_card_ledger WHERE card_id=1`).Scan(&sum)
-	if balance != 7000 || sum != balance {
+	if balance != 6000 || sum != balance {
 		t.Fatal(balance, sum)
 	}
 }

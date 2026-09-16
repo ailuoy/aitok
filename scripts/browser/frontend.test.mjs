@@ -123,20 +123,30 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         if(request.method==='DELETE') rechargePackages=[];
         const rate={id:1,rate:phpRate,cny_rate:phpCNYRate,source:'https://www.exchangerate-api.com',effective_at:new Date().toISOString(),synced_at:new Date().toISOString()};
         data={packages:rechargePackages.map(p=>p.auto_usd?{...p,sale_usd_minor:Math.round(p.original_amount_minor*Number(phpRate)),sale_cny_minor:Math.round(p.original_amount_minor*Number(phpCNYRate)),cny_price_ready:true,price_ready:true,exchange_rate:rate}:p),can_manage:true,exchange_rate:rate,exchange_rate_fresh:true};
+      } else if (url.pathname.endsWith('/collection-quote')) {
+        const currency=url.searchParams.get('currency'),amountMinor=Math.round(Number(url.searchParams.get('amount'))*100);
+        const usdMinor=currency==='CNY'?Math.round(amountMinor/7):amountMinor;
+        data={currency,amount_minor:amountMinor,usd_minor:usdMinor,exchange_rate:{usd_per_unit:currency==='CNY'?'1/7':'1',...(currency==='CNY'?{batch:{id:99,source:'test',effective_at:new Date().toISOString(),synced_at:new Date().toISOString()}}:{})},profit:{usd_minor:usdMinor-20000,received_minor:amountMinor-(currency==='CNY'?140000:20000),cost_usd_minor:20000,rate_percent:((usdMinor-20000)/usdMinor*100).toFixed(2),estimated:true}};
       } else if (url.pathname.startsWith('/api/orders')) {
         const input=request.postData?JSON.parse(request.postData):{};
         if(request.method==='POST') {
           operationWrites.push(input);
-          if(url.pathname==='/api/orders') rechargeOrders.push({id:1,order_no:'order-smoke-1',account_email:account.email,package_snapshot:rechargePackages[0],period_start:input.period_start,period_end:'2030-02-01',payment_status:'unpaid',fulfillment_status:'pending',sale_usd_minor:20000,wallet_tokens:100,cost_usd_minor:0,refunded_usd_minor:0,version:0});
-          else {
+          if(url.pathname==='/api/orders/record') { input.action='record'; rechargeOrders.push({id:1,order_no:'order-smoke-1',order_status:'active',account_email:account.email,package_snapshot:rechargePackages[0],period_start:'2030-01-01',period_end:'2030-02-01',payment_status:'unpaid',fulfillment_status:'pending',sale_usd_minor:20000,wallet_tokens:100,cost_usd_minor:0,refunded_usd_minor:0,version:0}); }
+          {
             const order=rechargeOrders[0];order.version++;
-            if(input.action==='collect')order.payment_status='paid';
-            if(input.action==='purchase'){order.cost_usd_minor=15000;order.fulfillment_status='verifying'}
-            if(input.action==='verify')order.fulfillment_status='completed';
-            if(input.action==='refund'){order.payment_status='partial_refund';order.refunded_usd_minor=5000}
+            if(input.action==='record' && input.received_amount) {
+              order.payment_status='paid';order.payment_method='manual';
+              order.received_currency=input.received_currency;order.received_amount_minor=Math.round(Number(input.received_amount)*100);
+              order.received_usd_minor=input.received_currency==='CNY'?Math.round(order.received_amount_minor/7):order.received_amount_minor;
+              order.profit={usd_minor:order.received_usd_minor-order.sale_usd_minor,received_minor:order.received_amount_minor-(input.received_currency==='CNY'?order.sale_usd_minor*7:order.sale_usd_minor),rate_percent:((order.received_usd_minor-order.sale_usd_minor)/order.received_usd_minor*100).toFixed(2),cost_usd_minor:order.sale_usd_minor,estimated:true};
+            }
+            if(input.action==='record'){order.order_source=input.order_source || order.order_source || '';order.cost_usd_minor=order.sale_usd_minor;order.fulfillment_status='completed';if(order.profit)order.profit.estimated=false}
+            if(input.action==='refund_note'){order.order_status='refunded';order.profit=null}
+            if(input.action==='discard'){order.order_status='discarded';order.profit=null}
+            if(input.evidence && input.action!=='refund_note') order.evidence=input.evidence
           }
         }
-        data=url.pathname==='/api/orders/1'?{order:rechargeOrders[0],events:[]}:{orders:rechargeOrders,total:rechargeOrders.length,can_manage:true,can_finance:true,can_refund:true};
+        data=url.pathname==='/api/orders/1'?{order:rechargeOrders[0],events:operationWrites.filter(v=>v.action).map((input,index)=>({id:index+1,actor_id:3,action:input.action,created_at:'2026-09-15T00:00:00Z',after_data:{input}}))}:{orders:rechargeOrders,sources:[...new Set(rechargeOrders.map(o=>o.order_source).filter(Boolean))],total:rechargeOrders.length,can_manage:true,can_finance:true,can_refund:true};
       } else if (url.pathname==='/api/notices') data={notices:[]};
       else if (url.pathname==='/api/audit') data={events:[
         {id:2,actor:'audit@example.com',actor_id:3,entity_type:'admin_request',entity_id:0,action:'DELETE /api/accounts/1',created_at:'2026-09-15T00:00:00Z',after_data:{source:'server',page:'/admin/accounts',resource:'/api/accounts/1',result:'failure',status:403}},
@@ -177,10 +187,10 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       } else if (url.pathname.startsWith('/api/bank-cards')) {
         const input = request.postData ? JSON.parse(request.postData) : {};
         if (['POST', 'PATCH', 'DELETE'].includes(request.method)) bankWrites.push(request.method);
-        if (request.method === 'POST') bankCards.push({ ...input, id: 1, last4: '4242', brand: 'Visa' });
+        if (request.method === 'POST') bankCards.push({ balance_usd_minor: 0, ...input, id: 1, last4: '4242', brand: 'Visa' });
         if (request.method === 'PATCH') bankCards[0] = { ...bankCards[0], ...input };
         if (request.method === 'DELETE') bankCards = [];
-        data = url.pathname === '/api/bank-cards/1' ? { card: bankCards[0] } : { cards: bankCards.map(({ number, ...card }) => card), platforms: [...new Set(bankCards.map(card => card.platform).filter(Boolean))], total: bankCards.length, page: 1, page_size: 20 };
+        data = url.pathname === '/api/bank-cards/1' ? { card: bankCards[0] } : { cards: bankCards.map(({ number, cvc, ...card }) => ({...card, has_cvc:Boolean(cvc), ...(url.searchParams.get('include_numbers')==='1' ? {number} : {})})), platforms: [...new Set(bankCards.map(card => card.platform).filter(Boolean))], total: bankCards.length, page: 1, page_size: 20 };
       } else if (url.pathname.startsWith('/api/addresses')) {
         const input = request.postData ? JSON.parse(request.postData) : {};
         const id = Number(url.pathname.split('/')[3]);
@@ -241,15 +251,28 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
     assert.fail(`页面等待超时：${expression}；${await evaluate('document.body.innerText')}`);
   };
   const click = async text => {
-    await wait(`Array.from(document.querySelectorAll('button')).some(button => button.textContent === ${JSON.stringify(text)} && !button.disabled)`);
-    return evaluate(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === ${JSON.stringify(text)} && !button.disabled).click()`);
+    await wait(`(() => { const button = Array.from(document.querySelectorAll('button')).find(button => button.textContent === ${JSON.stringify(text)} && !button.disabled); if (!button) return false; button.click(); return true; })()`);
+  };
+  const navigateAdmin = async page => {
+    const selector = JSON.stringify('.workspace-nav a[href="/admin/' + page + '"]');
+    await evaluate(`(() => {
+      const sidebar = document.querySelector('.admin-sidebar');
+      if (getComputedStyle(sidebar).visibility === 'hidden') document.querySelector('.sidebar-toggle').click();
+      const link = document.querySelector(${selector});
+      const group = link.closest('.sidebar-group');
+      const button = group?.querySelector('.sidebar-group-toggle');
+      if (button?.getAttribute('aria-expanded') === 'false') button.click();
+    })()`);
+    await wait(`document.querySelector(${selector}).checkVisibility()`);
+    await evaluate(`document.querySelector(${selector}).click()`);
+    await wait(`location.pathname === ${JSON.stringify('/admin/' + page)}`);
   };
   const fill = async (selector, value, type = 'HTMLInputElement') => {
     await wait(`document.querySelector(${JSON.stringify(selector)}) instanceof ${type}`);
     return evaluate(`(() => { const element = document.querySelector(${JSON.stringify(selector)}); Object.getOwnPropertyDescriptor(${type}.prototype, 'value').set.call(element, ${JSON.stringify(value)}); element.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   };
   const select = async (label, text, query = '', keyboard = false) => {
-    await evaluate(`Array.from(document.querySelectorAll('button[role=combobox]')).find(button => button.getAttribute('aria-label') === ${JSON.stringify(label)}).click()`);
+    await wait(`(() => { const button = Array.from(document.querySelectorAll('button[role=combobox]')).find(button => button.getAttribute('aria-label') === ${JSON.stringify(label)} && !button.disabled); if (!button) return false; button.click(); return true; })()`);
     await wait('Boolean(document.querySelector(".select-search input"))');
     if (query) await fill('.select-search input', query);
     await wait(`Array.from(document.querySelectorAll('[role=option]')).some(option => option.textContent === ${JSON.stringify(text)})`);
@@ -260,9 +283,26 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("工作账号")');
   await wait('location.pathname === "/admin/accounts"');
   assert.equal(await evaluate('Boolean(document.querySelector("header nav"))'), false);
-  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"), a => a.getAttribute("href"))'), ['/admin/accounts', '/admin/orders', '/admin/packages', '/admin/notices', '/admin/proxy-activity', '/admin/proxies', '/admin/addresses', '/admin/bank-cards', '/admin/payment-exceptions', '/admin/audit', '/admin/users']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"), a => a.getAttribute("href"))'), ['/admin/accounts', '/admin/notices', '/admin/orders', '/admin/packages', '/admin/bank-cards', '/admin/payment-exceptions', '/admin/proxies', '/admin/addresses', '/admin/proxy-activity', '/admin/users', '/admin/audit']);
   assert.equal(await evaluate('document.querySelector(".admin-sidebar").getBoundingClientRect().left'), 0);
   assert.equal(await evaluate('document.querySelector(".admin-content").getBoundingClientRect().left'), 208);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".sidebar-group-toggle"), button => button.textContent)'), ['账号管理', '充值管理', '资源管理', '系统管理']);
+  assert.equal(await evaluate('document.querySelector(".sidebar-group-toggle.active").getAttribute("aria-expanded")'), 'true');
+  await click('账号管理');
+  await wait('!document.querySelector(".workspace-nav a[href$=accounts]").checkVisibility()');
+  await click('系统管理');
+  await wait('document.querySelector(".workspace-nav a[href$=audit]").checkVisibility()');
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-row") && document.querySelector(".workspace-nav a[href$=audit]").checkVisibility()');
+  assert.equal(await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").checkVisibility()'), true);
+  await click('系统管理');
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('Boolean(document.querySelector(".account-row"))');
+  assert.equal(await evaluate('document.querySelector(".workspace-nav a[href$=audit]").checkVisibility()'), false);
+  await navigateAdmin('notices');
+  await click('账号管理');
+  await evaluate('history.back()');
+  await wait('location.pathname === "/admin/accounts" && document.querySelector(".workspace-nav a[href$=accounts]").checkVisibility()');
   assert.equal(await evaluate('document.querySelector(".account-row").tagName'), 'TR');
   for (const scrollLeft of [0, 300]) {
     await evaluate(`document.querySelector(".data-table-wrap").scrollLeft = ${scrollLeft}`);
@@ -270,7 +310,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   }
   await evaluate('document.querySelector(".data-table-wrap").scrollLeft = 0');
   // 新充值页面使用真实构建产物，资金接口在浏览器边界全部模拟。
-  await evaluate('document.querySelector(".workspace-nav a[href$=packages]").click()');
+  await navigateAdmin('packages');
   await wait('document.body.innerText.includes("尚未配置套餐")');
   await click('新增套餐');
   await fill('input[name=name]','测试 Plus');
@@ -280,47 +320,202 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('确认并保存');
   await wait('!document.querySelector("dialog") && document.body.innerText.includes("测试 Plus")');
   assert.equal(rechargePackages[0].original_amount_minor,100000);
-  await evaluate('document.querySelector(".workspace-nav a[href$=orders]").click()');
+  await navigateAdmin('orders');
   await wait('document.body.innerText.includes("暂无充值订单")');
-  await click('创建充值订单');
+  bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000}];
+  await click('录入充值订单');
   await select('订单账号',account.email);
   await select('订单套餐','测试 Plus · $200.00 / 1个月');
-  await fill('input[name=period_start]','2030-01-01');
-  await click('确认并保存');
-  await wait('!document.querySelector("dialog") && document.body.innerText.includes("order-smoke-1")');
-  await click('收款 / 钱包付款');
-  await fill('input[name=reference]','customer-paid-1');
-  await fill('textarea[name=evidence]','receipt', 'HTMLTextAreaElement');
-  await click('确认并保存');
-  await wait('!document.querySelector("dialog") && document.body.innerText.includes("已收款")');
-  bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000}];
-  await click('官网扣款');
+  assert.equal(await evaluate('Boolean(document.querySelector("input[name=period_start]"))'),false);
+  await fill('input[aria-label="实收金额"]','1680.00');
+  await wait('document.querySelector(".collection-preview")?.innerText.includes("16.67%")');
+  assert.ok(await evaluate('document.querySelector(".collection-preview").innerText.includes("240.00")'));
+  await select('收款币种','USD 美元');
+  await fill('input[aria-label="实收金额"]','250.00');
+  await wait('document.querySelector(".collection-preview")?.innerText.includes("20.00%")');
+  await select('收款币种','CNY 人民币');
+  await fill('input[aria-label="实收金额"]','1680.00');
+  await wait('document.querySelector(".collection-preview")?.innerText.includes("16.67%")');
+  await writeFile(join(directory,'collection-profit.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  assert.equal(await evaluate('document.querySelector("dialog").innerText.includes("查找付款卡")'),false);
   await select('订单付款卡','运营测试卡 · 4242 · $1,000.00');
-  await fill('input[name=amount_usd]','150.00');
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="扣款 USD"]').value`),'200.00');
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="扣款 USD"]').readOnly`),true);
+  await evaluate('document.querySelector("button[aria-label=订单来源]").click()');
+  await fill('input[aria-label="过滤订单来源"]','  微信   老客户  ');
+  await click('＋ 使用输入的来源');
+  await wait('document.querySelector("input[name=order_source]")?.value === "微信 老客户"');
+  assert.ok(await evaluate('document.querySelector("button[aria-label=订单来源]").getBoundingClientRect().top < document.querySelector("input[name=reference]").getBoundingClientRect().top'));
   await fill('input[name=reference]','official-paid-1');
-  await fill('textarea[name=evidence]','official receipt', 'HTMLTextAreaElement');
-  await click('确认并保存');
-  await wait('!document.querySelector("dialog") && document.body.innerText.includes("待开通核验")');
-  await click('核验开通');
-  await fill('textarea[name=evidence]','subscription receipt', 'HTMLTextAreaElement');
-  await click('确认并保存');
+  await fill('.evidence-editor textarea','official receipt', 'HTMLTextAreaElement');
+  for (const mime of ['image/jpeg', 'image/jpg', '', 'application/octet-stream']) {
+    await evaluate(`(() => {
+      const canvas=document.createElement('canvas'); canvas.width=20; canvas.height=20;
+      const uri=canvas.toDataURL('image/jpeg');
+      const transfer=new DataTransfer();
+      transfer.items.add(new File([Uint8Array.from(atob(uri.split(',')[1]),c=>c.charCodeAt(0))],'receipt.JPG',{type:${JSON.stringify(mime)}}));
+      const input=document.querySelector('.evidence-editor input[type=file]'); input.files=transfer.files; input.dispatchEvent(new Event('change',{bubbles:true}));
+    })()`);
+    await wait('document.querySelector(".evidence-block img")?.src.startsWith("data:image/jpeg;base64,") && !document.querySelector(".evidence-editor [role=status]")');
+    assert.equal(await evaluate('Boolean(document.querySelector(".evidence-editor [role=alert]"))'),false);
+    await evaluate(`document.querySelector('button[aria-label="删除第 2 块"]').click()`);
+    await click('确认删除');
+    await wait('!document.querySelector(".evidence-block img")');
+  }
+  await evaluate(`(() => {
+    const transfer=new DataTransfer();transfer.items.add(new File(['not an image'],'fake.jpg',{type:'image/jpeg'}));
+    document.querySelector('.evidence-editor').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+  })()`);
+  await wait('document.querySelector(".evidence-editor [role=alert]")?.innerText.includes("检查文件格式")');
+  assert.equal(await evaluate('document.querySelector(".evidence-editor textarea").value'),'official receipt');
+  const pasteEvidenceImage = () => evaluate(`(() => {
+    const canvas=document.createElement('canvas'); canvas.width=240; canvas.height=100;
+    const context=canvas.getContext('2d'); context.fillStyle='#ede9fe'; context.fillRect(0,0,240,100); context.fillStyle='#322478'; context.font='16px sans-serif'; context.fillText('Test receipt USD 150.00',20,55);
+    const transfer=new DataTransfer(); const uri=canvas.toDataURL('image/png');
+    transfer.items.add(new File([Uint8Array.from(atob(uri.split(',')[1]),c=>c.charCodeAt(0))],'receipt.png',{type:'image/png'}));
+    document.querySelector('.evidence-editor').dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));
+  })()`);
+  await pasteEvidenceImage();
+  await wait('document.querySelectorAll(".evidence-block img").length===1 && !document.querySelector(".evidence-editor [role=status]")');
+  assert.ok(await evaluate('document.querySelector(".evidence-block img").getBoundingClientRect().height <= 88'));
+  await evaluate('document.querySelector(".evidence-editor .image-thumbnail").click()');
+  await wait('document.querySelectorAll("dialog[open]").length===2');
+  await cdp.send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},sessionId);
+  await wait('document.querySelectorAll("dialog[open]").length===1');
+  assert.equal(await evaluate('document.querySelector("input[name=reference]").value'),'official-paid-1');
+  await click('文字');
+  await fill('textarea[aria-label="凭据文字 3"]','after image','HTMLTextAreaElement');
+  await evaluate(`document.querySelector('button[aria-label="上移第 3 块"]').click()`);
+  await wait(`document.querySelector('textarea[aria-label="凭据文字 2"]')?.value === "after image"`);
+  await evaluate(`document.querySelector('button[aria-label="删除第 2 块"]').click()`);
+  await click('确认删除');
+  assert.ok(await evaluate('document.querySelector(".order-record-dialog .workspace-dialog-body").scrollHeight <= document.querySelector(".order-record-dialog .workspace-dialog-body").clientHeight + 2'), '桌面录入信息与单张凭据应完整展示');
+  const evidenceShot=await cdp.send('Page.captureScreenshot',{format:'png'},sessionId);
+  await writeFile(join(directory,'order-evidence.png'),Buffer.from(evidenceShot.data,'base64'));
+  await click('确认录入并记账');
   await wait('!document.querySelector("dialog") && document.body.innerText.includes("开通完成")');
+  assert.equal(operationWrites.at(-1).received_currency,'CNY');
+  assert.equal(operationWrites.at(-1).received_amount,'1680.00');
+  assert.equal(operationWrites.at(-1).collection_rate_id,99);
+  assert.equal(operationWrites.length,1);
+  assert.equal(operationWrites[0].order_source,'微信 老客户');
+  assert.equal(await evaluate('document.querySelector("table[aria-label=充值订单] thead th:nth-child(2)").textContent'),'订单来源');
+  assert.equal(await evaluate('document.querySelector("table[aria-label=充值订单] tbody td:nth-child(2)").textContent'),'微信 老客户');
+  await click('刷新');
+  await click('录入充值订单');
+  await select('订单来源','微信 老客户','微信');
+  assert.equal(await evaluate('document.querySelector("input[name=order_source]").value'),'微信 老客户');
+  await click('取消');
+  assert.equal(operationWrites.length,1);
+
+  assert.ok(await evaluate('document.querySelector("table[aria-label=充值订单]").innerText.includes("16.67%")'));
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".row-actions button")).some(b=>["收款 / 钱包付款","官网扣款"].includes(b.textContent))'),false);
+
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".row-actions button")).some(b=>b.textContent==="核验开通")'),false);
   await click('退款');
-  await fill('input[name=amount_usd]','50.00');
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog input[name=amount_usd]"))'),false);
   await fill('input[name=reference]','refund-paid-1');
   await fill('textarea[name=reason]','partial refund', 'HTMLTextAreaElement');
-  await fill('textarea[name=evidence]','refund receipt', 'HTMLTextAreaElement');
+  await fill('.evidence-editor textarea','refund receipt', 'HTMLTextAreaElement');
+  await pasteEvidenceImage();
+  await wait('document.querySelectorAll(".evidence-block img").length===1 && !document.querySelector(".evidence-editor [role=status]")');
   await click('确认并保存');
-  await wait('!document.querySelector("dialog") && document.body.innerText.includes("部分退款")');
-  assert.deepEqual(operationWrites.slice(1).map(v=>v.action),['collect','purchase','verify','refund']);
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("已退款")');
+  assert.deepEqual(operationWrites.slice(1).map(v=>v.action),['refund_note']);
   assert.equal(operationWrites[0].expected_sale_usd_minor,20000);
-  assert.equal(operationWrites[2].card_id,9);
+  assert.equal(operationWrites[0].card_id,9);
+  assert.equal(operationWrites[0].amount_usd,undefined);
+  assert.equal(operationWrites[0].period_start,undefined);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("table[aria-label=充值订单] .row-actions button"), b => b.textContent)'), ['详情']);
+  assert.equal(operationWrites.at(-1).amount_usd,undefined);
+  assert.equal(rechargeOrders[0].payment_status,'paid');
+  assert.equal(rechargeOrders[0].refunded_usd_minor,0);
+  const proof=JSON.parse(operationWrites[0].evidence);
+  assert.deepEqual(proof.blocks.map(b=>b.type),['text','image']);
+  assert.ok(proof.blocks[1].src.startsWith('data:image/png;base64,'));
+  await click('详情');
+  await wait('document.querySelectorAll("dialog .evidence-view img").length===3');
+  assert.ok(await evaluate('document.querySelector("dialog").innerText.includes("订单来源：微信 老客户")'));
+  assert.ok(await evaluate('document.querySelector("dialog").innerText.includes("生效日期：2030-01-01")'));
+  assert.ok(await evaluate('document.querySelector("dialog").innerText.includes("到期日期：2030-02-01")'));
+  assert.equal(await evaluate('document.querySelector("dialog").innerText.includes("退款登记（余额未退回）")'),true);
+  await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   assert.ok(operationWrites.every(v=>v.request_key));
+  rechargeOrders[0] = {...rechargeOrders[0], order_status: 'active', payment_status: 'unpaid', fulfillment_status: 'pending', cost_usd_minor: 0};
+  await click('刷新');
+  await click('废弃');
+  assert.equal(operationWrites.at(-1).action, 'refund_note');
+  await fill('textarea[name=reason]', 'duplicate order', 'HTMLTextAreaElement');
+  await click('取消');
+  assert.equal(operationWrites.at(-1).action, 'refund_note');
+  await click('废弃');
+  await fill('textarea[name=reason]', 'duplicate order', 'HTMLTextAreaElement');
+  await click('确认并保存');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("已废弃")');
+  assert.equal(operationWrites.at(-1).action, 'discard');
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("table[aria-label=充值订单] .row-actions button"), b => b.textContent)'), ['详情']);
+  await writeFile(join(directory,'order-status.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},sessionId);
   assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth'));
   await writeFile(join(directory,'recharge-orders-mobile.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
   await cdp.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false},sessionId);
-  await evaluate('document.querySelector(".workspace-nav a[href$=packages]").click()');
+  // 实收必填且必须有效；旧已收款订单补录只填写卡片支出。
+  rechargeOrders=[];
+  await click('刷新');
+  await wait('document.body.innerText.includes("暂无充值订单")');
+  await click('录入充值订单');
+  await select('订单账号',account.email);
+  await select('订单套餐','测试 Plus · $200.00 / 1个月');
+  await select('订单付款卡','运营测试卡 · 4242 · $1,000.00');
+
+  await fill('input[name=reference]','no-receipt-payment');
+  await fill('.evidence-editor textarea','card payment proof','HTMLTextAreaElement');
+  const writesBeforeRequired = operationWrites.length;
+  assert.equal(await evaluate('document.querySelector("input[aria-label=实收金额]").required'),true);
+  const recordDisabled = 'Array.from(document.querySelectorAll("dialog button")).find(b=>b.textContent==="确认录入并记账").disabled';
+  for (const amount of ['', '0', '-1', 'abc']) {
+    await fill('input[aria-label="实收金额"]',amount);
+    assert.equal(await evaluate(recordDisabled),true);
+  }
+  await select('收款币种','USD 美元');
+  await fill('input[aria-label="实收金额"]','250.00');
+  await wait('document.querySelector(".collection-preview")?.innerText.includes("20.00%")');
+  assert.equal(await evaluate(recordDisabled),false);
+  await fill('input[aria-label="实收金额"]','');
+  assert.equal(await evaluate(recordDisabled),true);
+  await evaluate('Array.from(document.querySelectorAll("dialog button")).find(b=>b.textContent==="确认录入并记账").click()');
+  assert.equal(operationWrites.length,writesBeforeRequired);
+  await fill('input[aria-label="实收金额"]','250.00');
+  await wait('document.querySelector(".collection-preview")?.innerText.includes("20.00%")');
+  await click('确认录入并记账');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("开通完成")');
+  assert.equal(operationWrites.at(-1).received_currency,'USD');
+  assert.equal(operationWrites.at(-1).received_amount,'250.00');
+  rechargeOrders[0]={...rechargeOrders[0],payment_status:'unpaid',received_currency:'',received_amount_minor:0,received_usd_minor:0,cost_usd_minor:0,fulfillment_status:'pending',profit:null};
+  await click('刷新');
+  await click('补录订单');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=实收金额]").required'),true);
+  assert.equal(await evaluate(recordDisabled),true);
+  await click('取消');
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".row-actions button")).some(b=>b.textContent==="核验开通")'),false);
+  rechargeOrders[0]={...rechargeOrders[0],payment_status:'paid',received_currency:'USD',received_amount_minor:25000,received_usd_minor:25000,cost_usd_minor:0,fulfillment_status:'pending'};
+  await click('刷新');
+  await click('补录订单');
+  assert.equal(await evaluate('Boolean(document.querySelector("input[aria-label=实收金额]"))'),false);
+  assert.ok(await evaluate('document.querySelector("dialog").innerText.includes("250.00")'));
+  await select('订单付款卡','运营测试卡 · 4242 · $1,000.00');
+  await evaluate('document.querySelector("button[aria-label=订单来源]").click()');
+  await fill('input[aria-label="过滤订单来源"]','合作渠道');
+  await click('＋ 使用输入的来源');
+  await fill('input[name=reference]','legacy-payment');
+  await fill('.evidence-editor textarea','legacy card proof','HTMLTextAreaElement');
+  await click('确认录入并记账');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("开通完成")');
+  assert.equal(operationWrites.at(-1).action,'record');
+  assert.equal(operationWrites.at(-1).order_source,'合作渠道');
+  assert.equal(operationWrites.at(-1).received_amount,undefined);
+  assert.equal(rechargeOrders[0].received_usd_minor,25000);
+  await navigateAdmin('packages');
   await wait('document.body.innerText.includes("测试 Plus")');
   await click('编辑');
   await select('美元定价方式','PHP 每日汇率折算');
@@ -340,11 +535,11 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(rechargeOrders[0].sale_usd_minor,20000);
   await writeFile(join(directory,'php-package-pricing.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
   bankCards=[];
-  await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").click()');
+  await navigateAdmin('accounts');
   await wait('Boolean(document.querySelector(".account-toolbar"))');
   const sidebarShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'admin-sidebar.png'), Buffer.from(sidebarShot.data, 'base64'));
-  await evaluate('document.querySelector(".workspace-nav a[href$=users]").click()');
+  await navigateAdmin('users');
   await wait('Boolean(document.querySelector(".user-manager tbody tr"))');
   assert.equal(await evaluate('document.querySelectorAll(".user-manager tbody button[role=combobox]").length'), 1);
   await select('用户 member@example.com 的角色', '管理员');
@@ -360,7 +555,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await writeFile(join(directory, 'admin-users.png'), Buffer.from(usersShot.data, 'base64'));
   await cdp.send('Page.reload', {}, sessionId);
   await wait('Boolean(document.querySelector(".user-manager tbody tr"))');
-  await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").click()');
+  await navigateAdmin('accounts');
   await wait('Boolean(document.querySelector(".account-toolbar"))');
   assert.equal(await evaluate('document.querySelectorAll("select").length'), 0);
   assert.equal(await evaluate('document.body.innerText.includes("代币续订")'), false);
@@ -377,7 +572,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.documentElement.dataset.theme === "dark"');
   await evaluate('document.querySelector(".user-menu a[href$=wallet]").click()');
   await wait('Boolean(document.querySelector(".wallet-grid"))');
-  await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").click()');
+  await navigateAdmin('accounts');
   await wait('Boolean(document.querySelector(".account-toolbar"))');
   await evaluate('document.querySelector(".account-group button").click()');
   await wait('Boolean(document.querySelector(".select-create"))');
@@ -465,7 +660,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('保存');
   await wait('!document.querySelector("dialog")');
   assert.equal(imported.length, 1); assert.deepEqual(JSON.parse(imported[0].session_json), JSON.parse(raw)); assert.equal(imported[0].email, ''); assert.equal(imported[0].label, undefined);
-  await evaluate('document.querySelector(".workspace-nav a[href$=addresses]").click()');
+  await navigateAdmin('addresses');
   await wait('document.querySelectorAll(".address-row").length === 20');
   assert.equal(await evaluate('document.querySelector(".address-row td:nth-child(3)").textContent'), 'Oregon');
   await evaluate('document.querySelector(".sidebar-collapse").click()');
@@ -475,8 +670,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelectorAll(".address-row").length === 20 && document.querySelector(".admin-content").getBoundingClientRect().left === 64');
   const collapsedShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'sidebar-collapsed.png'), Buffer.from(collapsedShot.data, 'base64'));
-  await evaluate('document.querySelector(".sidebar-collapse").click()');
-  await wait('document.querySelector(".admin-content").getBoundingClientRect().left === 208');
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a")).some(link => link.checkVisibility())'), false);
+  assert.equal(await evaluate('Array.from(document.querySelectorAll(".sidebar-group-toggle")).filter(button => button.checkVisibility()).length'), 4);
+  await click('充值管理');
+  await wait('document.querySelector(".admin-content").getBoundingClientRect().left === 208 && document.querySelector(".workspace-nav a[href$=orders]").checkVisibility()');
+  assert.equal(await evaluate('localStorage.getItem("admin-sidebar-collapsed")'), 'false');
+  const groupedShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
+  await writeFile(join(directory, 'sidebar-grouped.png'), Buffer.from(groupedShot.data, 'base64'));
   await evaluate(`document.querySelector('.pagination-number[aria-label="第 2 页"]').click()`);
   await wait('document.querySelectorAll(".address-row").length === 1');
   await select('每页条数', '50 条 / 页');
@@ -538,6 +738,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('管理菜单');
   await wait('document.querySelector(".admin-sidebar").classList.contains("open")');
   assert.equal(await evaluate('document.querySelector(".admin-sidebar").getBoundingClientRect().left'), 0);
+  await click('资源管理');
+  await wait('!document.querySelector(".workspace-nav a[href$=addresses]").checkVisibility()');
+  await evaluate('document.querySelector("button[aria-controls=sidebar-group-resources]").focus()');
+  assert.equal(await evaluate('document.activeElement.getAttribute("aria-controls")'), 'sidebar-group-resources');
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', text: '\r', windowsVirtualKeyCode: 13 }, sessionId);
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
+  await wait('document.querySelector(".workspace-nav a[href$=addresses]").checkVisibility()');
   const sidebarMobile = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'admin-sidebar-mobile.png'), Buffer.from(sidebarMobile.data, 'base64'));
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, sessionId);
@@ -549,7 +756,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await writeFile(join(directory, 'addresses-mobile.png'), Buffer.from(addressMobileShot.data, 'base64'));
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
   await evaluate('window.scrollTo(0,0)');
-  await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").click()');
+  await navigateAdmin('accounts');
   await wait('Boolean(document.querySelector(".account-actions"))');
   await click('浏览器管理');
   await wait('Boolean(document.querySelector(".browser-session"))');
@@ -612,12 +819,30 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   user.role = 'admin';
   await cdp.send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/admin/accounts'},sessionId);
   await wait('Boolean(document.querySelector(".account-toolbar"))');
-  await evaluate('document.querySelector(".workspace-nav a[href$=bank-cards]").click()');
+  await navigateAdmin('bank-cards');
   await wait('Boolean(document.querySelector(".bank-card-manager"))');
   await click('添加银行卡');
   await fill('dialog input[name=label]', '工作卡');
   await fill('dialog input[name=cardholder]', 'Test User');
   await fill('dialog input[name=number]', '4242424242424242');
+  await fill('dialog input[name=cvc]', '0042');
+  const uploadWalletQR = method => evaluate(`(() => {
+    const canvas=document.createElement('canvas');canvas.width=240;canvas.height=240;
+    const ctx=canvas.getContext('2d');ctx.fillStyle='white';ctx.fillRect(0,0,240,240);ctx.fillStyle='black';ctx.fillRect(20,20,60,60);ctx.fillRect(160,20,60,60);ctx.fillRect(20,160,60,60);
+    const uri=canvas.toDataURL('image/png');window.testWalletQR=uri;
+    const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(atob(uri.split(',')[1]),c=>c.charCodeAt(0))],'wallet.png',{type:'image/png'}));
+    const group=document.querySelector('.image-upload');
+    if (${JSON.stringify(method)}==='paste') group.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:transfer}));
+    else group.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:transfer}));
+  })()`);
+  await uploadWalletQR('paste');
+  await wait('Boolean(document.querySelector(".image-upload img"))');
+  await evaluate('document.querySelector(".image-upload .image-thumbnail").click()');
+  await wait('document.querySelectorAll("dialog[open]").length===2');
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, sessionId);
+  await wait('document.querySelectorAll("dialog[open]").length===1');
+  assert.equal(await evaluate('document.querySelector("input[name=cvc]").value'), '0042');
+
   await evaluate('document.querySelector("button[aria-label=卡平台]").click()');
   await wait('Boolean(document.querySelector(".select-search input"))');
   await fill('.select-search input', '自定义卡平台');
@@ -630,10 +855,20 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await writeFile(join(directory, 'bank-card-platform.png'), Buffer.from(bankCardShot.data, 'base64'));
   await click('保存银行卡');
   await wait('!document.querySelector("dialog") && Boolean(document.querySelector(".bank-card-row"))');
-  assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("4242424242424242")'), false);
+  assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("4242424242424242")'), true);
+  assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("***")'), true);
+  assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("0042")'), false);
   assert.equal(await evaluate('document.querySelector(".bank-card-row").tagName'), 'TR');
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
   assert.equal(bankCards[0].platform, '自定义卡平台');
+  assert.equal(bankCards[0].cvc,'0042');
+  assert.equal(bankCards[0].wallet_qr_image,await evaluate('window.testWalletQR'));
+  await evaluate('document.querySelector(".bank-card-wallet .image-thumbnail").click()');
+  await wait('Boolean(document.querySelector(".image-preview-dialog"))');
+  assert.equal(await evaluate('document.querySelector(".image-full").src'),bankCards[0].wallet_qr_image);
+  await evaluate('document.querySelector(".image-preview-dialog .close").click()');
+  await wait('!document.querySelector("dialog")');
+
   assert.equal(bankCards[0].notes, '月度订阅\n仅工作用途');
   assert.ok(await evaluate('document.querySelector(".bank-card-row").innerText.includes("自定义卡平台") && document.querySelector(".bank-card-row").innerText.includes("仅工作用途")'));
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
@@ -646,11 +881,22 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate('document.querySelector("dialog textarea[name=notes]").value'), '月度订阅\n仅工作用途');
   await select('卡平台', '未设置');
   await select('卡平台', '自定义卡平台', '自定义', true);
+  assert.equal(await evaluate('document.querySelector("dialog input[name=cvc]").value'),'0042');
+  assert.equal(await evaluate('document.querySelector(".image-upload img").src'),bankCards[0].wallet_qr_image);
+  await click('移除截图'); await click('取消');
+  assert.ok(await evaluate('Boolean(document.querySelector(".image-upload img"))'));
+  await click('移除截图'); await click('确认移除');
+  await wait('!document.querySelector(".image-upload img")');
+  await uploadWalletQR('drop');
+  await wait('Boolean(document.querySelector(".image-upload img"))');
+  await fill('dialog input[name=cvc]','007');
   await fill('dialog textarea[name=notes]', '已修改备注', 'HTMLTextAreaElement');
   await fill('dialog input[name=label]', '工作卡已编辑');
   await click('保存银行卡');
   await wait('!document.querySelector("dialog") && document.querySelector(".bank-card-row").innerText.includes("工作卡已编辑")');
   assert.equal(bankCards[0].notes, '已修改备注');
+  assert.equal(bankCards[0].cvc,'007');
+  assert.equal(bankCards[0].wallet_qr_image,await evaluate('window.testWalletQR'));
   await click('删除'); await click('取消');
   assert.equal(bankWrites.filter(method => method === 'DELETE').length, 0);
   await click('删除'); await click('确认删除');
@@ -697,7 +943,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   await wait('!document.querySelector("dialog") && document.querySelector(".bank-card-row").innerText.includes("349.75")');
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
-  await evaluate('document.querySelector(".workspace-nav a[href$=proxies]").click()');
+  await navigateAdmin('proxies');
   await wait('Boolean(document.querySelector(".proxy-manager"))');
 
   await click('导入代理');
@@ -754,7 +1000,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('!document.querySelector(".proxy-form .primary").disabled');
   await click('保存代理');
   await wait('document.querySelector(".proxy-row")?.innerText.includes("美国代理已编辑")');
-  await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").click()');
+  await navigateAdmin('accounts');
   await wait('Boolean(document.querySelector(".account-proxy button:not(:disabled)"))');
   await select('账号 chat@example.com 的 SOCKS5', '美国代理已编辑 · 203.0.113.10', '美国');
   await wait('document.body.innerText.includes("代理选择已保存")');
@@ -815,7 +1061,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector("dialog").innerText.includes("Session 已过期")');
   assert.equal(localLaunches.length, 3);
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
-  await evaluate('document.querySelector(".workspace-nav a[href$=proxies]").click()');
+  await navigateAdmin('proxies');
   await wait('Boolean(document.querySelector(".proxy-row"))');
   const deletesBefore = localRequests.filter(request => request.method === 'DELETE').length;
   await click('删除');
@@ -828,15 +1074,15 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector("dialog").innerText.includes("此代理仍有账号使用")');
   await click('取消');
   await wait('!document.querySelector("dialog")');
-  await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").click()');
+  await navigateAdmin('accounts');
   await wait('Boolean(document.querySelector(".account-proxy button:not(:disabled)"))');
   await select('账号 chat@example.com 的 SOCKS5', '直连（不使用代理）');
   await wait('!document.querySelector(".account-proxy button").disabled');
-  await evaluate('document.querySelector(".workspace-nav a[href$=proxies]").click()');
+  await navigateAdmin('proxies');
   await wait('Boolean(document.querySelector(".proxy-row"))');
   await click('删除'); await click('确认删除');
   await wait('!document.querySelector(".proxy-row")');
-  await evaluate('document.querySelector(".workspace-nav a[href$=accounts]").click()');
+  await navigateAdmin('accounts');
   await wait('Boolean(document.querySelector(".account-proxy"))');
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
   const localDesktop = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
@@ -877,7 +1123,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("无权访问用户列表")');
   assert.equal(await evaluate('Boolean(document.querySelector(".workspace-nav a[href$=users]"))'), false);
   assert.equal(requests.filter(url => url.includes('/api/users')).length, userRequestsBefore);
-  await evaluate('document.querySelector(".workspace-nav a[href$=audit]").click()');
+  await navigateAdmin('audit');
   await wait('document.body.innerText.includes("HTTP 403")');
   for (const text of ['前端上报','后端执行','已访问','失败','audit@example.com','/admin/accounts']) {
     assert.equal(await evaluate(`document.querySelector('.admin-content').innerText.includes(${JSON.stringify(text)})`),true);

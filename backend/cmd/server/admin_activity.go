@@ -21,6 +21,7 @@ var auditControls = map[string]string{
 	"view": "查看详情", "copy": "复制", "theme": "切换主题", "paginate": "翻页", "test": "测试代理", "get_ip": "获取出口 IP",
 	"assign": "分配处理人", "verify": "核验开通", "refund": "退款", "deposit": "记录存入", "purchase": "记录官网扣款", "group": "管理分组",
 	"subscription": "修改续费提醒", "proxy_create": "新增本机代理", "proxy_update": "编辑本机代理", "proxy_delete": "删除本机代理",
+	"discard":    "废弃订单",
 	"proxy_read": "查看本机代理", "proxy_test": "测试本机代理", "proxy_import": "解析代理导入", "proxy_bind": "绑定账号代理",
 }
 
@@ -130,7 +131,7 @@ func (s *Server) auditFilter(next http.Handler) http.Handler {
 		mutation := r.Method != "GET" && r.Method != "HEAD"
 		// 定时同步与页面轮询不制造操作噪音；用户主动访问、筛选由前端事件覆盖。
 		background := r.URL.Path == "/api/proxy-activity" || strings.HasSuffix(r.URL.Path, "/login")
-		sensitiveRead := strings.HasSuffix(r.URL.Path, "/export") || (strings.HasPrefix(r.URL.Path, "/api/card-operations/") && r.URL.Query().Get("export") == "1") || auditCardDetails.MatchString(r.URL.Path)
+		sensitiveRead := strings.HasSuffix(r.URL.Path, "/export") || (strings.HasPrefix(r.URL.Path, "/api/card-operations/") && r.URL.Query().Get("export") == "1") || auditCardDetails.MatchString(r.URL.Path) || (r.URL.Path == "/api/bank-cards" && r.URL.Query().Get("include_numbers") == "1")
 		if ctx.Recorded && status < 400 {
 			return
 		} // 业务事务内已有完整审计，不重复追加成功记录。
@@ -153,7 +154,7 @@ func (s *Server) auditFilter(next http.Handler) http.Handler {
 
 // 未知路径可能夹带凭据，只保留已知资源、数字 ID 和固定动作段。
 func safeAuditResource(path string) string {
-	known := map[string]bool{"api": true, "accounts": true, "account-groups": true, "addresses": true, "bank-cards": true, "card-operations": true, "orders": true, "packages": true, "users": true, "wallet": true, "topups": true, "audit": true, "proxy-activity": true, "payment-exceptions": true, "notices": true, "order-operators": true, "me": true, "logout": true, "export": true, "import": true, "ledger": true, "access": true, "role": true, "group": true, "login": true, "subscription": true, "browser": true, "browser-session": true, "session": true, "renewal-date": true, "renew": true, "sync": true, "refund": true}
+	known := map[string]bool{"api": true, "accounts": true, "account-groups": true, "addresses": true, "bank-cards": true, "card-operations": true, "orders": true, "packages": true, "users": true, "wallet": true, "topups": true, "audit": true, "proxy-activity": true, "payment-exceptions": true, "notices": true, "order-operators": true, "me": true, "logout": true, "export": true, "import": true, "ledger": true, "access": true, "role": true, "group": true, "login": true, "subscription": true, "browser": true, "browser-session": true, "session": true, "renewal-date": true, "renew": true, "sync": true, "refund": true, "collection-quote": true, "record": true}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	for i, part := range parts {
 		if !known[part] && !auditNumericID.MatchString(part) {

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type queryer interface {
@@ -34,10 +36,36 @@ func jsonRows(ctx context.Context, db queryer, query string, args ...any) ([]jso
 	return items, rows.Err()
 }
 
+// 仅明确标记的业务提示可返回客户端，数据库原始错误始终隐藏。
+type operationConflict string
+
+func (e operationConflict) Error() string { return string(e) }
+
 func operationError(w http.ResponseWriter, err error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		reply(w, map[string]string{"error": "记录不存在或无权访问"}, 404)
 		return
+	}
+	var conflict operationConflict
+	if errors.As(err, &conflict) {
+		reply(w, map[string]string{"error": conflict.Error()}, 409)
+		return
+	}
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && pg.Code == "23505" {
+		var message string
+		switch pg.ConstraintName {
+		case "bank_card_ledger_reference_unique", "recharge_orders_purchase_reference_unique":
+			message = "交易号 / 凭证编号已用于记账，请核对银行卡流水和原订单；同一笔交易不能重复录入"
+		case "bank_card_ledger_order_unique":
+			message = "此订单已扣款，请刷新并查看订单详情，勿重复记账"
+		case "recharge_orders_cycle_unique":
+			message = "此账号已有重叠周期的充值订单，请处理原订单"
+		}
+		if message != "" {
+			reply(w, map[string]string{"error": message}, 409)
+			return
+		}
 	}
 	// 不向客户端返回数据库错误或原始业务内容。
 	reply(w, map[string]string{"error": "操作未完成，请检查记录状态、重复交易或关联对象后重试"}, 409)
@@ -289,7 +317,7 @@ func (s *Server) notices(w http.ResponseWriter, r *http.Request) {
 	admin := s.permitted(r.Context(), user, "orders")
 	// 每次读取实时计算待办，不产生外部消息；按原始业务对象跳转处理。
 	rows, err := jsonRows(r.Context(), s.db, `SELECT jsonb_build_object('kind','renewal','id',id,'label',email,'detail',subscription_ends_at::text,'path','/admin/accounts') FROM chatgpt_accounts WHERE deleted_at IS NULL AND renewal_enabled AND subscription_ends_at<=(NOW() AT TIME ZONE 'Asia/Shanghai')::date+7 AND (user_id=$1 OR $2)
-UNION ALL SELECT jsonb_build_object('kind','order','id',id,'label',order_no,'detail',failure_reason,'path','/admin/orders') FROM recharge_orders WHERE deleted_at IS NULL AND (user_id=$1 OR $2) AND (fulfillment_status='failed' OR (payment_status='paid' AND fulfillment_status NOT IN ('completed','cancelled') AND updated_at<NOW()-INTERVAL '1 day'))
+UNION ALL SELECT jsonb_build_object('kind','order','id',id,'label',order_no,'detail',failure_reason,'path','/admin/orders') FROM recharge_orders WHERE deleted_at IS NULL AND order_status='active' AND (user_id=$1 OR $2) AND (fulfillment_status='failed' OR ((payment_status='paid' OR cost_usd_minor>0) AND fulfillment_status NOT IN ('completed','cancelled') AND updated_at<NOW()-INTERVAL '1 day'))
 UNION ALL SELECT jsonb_build_object('kind','card','id',id,'label',label,'detail','可用余额低于预警值','path','/admin/bank-cards') FROM bank_cards WHERE deleted_at IS NULL AND low_balance_usd_minor>0 AND balance_usd_minor-reserved_usd_minor<low_balance_usd_minor AND (user_id=$1 OR $3)
 UNION ALL SELECT jsonb_build_object('kind','payment','id',e.id,'label',e.order_no,'detail',e.detail,'path','/admin/payment-exceptions') FROM payment_exceptions e WHERE e.status IN ('pending','processing','submitted') AND $4
 LIMIT 200`, user, admin, s.permitted(r.Context(), user, "finance"), s.permitted(r.Context(), user, "refunds"))

@@ -192,6 +192,8 @@ button,input,textarea{font-family:inherit}
   .sidebar-collapsed .admin-sidebar{width:64px;padding-left:8px;padding-right:8px}
   .sidebar-collapsed .admin-content{margin-left:64px}
   .sidebar-collapsed .workspace-nav a{justify-content:center;padding:12px}
+  .sidebar-collapsed .workspace-nav .sidebar-group-toggle{justify-content:center;padding:12px}
+  .sidebar-collapsed .sidebar-chevron{display:none}
   .sidebar-collapsed .sidebar-label,.sidebar-collapsed .sidebar-role{display:none}
 }
 .workspace-nav svg{flex-shrink:0}
@@ -203,6 +205,58 @@ button,input,textarea{font-family:inherit}
 .address-pagination .custom-select{width:126px;flex:none}
 .address-pagination .select-trigger{padding:6px 10px;min-height:32px}
 .search-highlight{background:#fde68a;color:#713f12;border-radius:2px;padding:0}
+.evidence-editor{margin:16px 0;border:1px solid var(--line);border-radius:8px;padding:12px;display:grid;gap:10px}
+.evidence-toolbar,.evidence-block-actions{display:flex;align-items:center;gap:6px}
+.evidence-toolbar>span,.evidence-block-actions>span{margin-right:auto;color:var(--muted);font-size:12px}
+.evidence-block{display:grid;gap:6px;min-width:0}
+.evidence-block-actions .icon-btn{padding:5px;display:inline-flex}
+.evidence-block textarea{min-height:76px;margin:0;resize:vertical}
+.evidence-block img,.evidence-view img{display:block;max-width:100%;max-height:420px;object-fit:contain;object-position:left}
+.evidence-view p{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0}
+.evidence-view figure{margin:10px 0}.evidence-view figcaption{font-size:12px;color:var(--muted);margin-top:6px}
+.evidence-editor input[type=file][hidden]{display:none}
+.image-thumbnail{display:inline-flex;align-items:center;justify-content:center;width:112px;height:88px;padding:4px;border:1px solid var(--line);border-radius:6px;background:var(--inset);cursor:zoom-in;overflow:hidden}
+.image-thumbnail img{display:block;max-width:100%;max-height:100%;object-fit:contain}
+.evidence-block .image-thumbnail img,.evidence-view .image-thumbnail img{max-height:100%;object-position:center}
+.image-preview-dialog{width:min(1200px,calc(100vw - 32px));max-height:94dvh}
+.image-preview-dialog .image-full{display:block;max-width:100%;height:auto;max-height:calc(94dvh - 100px);object-fit:contain;margin:auto}
+.image-upload{display:grid;gap:8px;padding:10px;border:1px dashed var(--line-strong);border-radius:7px;font-size:12px}
+.image-upload input[hidden]{display:none}
+.image-upload:focus-visible{outline:2px solid var(--focus)}
+.bank-card-manager .address-search>input{flex:1;min-width:180px}
+.bank-card-manager .address-search>.custom-select{flex:0 1 210px}
+.bank-card-manager .address-search>button{white-space:nowrap;flex-shrink:0}
+.bank-card-table .image-thumbnail{width:76px;height:60px}
+.workspace-dialog .bank-card-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.bank-card-form>.image-upload,.bank-card-form>.browser-buttons,.bank-card-form>.error{grid-column:1/-1}
+.order-record-dialog{width:min(1180px,calc(100vw - 40px));max-height:calc(100dvh - 40px);padding:20px}
+.order-record-dialog h2{font-size:17px;margin-bottom:12px}
+.workspace-dialog .order-record-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 16px;font-size:12px}
+.order-record-form>label{min-width:0;gap:4px;font-size:11px}
+.order-record-form input,.order-record-form textarea,.order-record-form .select-trigger{font-size:12px;min-height:32px;padding:6px 9px}
+.order-record-form textarea{height:54px;min-height:54px}
+.order-record-form>.collection-fields{display:contents}
+.order-record-form .collection-preview,.order-record-form .collection-details{grid-column:1/-1;margin:0;padding:8px;gap:8px}
+.order-record-form .collection-preview{grid-template-columns:repeat(4,minmax(0,1fr))}
+.collection-quote-actions{display:grid;gap:6px;justify-items:start;min-width:0}
+.order-record-form .collection-rate{font-size:11px;grid-column:auto}
+.order-record-form .collection-rate .cell-secondary{font-size:10px}
+.order-record-form>.evidence-editor{grid-column:1/-1;margin:0;padding:9px;gap:6px}
+.order-record-form .evidence-block{grid-template-columns:112px minmax(0,1fr);align-items:start;gap:6px 10px}
+.order-record-form .evidence-block-actions{grid-column:1/-1}
+.order-record-form .evidence-block textarea,.order-record-form .evidence-block>.browser-buttons{grid-column:1/-1}
+.order-record-form .evidence-block input{width:100%}
+.order-record-form .evidence-toolbar button{min-height:28px;padding:4px 8px;font-size:11px}
+.order-record-form>.browser-buttons,.order-record-form>.error{grid-column:1/-1;margin:0}
+.order-record-form>.browser-buttons{position:sticky;bottom:-2px;background:var(--surface);padding:8px 0 2px;z-index:1}
+@media(max-width:700px){.order-record-dialog{width:calc(100vw - 20px);max-height:calc(100dvh - 20px);padding:14px}.workspace-dialog .order-record-form,.workspace-dialog .bank-card-form{grid-template-columns:1fr}.order-record-form .evidence-block{grid-template-columns:88px minmax(0,1fr)}.order-record-form .image-thumbnail{width:88px;height:72px}}
+.order-status{display:inline-block;padding:3px 8px;border-radius:5px;white-space:nowrap;font-size:12px;border:1px solid var(--line);background:var(--raised)}
+.order-status-refunded{color:var(--danger)}
+.order-status-discarded{color:var(--muted)}
+.collection-fields{display:grid;gap:10px;margin-top:12px}.collection-fields>button{justify-self:start}
+.collection-preview,.collection-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;padding:12px;border:1px solid var(--line);border-radius:8px;margin:10px 0}
+.collection-preview strong{display:block;margin-top:4px}.collection-rate{grid-column:1/-1;font-size:12px;overflow-wrap:anywhere}.profit-positive{color:var(--success)}.order-profit{white-space:nowrap}
+.collection-preview>div,.collection-details>div{min-width:0}.collection-preview .cell-secondary,.collection-details .cell-secondary{display:block;font-size:12px;color:var(--muted);margin-top:4px}
 .admin-shell{min-height:calc(100vh - 64px)}
 .admin-sidebar{position:fixed;top:64px;bottom:0;left:0;width:208px;padding:24px 12px 16px;background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:auto;z-index:4}
 .sidebar-heading{display:none}
@@ -211,6 +265,15 @@ button,input,textarea{font-family:inherit}
 .workspace-nav a:hover{background:var(--inset);color:var(--text)}
 .workspace-nav a[aria-current=page]{background:var(--accent-soft);color:var(--accent);font-weight:600}
 .workspace-nav a:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.sidebar-group-toggle{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:10px 12px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:13px;font-weight:600;text-align:left;cursor:pointer}
+.sidebar-group-toggle:hover{background:var(--inset);color:var(--text)}
+.sidebar-group-toggle.active{color:var(--accent);background:var(--accent-soft)}
+.sidebar-group-toggle:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.sidebar-chevron{margin-left:auto;transition:transform .15s ease}
+.sidebar-group-toggle[aria-expanded=true] .sidebar-chevron{transform:rotate(90deg)}
+.sidebar-submenu{margin:4px 0 6px 20px;padding-left:8px;border-left:1px solid var(--line)}
+.workspace-nav .sidebar-submenu a{min-height:38px;padding:8px 10px;font-size:12px}
+@media(prefers-reduced-motion:reduce){.sidebar-chevron{transition:none}}
 .sidebar-role{margin-top:auto;padding:28px 12px 0;color:var(--muted);font-size:11px}
 .admin-content{margin-left:208px;min-width:0}
 .admin-content .dashboard{width:100%;max-width:none;margin:0;padding:28px 32px 48px}
@@ -226,6 +289,7 @@ button,input,textarea{font-family:inherit}
   .sidebar-toggle{display:inline-flex;margin:16px 16px 0}.sidebar-backdrop{display:block;position:fixed;inset:64px 0 0;background:#0006;z-index:6}
   .admin-content{margin-left:0}.admin-content .dashboard{padding:16px 16px 32px}
   .workspace-nav{display:flex}
+  .workspace-nav .sidebar-submenu a{min-height:44px}
 }
 
 /* 管理列表统一表格密度，宽表仅在自身容器内滚动。 */
@@ -270,3 +334,9 @@ button,input,textarea{font-family:inherit}
 .json-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .json-field.dragging .json-editor { border-color: var(--focus); outline: 2px dashed var(--focus); outline-offset: 2px; }
 .json-drop-hint { margin: 8px 0 0; font-size: 11px; }
+
+.bank-card-wallet span{display:block;font-family:ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere;margin-bottom:6px}
+.bank-card-wallet button{display:inline-flex;align-items:center;gap:4px}
+
+.order-record-form>.order-source-field{grid-column:1/-1}
+@media(max-width:700px){.order-record-form .collection-preview{grid-template-columns:repeat(2,minmax(0,1fr))}}

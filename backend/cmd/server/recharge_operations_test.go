@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -60,38 +61,62 @@ func TestRechargeOrderLifecycle(t *testing.T) {
 	if balance != 900 {
 		t.Fatal("wallet debit duplicated", balance)
 	}
-	purchase := map[string]any{"action": "purchase", "card_id": cid, "amount_usd": "150.00", "reference": "official-purchase-1", "evidence": "official receipt", "request_key": "operation-purchase-1", "version": 1}
+	richEvidence := testRichEvidence(t)
+	purchase := map[string]any{"action": "purchase", "card_id": cid, "reference": "official-purchase-1", "evidence": richEvidence, "request_key": "operation-purchase-1", "version": 1}
 	call("POST", op, 3, purchase, 403)
+	purchase["amount_usd"] = "1.00"
+	call("POST", op, 2, purchase, 409)
+	delete(purchase, "amount_usd")
+	// 套餐编辑后仍按原订单的 SKU 价格记账。
+	pkg["sale_usd_minor"] = 25000
+	call("PATCH", fmt.Sprintf("/api/packages/%.0f", pid), 2, pkg, 200)
 	call("POST", op, 2, purchase, 200)
 	call("POST", op, 2, purchase, 200)
+	detailWithEvidence := call("GET", op, 2, nil, 200)
+	if detailWithEvidence["order"].(map[string]any)["evidence"] != richEvidence {
+		t.Fatal("图文凭据未完整保存")
+	}
+	var notes string
+	if err = db.QueryRow("SELECT notes FROM bank_card_ledger WHERE order_id=$1", id).Scan(&notes); err != nil || strings.Contains(notes, "base64") || !strings.Contains(notes, "账单截图") {
+		t.Fatal("流水摘要无效", err)
+	}
+	call("GET", "/api/order-operators", 2, nil, 404)
+	call("POST", op, 2, map[string]any{"action": "assign", "assignee_id": 2, "version": 2, "request_key": "retired-assignment-01"}, 400)
 	verify := map[string]any{"action": "verify", "success": true, "plan": "pro_20x", "period_end": "2030-02-01", "evidence": "official subscription", "request_key": "operation-verify-001", "version": 2}
 	call("POST", op, 2, verify, 409)
-	verify["plan"] = "plus"
-	call("POST", op, 2, verify, 200)
+	_, expectedEnd := chargedOrderPeriod(time.Now(), 1)
 	var plan string
 	var end string
-	if err = db.QueryRow(`SELECT verified_plan,subscription_ends_at::text FROM chatgpt_accounts WHERE id=1`).Scan(&plan, &end); err != nil || plan != "plus" || end != "2030-02-01" {
-		t.Fatal("verification not persisted", err)
+	if err = db.QueryRow(`SELECT verified_plan,subscription_ends_at::text FROM chatgpt_accounts WHERE id=1`).Scan(&plan, &end); err != nil || plan != "plus" || end != expectedEnd {
+		t.Fatal("扣款开通结果未同步到账号", err)
 	}
-	refund := map[string]any{"action": "refund", "amount_usd": "50.00", "reference": "customer-refund-1", "evidence": "confirmed", "reason": "partial refund", "request_key": "operation-refund-001", "version": 3}
+	refund := map[string]any{"action": "refund_note", "reference": "customer-refund-1", "evidence": richEvidence, "reason": "待核对退款", "request_key": "operation-refund-001", "version": 2}
 	call("POST", op, 3, refund, 403)
 	call("POST", op, 2, refund, 200)
 	call("POST", op, 2, refund, 200)
-	db.QueryRow(`SELECT balance FROM wallets WHERE user_id=1`).Scan(&balance)
-	if balance != 925 {
-		t.Fatal("partial token refund", balance)
+	db.QueryRow("SELECT balance FROM wallets WHERE user_id=1").Scan(&balance)
+	if balance != 900 {
+		t.Fatal("仅登记退款不能返还代币", balance)
+	}
+	recorded := call("GET", op, 2, nil, 200)["order"].(map[string]any)
+	if recorded["order_status"] != "refunded" || recorded["payment_status"] != "paid" || recorded["refunded_usd_minor"] != float64(0) || recorded["refunded_tokens"] != float64(0) || recorded["evidence"] != richEvidence {
+		t.Fatal("退款登记不得改变收款或开通凭据")
+	}
+	var count int
+	db.QueryRow("SELECT count(*) FROM wallet_ledger WHERE kind='order_refund'").Scan(&count)
+	if count != 0 {
+		t.Fatal("退款登记不得产生钱包流水")
 	}
 	refund["version"] = 4
 	refund["request_key"] = "operation-refund-002"
-	refund["amount_usd"] = "151.00"
+	refund["amount_usd"] = "50.00"
 	call("POST", op, 2, refund, 409)
-	refund["amount_usd"] = "150.00"
+	delete(refund, "amount_usd")
+	call("POST", op, 2, refund, 409)
 	refund["reference"] = "customer-refund-2"
-	call("POST", op, 2, refund, 200)
-	db.QueryRow(`SELECT balance FROM wallets WHERE user_id=1`).Scan(&balance)
-	if balance != 1000 {
-		t.Fatal("full refund must restore exact tokens", balance)
-	}
+	call("POST", op, 2, refund, 409)
+	refund["action"] = "refund"
+	call("POST", op, 2, refund, 400)
 	create["account_id"] = 1
 	create["request_key"] = "operation-create-next"
 	create["period_start"] = "2030-02-01"
@@ -105,8 +130,63 @@ func TestRechargeOrderLifecycle(t *testing.T) {
 	}
 	var sum, cardBalance int64
 	db.QueryRow(`SELECT COALESCE(sum(l.amount_usd_minor),0),max(c.balance_usd_minor) FROM bank_card_ledger l JOIN bank_cards c ON c.id=l.card_id WHERE c.id=$1`, cid).Scan(&sum, &cardBalance)
-	if sum != cardBalance || sum != 85000 {
+	if sum != cardBalance || sum != 80000 {
 		t.Fatal("card balance mismatch", sum, cardBalance)
+	}
+	// 结束订单拒绝所有后续变更，且不会通过重复退款释放资金。
+	for _, action := range []string{"collect", "purchase", "verify", "retry", "refund_note", "discard", "cancel"} {
+		call("POST", op, 2, map[string]any{"action": action, "version": 4, "request_key": "closed-order-" + action}, 409)
+	}
+	filtered := call("GET", "/api/orders?status=refunded", 2, nil, 200)
+	if filtered["total"] != float64(1) {
+		t.Fatal("退款状态筛选不正确")
+	}
+	// 同周期：退款后可重建；废弃未付款和已付款订单后均可继续重建及扣款。
+	create["period_start"] = "2030-01-01"
+	for i := 0; i < 3; i++ {
+		create["request_key"] = fmt.Sprintf("replacement-order-%d", i)
+		created := call("POST", "/api/orders", 1, create, 201)
+		if !regexp.MustCompile(`^[0-9]{17}$`).MatchString(created["order_no"].(string)) {
+			t.Fatal("订单号格式错误")
+		}
+		newPath := fmt.Sprintf("/api/orders/%.0f", created["id"])
+		call("POST", "/api/orders", 1, create, 200)
+		create["request_key"] = fmt.Sprintf("replacement-overlap-%d", i)
+		call("POST", "/api/orders", 1, create, 409)
+		version := 0
+		if i > 0 {
+			call("POST", newPath, 2, map[string]any{"action": "collect", "method": "manual", "received_currency": "USD", "received_amount": "300.00", "reference": fmt.Sprintf("replacement-payment-%d", i), "evidence": "receipt", "request_key": "replacement-collect", "version": 0}, 200)
+			newPurchase := map[string]any{"action": "purchase", "card_id": cid, "reference": "official-purchase-1", "evidence": "receipt", "request_key": fmt.Sprintf("replacement-purchase-%d", i), "version": 1}
+			call("POST", newPath, 2, newPurchase, 409)
+			newPurchase["reference"] = fmt.Sprintf("replacement-official-%d", i)
+			call("POST", newPath, 2, newPurchase, 200)
+			call("POST", newPath, 2, newPurchase, 200)
+			version = 2
+		}
+		discard := map[string]any{"action": "discard", "reason": "重新下单", "request_key": "discard-replacement", "version": version}
+		call("POST", newPath, 3, discard, 403)
+		call("POST", newPath, 2, discard, 200)
+		call("POST", newPath, 2, discard, 200)
+		closed := call("GET", newPath, 2, nil, 200)["order"].(map[string]any)
+		if closed["order_status"] != "discarded" {
+			t.Fatal("废弃状态未保存")
+		}
+	}
+	if err := db.QueryRow("SELECT balance_usd_minor FROM bank_cards WHERE id=$1", cid).Scan(&cardBalance); err != nil || cardBalance != 20000 {
+		t.Fatal("重建订单扣款或废弃资金边界错误", cardBalance, err)
+	}
+	if err := db.QueryRow("SELECT balance FROM wallets WHERE user_id=1").Scan(&balance); err != nil || balance != 900 {
+		t.Fatal("废弃不应返还钱包代币", balance, err)
+	}
+	if err := db.QueryRow("SELECT count(*)-count(DISTINCT order_no) FROM recharge_orders").Scan(&count); err != nil || count != 0 {
+		t.Fatal("订单号重复", err)
+	}
+}
+
+func TestRechargeOrderNumberUTC8(t *testing.T) {
+	value, err := rechargeOrderNumber(time.Date(2026, 9, 15, 15, 53, 12, 0, time.UTC))
+	if err != nil || !regexp.MustCompile(`^20260915235312[0-9]{3}$`).MatchString(value) {
+		t.Fatal("订单号需为北京时间加三位数字", value, err)
 	}
 }
 

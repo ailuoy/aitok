@@ -27,7 +27,7 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
     assert.equal(request.headers.authorization, 'Bearer limited-test-token');
     response.setHeader('Content-Type', 'application/json');
     if (request.url.endsWith('/cards/1')) { detailReads++; response.end(JSON.stringify({ card: { ...card, number: '4242424242424242' } })); }
-    else if (request.url.endsWith('/cards/2')) { detailReads++; response.end(JSON.stringify({ card: { ...secondCard, number: '5555555555554444' } })); }
+    else if (request.url.endsWith('/cards/2')) { detailReads++; response.end(JSON.stringify({ card: { ...secondCard, number: '5555555555554444', cvc: '0042' } })); }
     else if (request.url.endsWith('/cards/3')) { detailReads++; response.end(JSON.stringify({ card: { ...demoCard, number: '378282246310005' } })); }
     else response.end(JSON.stringify({ cards: [card, secondCard, demoCard], addresses: [address] }));
   });
@@ -123,11 +123,19 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   await wait(async () => (await nodes()).some(node => text(node) === '5555555555554444'));
   assert.ok((await nodes()).some(node => text(node) === 'SECOND USER'));
   assert.equal((await detailField('完整卡号')).value, '5555555555554444', '切卡后助手详情不残留上一张卡号');
-  assert.equal((await detailField('安全码')).value, '未填写', '切卡后清空详情安全码');
+  assert.equal((await detailField('安全码')).value, '0042', '切卡后展示所选卡保存的安全码，保留前导零');
+  await click('复制安全码');
+  assert.equal(await clipboard(), '0042');
+  await click('填充全部表单');
+  await wait(() => evaluate('document.getElementById("cc-csc").value === "0042"'));
+  assert.equal((await detailField('安全码')).value, '0042', '填充后仍展示保存的安全码');
   const refreshedInput = (await nodes()).find(node => node.nodeName === 'INPUT' && node.attributes?.includes('输入所选银行卡的安全码'));
   const { object } = await cdp.send('DOM.resolveNode', { nodeId: refreshedInput.nodeId }, sessionId);
   const cvcValue = await cdp.send('Runtime.callFunctionOn', { objectId: object.objectId, functionDeclaration: 'function(){return this.value}', returnByValue: true }, sessionId);
   assert.equal(cvcValue.result.value, '', '切卡后清空安全码');
+  const cvcDisplay = await cdp.send('Runtime.callFunctionOn', { objectId: object.objectId, functionDeclaration: 'function(){return getComputedStyle(this.parentElement).display}', returnByValue:true }, sessionId);
+  assert.equal(cvcDisplay.result.value,'none','已保存安全码时不显示临时输入框');
+
   await click('切换下一张卡');
   await wait(async () => (await nodes()).some(node => text(node) === '378282246310005'));
   assert.equal((await detailField('测试安全码')).value, '1234', '明确演示卡显示测试安全码');

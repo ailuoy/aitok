@@ -105,6 +105,16 @@ func TestSchemaSnapshotMatchesMigrations(t *testing.T) {
 		if _, err = tx.Exec(`SET LOCAL search_path TO pg_temp`); err != nil {
 			t.Fatal(err)
 		}
+		// 快照控制新表的展示顺序；历史迁移保留原有物理列顺序。
+		if len(scripts) == 1 && scripts[0] == snapshot {
+			var invalid int
+			err = tx.QueryRow(`SELECT count(*) FROM pg_class c WHERE c.relnamespace=pg_my_temp_schema() AND c.relkind='r'
+AND ARRAY(SELECT a.attname::text FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum DESC LIMIT 3)
+<> ARRAY['deleted_at','updated_at','created_at']`).Scan(&invalid)
+			if err != nil || invalid != 0 {
+				t.Fatalf("快照时间字段必须按 created_at、updated_at、deleted_at 位于末尾：不符合的表数=%d，错误=%v", invalid, err)
+			}
+		}
 		// information_schema 将隔离测试表标为 LOCAL TEMPORARY，生产表为 BASE TABLE。
 		verify := strings.ReplaceAll(read("../../migrations/verify.sql"), "t.table_type = 'BASE TABLE'", "t.table_type = 'LOCAL TEMPORARY'")
 		checks, err := tx.Query(verify)
@@ -114,11 +124,12 @@ func TestSchemaSnapshotMatchesMigrations(t *testing.T) {
 		checkedTables := 0
 		for checks.Next() {
 			var database, schema, table, status, missing, invalid, triggers string
-			if err = checks.Scan(&database, &schema, &table, &status, &missing, &invalid, &triggers); err != nil {
+			var invalidID bool
+			if err = checks.Scan(&database, &schema, &table, &status, &missing, &invalid, &triggers, &invalidID); err != nil {
 				t.Fatal(err)
 			}
 			if status != "OK" {
-				t.Errorf("%s 结构核对失败: %s %s %s %s", table, status, missing, invalid, triggers)
+				t.Errorf("%s 结构核对失败: %s %s %s %s invalid_id=%t", table, status, missing, invalid, triggers, invalidID)
 			}
 			checkedTables++
 		}
@@ -168,10 +179,20 @@ INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,
 (2,9002,'schema-cycle-reversed','subscription',-100,900,9900,'history@test.local','2030-01-01','2030-02-01',NOW(),'schema-original'),
 (2,9002,'schema-cycle-correct','subscription',-100,900,9900,'history@test.local','2030-01-01','2030-02-01',NULL,'schema-correct'),
 (2,9002,'schema-cycle-next','subscription',-100,800,9900,'history@test.local','2030-02-01','2030-03-01',NULL,'schema-next');`
+	closedOrders := duplicateHistory + `
+INSERT INTO recharge_orders(id,order_no,user_id,account_id,account_email,package_id,package_snapshot,period_start,period_end,sale_usd_minor,request_key,order_status) VALUES
+(101,'closed-refund',9002,9900,'closed@test.local',1,'{}','2030-01-01','2030-02-01',100,'closed-refund','refunded'),
+(102,'closed-discard',9002,9900,'closed@test.local',1,'{}','2030-01-01','2030-02-01',100,'closed-discard','discarded'),
+(103,'closed-new',9002,9900,'closed@test.local',1,'{}','2030-01-01','2030-02-01',100,'closed-new','active');
+INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,balance_after_usd_minor,order_id,account_email,period_start,period_end,external_reference) VALUES
+(2,9002,'closed-charge-1','subscription',-100,900,101,'closed@test.local','2030-01-01','2030-02-01','closed-charge-1'),
+(2,9002,'closed-charge-2','subscription',-100,800,102,'closed@test.local','2030-01-01','2030-02-01','closed-charge-2'),
+(2,9002,'closed-charge-3','subscription',-100,700,103,'closed@test.local','2030-01-01','2030-02-01','closed-charge-3');`
 	for _, scenario := range []struct {
 		name    string
 		scripts []string
 	}{
+		{"退款废弃后同周期重建并重复升级", []string{snapshot, closedOrders, release, release}},
 		{"人民币汇率历史后重复升级", []string{snapshot, `INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at) VALUES('PHP','USD',0.01589,'test',NOW()),('PHP','CNY',0.1067,'test',NOW());`, release, release}},
 		{"多周期与冲正历史后重复升级", []string{snapshot, multiCycleHistory, release, release}},
 		{"编号迁移", []string{chain.String()}},

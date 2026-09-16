@@ -1,33 +1,43 @@
--- 只读核对所有业务表、字段、时间定义及禁用数据库特性。
+-- 只读核对所有业务表、字段、独立自增 ID 主键、时间定义及禁用数据库特性。
 WITH required(table_name,column_names) AS (VALUES
-('users',ARRAY['created_at','deleted_at','disabled','email','id','password_hash','permissions','role','session_version','totp_ciphertext','totp_pending_ciphertext','totp_pending_expires_at','totp_enabled_at','totp_last_step','updated_at']),
-('account_groups',ARRAY['created_at','deleted_at','id','name','updated_at','user_id']),
-('chatgpt_accounts',ARRAY['api_key','created_at','deleted_at','email','group_id','id','label','last_login_at','renewal_date','renewal_enabled','session_ciphertext','subscription_ends_at','updated_at','user_id','verified_at','verified_plan']),
-('email_codes',ARRAY['attempts','code','created_at','deleted_at','email','expires_at','id','purpose','updated_at']),
-('wallets',ARRAY['balance','created_at','deleted_at','updated_at','user_id']),
-('topup_orders',ARRAY['amount_minor','checkout_url','created_at','currency','deleted_at','dispute_status','order_no','payment_intent','price_id','quantity','refunded_minor','request_key','reversed_tokens','session_id','status','tokens','unit_amount_minor','updated_at','user_id']),
-('wallet_ledger',ARRAY['amount','balance_after','created_at','deleted_at','description','id','kind','reference','updated_at','user_id']),
-('account_renewals',ARRAY['account_id','account_label','created_at','deleted_at','months','renewal_date','request_key','tokens','updated_at','user_id']),
-('renewal_date_audit',ARRAY['account_id','admin_id','created_at','deleted_at','id','previous_date','renewal_date','updated_at']),
-('addresses',ARRAY['address_line1','address_line2','city','country','created_at','deleted_at','full_name','id','postal_code','source_data','source_key','source_url','state','updated_at','user_id']),
-('bank_cards',ARRAY['balance_usd_minor','brand','cardholder','created_at','daily_limit_usd_minor','deleted_at','exp_month','exp_year','id','label','last4','low_balance_usd_minor','notes','number_ciphertext','number_fingerprint','platform','reserved_usd_minor','status','updated_at','user_id']),
-('bank_card_ledger',ARRAY['reversed_at','account_email','account_id','account_label','actor_id','amount_usd_minor','balance_after_usd_minor','card_id','created_at','currency','deleted_at','external_reference','id','kind','notes','order_id','original_amount_minor','original_php_minor','period_end','period_start','reference_id','request_key','updated_at']),
-('recharge_packages',ARRAY['auto_usd','created_at','currency','deleted_at','enabled','id','months','name','notes','original_amount_minor','plan','region','sale_usd_minor','updated_at','wallet_tokens']),
-('recharge_orders',ARRAY['account_email','account_id','assignee_id','card_id','cost_usd_minor','created_at','deleted_at','evidence','failure_reason','fulfillment_status','id','notes','order_no','package_id','package_snapshot','payment_method','payment_reference','payment_status','period_end','period_start','purchase_reference','refunded_tokens','refunded_usd_minor','request_key','sale_usd_minor','updated_at','user_id','verified_at','version','wallet_tokens']),
-('operation_events',ARRAY['action','actor_id','after_data','before_data','created_at','deleted_at','entity_id','entity_type','id','request_key','updated_at']),
-('auth_limits',ARRAY['count','created_at','deleted_at','key','updated_at','window_start']),
-('card_holds',ARRAY['actor_id','amount_usd_minor','card_id','created_at','deleted_at','id','notes','reference','status','updated_at']),
-('card_statement_rows',ARRAY['actor_id','amount_usd_minor','card_id','created_at','deleted_at','description','external_reference','id','occurred_at','resolution','updated_at']),
-('proxy_activity',ARRAY['created_at','data','deleted_at','device_id','event_id','id','updated_at','user_id']),
+('users',ARRAY['id','email','password_hash','role','session_version','disabled','permissions','totp_ciphertext','totp_pending_ciphertext','totp_pending_expires_at','totp_enabled_at','totp_last_step','created_at','updated_at','deleted_at']),
+('account_groups',ARRAY['id','user_id','name','created_at','updated_at','deleted_at']),
+('chatgpt_accounts',ARRAY['id','user_id','label','email','api_key','session_ciphertext','renewal_date','group_id','last_login_at','verified_plan','verified_at','subscription_ends_at','renewal_enabled','created_at','updated_at','deleted_at']),
+('email_codes',ARRAY['id','email','purpose','code','expires_at','attempts','created_at','updated_at','deleted_at']),
+('wallets',ARRAY['id','user_id','balance','created_at','updated_at','deleted_at']),
+('topup_orders',ARRAY['id','order_no','user_id','request_key','amount_minor','tokens','currency','status','session_id','checkout_url','quantity','unit_amount_minor','price_id','payment_intent','refunded_minor','reversed_tokens','dispute_status','created_at','updated_at','deleted_at']),
+('wallet_ledger',ARRAY['id','user_id','amount','balance_after','kind','reference','description','created_at','updated_at','deleted_at']),
+('account_renewals',ARRAY['id','user_id','request_key','account_id','tokens','renewal_date','account_label','months','created_at','updated_at','deleted_at']),
+('renewal_date_audit',ARRAY['id','account_id','admin_id','previous_date','renewal_date','created_at','updated_at','deleted_at']),
+('addresses',ARRAY['id','address_line1','address_line2','city','state','postal_code','country','source_url','source_key','user_id','full_name','source_data','created_at','updated_at','deleted_at']),
+('bank_cards',ARRAY['id','user_id','label','cardholder','number_ciphertext','number_fingerprint','last4','brand','exp_month','exp_year','platform','notes','balance_usd_minor','status','daily_limit_usd_minor','low_balance_usd_minor','reserved_usd_minor','wallet_address','cvc_ciphertext','wallet_qr_image','created_at','updated_at','deleted_at']),
+('bank_card_ledger',ARRAY['id','card_id','actor_id','request_key','kind','amount_usd_minor','balance_after_usd_minor','account_id','account_label','account_email','original_php_minor','notes','order_id','reversed_at','reference_id','external_reference','period_start','period_end','currency','original_amount_minor','created_at','updated_at','deleted_at']),
+('recharge_packages',ARRAY['auto_usd','id','name','plan','region','currency','original_amount_minor','sale_usd_minor','wallet_tokens','months','enabled','notes','created_at','updated_at','deleted_at']),
+('recharge_orders',ARRAY['id','order_no','user_id','account_id','account_email','package_id','package_snapshot','period_start','period_end','sale_usd_minor','wallet_tokens','order_status','payment_method','payment_status','fulfillment_status','payment_reference','purchase_reference','card_id','cost_usd_minor','refunded_usd_minor','refunded_tokens','assignee_id','evidence','failure_reason','notes','request_key','version','verified_at','received_currency','received_amount_minor','received_usd_minor','received_exchange_rate','received_at','order_source','created_at','updated_at','deleted_at']),
+('operation_events',ARRAY['id','actor_id','entity_type','entity_id','action','request_key','before_data','after_data','created_at','updated_at','deleted_at']),
+('auth_limits',ARRAY['id','key','count','window_start','created_at','updated_at','deleted_at']),
+('card_holds',ARRAY['id','card_id','amount_usd_minor','reference','status','actor_id','notes','created_at','updated_at','deleted_at']),
+('card_statement_rows',ARRAY['id','card_id','external_reference','amount_usd_minor','occurred_at','description','resolution','actor_id','created_at','updated_at','deleted_at']),
+('proxy_activity',ARRAY['id','user_id','device_id','event_id','data','created_at','updated_at','deleted_at']),
 ('exchange_rates',ARRAY['id','base_currency','quote_currency','rate','source','effective_at','created_at','updated_at','deleted_at']),
-('payment_exceptions',ARRAY['amount_minor','created_at','deleted_at','detail','event_id','id','kind','order_no','status','updated_at'])
+('payment_exceptions',ARRAY['id','event_id','order_no','kind','amount_minor','status','detail','created_at','updated_at','deleted_at'])
 ), checked AS (
 SELECT table_name,
  ARRAY(SELECT name FROM unnest(column_names) name WHERE NOT EXISTS(SELECT 1 FROM information_schema.columns c WHERE c.table_schema=current_schema() AND c.table_name=r.table_name AND c.column_name=name)) missing,
  ARRAY(SELECT c.column_name FROM information_schema.columns c WHERE c.table_schema=current_schema() AND c.table_name=r.table_name AND c.column_name IN ('created_at','updated_at','deleted_at') AND (c.data_type<>'timestamp with time zone' OR (c.column_name<>'deleted_at' AND (c.is_nullable<>'NO' OR c.column_default IS NULL)) OR (c.column_name='deleted_at' AND c.is_nullable<>'YES'))) invalid,
  ARRAY(SELECT t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name AND NOT t.tgisinternal) triggers,
  EXISTS(SELECT 1 FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name AND k.contype='f') has_fk,
+ NOT EXISTS(
+   SELECT 1 FROM pg_class c
+   JOIN pg_attribute a ON a.attrelid=c.oid AND a.attname='id' AND NOT a.attisdropped
+   JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
+   JOIN pg_constraint k ON k.conrelid=c.oid AND k.contype='p' AND k.conkey=ARRAY[a.attnum]
+   WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name
+     AND a.atttypid='bigint'::regtype AND a.attnotnull
+     AND pg_get_serial_sequence(format('%I.%I',current_schema(),r.table_name),'id') IS NOT NULL
+     AND pg_get_expr(d.adbin,d.adrelid) LIKE 'nextval(%'
+ ) invalid_id,
  (r.table_name='exchange_rates' AND (SELECT count(*) FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name AND k.conname IN ('exchange_rates_quote_currency_check','exchange_rates_rate_check') AND pg_get_constraintdef(k.oid) LIKE '%CNY%')<>2) invalid_fx_constraints
 FROM required r
 )
-SELECT current_database(),current_schema(),table_name,CASE WHEN cardinality(missing)+cardinality(invalid)+cardinality(triggers)>0 OR has_fk OR invalid_fx_constraints THEN 'INVALID' ELSE 'OK' END,missing,invalid,triggers FROM checked ORDER BY table_name;
+SELECT current_database(),current_schema(),table_name,CASE WHEN cardinality(missing)+cardinality(invalid)+cardinality(triggers)>0 OR has_fk OR invalid_fx_constraints OR invalid_id THEN 'INVALID' ELSE 'OK' END,missing,invalid,triggers,invalid_id FROM checked ORDER BY table_name;

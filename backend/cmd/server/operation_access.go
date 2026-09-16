@@ -79,23 +79,6 @@ func (s *Server) userAccess(w http.ResponseWriter, r *http.Request, target int64
 	reply(w, map[string]bool{"ok": true}, 200)
 }
 
-func (s *Server) orderOperators(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		w.WriteHeader(405)
-		return
-	}
-	_, ok := s.requirePermission(w, r, "orders")
-	if !ok {
-		return
-	}
-	rows, err := jsonRows(r.Context(), s.db, `SELECT jsonb_build_object('id',id,'email',email) FROM users WHERE deleted_at IS NULL AND NOT disabled AND (email=$1 OR role='admin') ORDER BY id LIMIT 500`, adminIdentity)
-	if err != nil {
-		operationError(w, err)
-		return
-	}
-	reply(w, map[string]any{"users": rows}, 200)
-}
-
 type auditWriter struct {
 	http.ResponseWriter
 	status int

@@ -1,6 +1,7 @@
--- 当前完整表结构快照（截至 018_admin_two_factor）：21 张业务表。
+-- 当前完整表结构快照（截至 025_table_ids）：21 张业务表，均有独立的自增 id 主键。
 -- 包含字段、默认值、约束、索引和表注释；不包含业务数据或环境凭据。
 -- 可在空库独立初始化；已有数据库升级使用 release.sql / 新增编号迁移。
+-- 所有表的最后三个字段依次为 created_at、updated_at、deleted_at；表级约束列在字段之后。
 -- 每次表结构变更必须同步本文件，详见项目根目录 agent.md。
 
 BEGIN;
@@ -12,10 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
   email TEXT NOT NULL,
   password_hash TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   role TEXT DEFAULT 'user' CHECK (role IN ('', 'user', 'admin')),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  deleted_at TIMESTAMPTZ,
   session_version BIGINT NOT NULL DEFAULT 0,
   disabled BOOLEAN NOT NULL DEFAULT FALSE,
   permissions TEXT[],
@@ -23,7 +21,10 @@ CREATE TABLE IF NOT EXISTS users (
   totp_pending_ciphertext TEXT,
   totp_pending_expires_at TIMESTAMPTZ,
   totp_enabled_at TIMESTAMPTZ,
-  totp_last_step BIGINT NOT NULL DEFAULT -1
+  totp_last_step BIGINT NOT NULL DEFAULT -1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
 );
 COMMENT ON TABLE users IS '系统用户与角色；管理员验证器密钥加密保存，待绑定密钥限时确认，TOTP 时间步防重放；空角色按普通用户处理';
 
@@ -45,17 +46,17 @@ CREATE TABLE IF NOT EXISTS chatgpt_accounts (
   label TEXT NOT NULL,
   email TEXT NOT NULL,
   api_key TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   session_ciphertext TEXT,
   renewal_date DATE,
   group_id BIGINT,
   last_login_at TIMESTAMPTZ,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  deleted_at TIMESTAMPTZ,
   verified_plan TEXT NOT NULL DEFAULT '',
   verified_at TIMESTAMPTZ,
   subscription_ends_at DATE,
-  renewal_enabled BOOLEAN NOT NULL DEFAULT TRUE
+  renewal_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
 );
 COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、上次登录、人工续订日期及有订单凭据的订阅核验状态。';
 
@@ -66,26 +67,29 @@ CREATE TABLE IF NOT EXISTS email_codes (
   purpose TEXT NOT NULL,
   code TEXT NOT NULL,
   expires_at TIMESTAMPTZ NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  deleted_at TIMESTAMPTZ,
-  attempts INTEGER NOT NULL DEFAULT 0
+  deleted_at TIMESTAMPTZ
 );
 COMMENT ON TABLE email_codes IS '邮箱验证码：按邮箱及用途保存验证码哈希和过期时间。';
 
 -- 代币钱包：保存平台用户的代币余额，与银行卡 USD 资金账本独立。
 CREATE TABLE IF NOT EXISTS wallets (
-  user_id BIGINT PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL,
   balance BIGINT NOT NULL DEFAULT 0 CHECK (balance >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
 );
 COMMENT ON TABLE wallets IS '代币钱包：保存平台用户的代币余额，与银行卡 USD 资金账本独立。';
+CREATE UNIQUE INDEX IF NOT EXISTS wallets_user_id_key ON wallets(user_id);
 
 -- 钱包充值订单：记录 Stripe 付款状态、USD 最小货币单位金额、代币数量、价格和幂等请求。
 CREATE TABLE IF NOT EXISTS topup_orders (
-  order_no TEXT PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
+  order_no TEXT NOT NULL,
   user_id BIGINT NOT NULL,
   request_key TEXT NOT NULL,
   amount_minor BIGINT NOT NULL CHECK (amount_minor > 0),
@@ -94,19 +98,20 @@ CREATE TABLE IF NOT EXISTS topup_orders (
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','expired','failed')),
   session_id TEXT UNIQUE,
   checkout_url TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity BETWEEN 1 AND 100),
   unit_amount_minor BIGINT,
   price_id TEXT,
-  UNIQUE(user_id, request_key),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  deleted_at TIMESTAMPTZ,
   payment_intent TEXT NOT NULL DEFAULT '',
   refunded_minor BIGINT NOT NULL DEFAULT 0 CHECK (refunded_minor>=0),
   reversed_tokens BIGINT NOT NULL DEFAULT 0 CHECK (reversed_tokens>=0),
-  dispute_status TEXT NOT NULL DEFAULT ''
+  dispute_status TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE(user_id, request_key)
 );
 COMMENT ON TABLE topup_orders IS '钱包充值订单：记录 Stripe 付款状态、USD 最小货币单位金额、代币数量、价格和幂等请求。';
+CREATE UNIQUE INDEX IF NOT EXISTS topup_orders_order_no_key ON topup_orders(order_no);
 
 -- 代币钱包流水：记录代币收支、交易后余额及业务引用，保留历史充值和续订记录。
 CREATE TABLE IF NOT EXISTS wallet_ledger (
@@ -125,19 +130,20 @@ COMMENT ON TABLE wallet_ledger IS '代币钱包流水：记录代币收支、交
 
 -- 历史账号续订记录：保存代币扣款、续订日期及账号快照；账号删除后仍保留。
 CREATE TABLE IF NOT EXISTS account_renewals (
+  id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL,
   request_key TEXT NOT NULL,
   account_id BIGINT NOT NULL,
   tokens BIGINT NOT NULL CHECK (tokens > 0),
   renewal_date DATE NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   account_label TEXT,
   months INTEGER,
-  PRIMARY KEY(user_id, request_key),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
 );
 COMMENT ON TABLE account_renewals IS '历史账号续订记录：保存代币扣款、续订日期及账号快照；账号删除后仍保留。';
+CREATE UNIQUE INDEX IF NOT EXISTS account_renewals_user_id_request_key_key ON account_renewals(user_id,request_key);
 
 -- 续订日期审计：记录管理员设置账号续订日期前后的值和操作时间。
 CREATE TABLE IF NOT EXISTS renewal_date_audit (
@@ -163,11 +169,11 @@ CREATE TABLE IF NOT EXISTS addresses (
   country TEXT NOT NULL DEFAULT 'US' CHECK (country ~ '^[A-Z]{2}$'),
   source_url TEXT NOT NULL DEFAULT '',
   source_key TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   user_id BIGINT,
   full_name TEXT NOT NULL DEFAULT '' CHECK (length(full_name) <= 120),
   source_data JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(source_data) = 'object'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
 );
 COMMENT ON TABLE addresses IS '账单地址库：保存姓名、地址及完整来源资料；无所属用户的记录为共享地址。';
@@ -184,18 +190,21 @@ CREATE TABLE IF NOT EXISTS bank_cards (
   brand TEXT NOT NULL,
   exp_month INTEGER NOT NULL CHECK (exp_month BETWEEN 1 AND 12),
   exp_year INTEGER NOT NULL CHECK (exp_year BETWEEN 2000 AND 9999),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   platform TEXT NOT NULL DEFAULT '' CHECK (length(platform) <= 80),
   notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 1000),
   balance_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (balance_usd_minor BETWEEN 0 AND 1000000000000),
-  deleted_at TIMESTAMPTZ,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','invalid')),
   daily_limit_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (daily_limit_usd_minor>=0),
   low_balance_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (low_balance_usd_minor>=0),
-  reserved_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (reserved_usd_minor>=0)
+  reserved_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (reserved_usd_minor>=0),
+  wallet_address TEXT NOT NULL DEFAULT '' CHECK (char_length(wallet_address)<=200),
+  cvc_ciphertext TEXT NOT NULL DEFAULT '',
+  wallet_qr_image TEXT NOT NULL DEFAULT '' CHECK (octet_length(wallet_qr_image)<=2800000),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
 );
-COMMENT ON TABLE bank_cards IS '银行卡：加密卡号、平台、备注、USD 美分余额、冻结金额、可用状态和限额；不保存安全码。';
+COMMENT ON TABLE bank_cards IS '银行卡：加密卡号及安全码、平台、备注、钱包地址二维码截图、历史钱包地址、USD 美分余额、冻结金额、状态和限额；图片仅供人工转账使用，不自动付款。';
 
 -- 银行卡 USD 对账流水：记录初始余额、存入、账号开通支出及交易后余额，保存账号和 PHP 原价快照，按请求和账号防重复扣款。
 CREATE TABLE IF NOT EXISTS bank_card_ledger (
@@ -211,10 +220,6 @@ CREATE TABLE IF NOT EXISTS bank_card_ledger (
   account_email TEXT NOT NULL DEFAULT '',
   original_php_minor BIGINT,
   notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 4000),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (card_id, request_key),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  deleted_at TIMESTAMPTZ,
   order_id BIGINT,
   reversed_at TIMESTAMPTZ,
   reference_id BIGINT,
@@ -223,6 +228,10 @@ CREATE TABLE IF NOT EXISTS bank_card_ledger (
   period_end DATE,
   currency TEXT NOT NULL DEFAULT 'USD',
   original_amount_minor BIGINT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ,
+  UNIQUE (card_id, request_key),
   CONSTRAINT bank_card_ledger_sign_check CHECK ((kind IN ('opening','deposit','refund') AND amount_usd_minor>0) OR (kind IN ('subscription','fee') AND amount_usd_minor<0) OR kind IN ('reversal','adjustment'))
 );
 COMMENT ON TABLE bank_card_ledger IS '银行卡 USD 资金流水：初始余额、存入、周期购买、退款、冲正及费用，记录实际原币价格和历史交易号，冲正不覆盖原流水。';
@@ -247,7 +256,7 @@ SET LOCAL statement_timeout = '5min';
 
 
 CREATE TABLE IF NOT EXISTS recharge_packages (
-    auto_usd BOOLEAN NOT NULL DEFAULT FALSE,
+  auto_usd BOOLEAN NOT NULL DEFAULT FALSE,
   id BIGSERIAL PRIMARY KEY,
   name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
   plan TEXT NOT NULL CHECK (plan IN ('plus','pro_5x','pro_20x')),
@@ -277,6 +286,7 @@ CREATE TABLE IF NOT EXISTS recharge_orders (
   period_end DATE NOT NULL CHECK (period_end>period_start),
   sale_usd_minor BIGINT NOT NULL CHECK (sale_usd_minor>0),
   wallet_tokens BIGINT NOT NULL DEFAULT 0,
+  order_status TEXT NOT NULL DEFAULT 'active' CHECK (order_status IN ('active','refunded','discarded')),
   payment_method TEXT NOT NULL DEFAULT '',
   payment_status TEXT NOT NULL DEFAULT 'unpaid' CHECK (payment_status IN ('unpaid','paid','partial_refund','refunded')),
   fulfillment_status TEXT NOT NULL DEFAULT 'pending' CHECK (fulfillment_status IN ('pending','processing','verifying','completed','failed','cancelled')),
@@ -293,16 +303,26 @@ CREATE TABLE IF NOT EXISTS recharge_orders (
   request_key TEXT NOT NULL,
   version BIGINT NOT NULL DEFAULT 0,
   verified_at TIMESTAMPTZ,
+  received_currency TEXT NOT NULL DEFAULT '' CHECK (received_currency IN ('','CNY','USD')),
+  received_amount_minor BIGINT NOT NULL DEFAULT 0 CHECK (received_amount_minor>=0),
+  received_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (received_usd_minor>=0),
+  received_exchange_rate JSONB,
+  received_at TIMESTAMPTZ,
+  order_source TEXT NOT NULL DEFAULT '' CHECK (char_length(order_source)<=80),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ,
-  UNIQUE(user_id,request_key)
+  UNIQUE(user_id,request_key),
+  CONSTRAINT recharge_orders_receipt_complete CHECK (
+    (received_currency='' AND received_amount_minor=0 AND received_usd_minor=0 AND received_exchange_rate IS NULL AND received_at IS NULL)
+    OR (received_currency IN ('CNY','USD') AND received_amount_minor>0 AND received_usd_minor>0 AND received_exchange_rate IS NOT NULL AND jsonb_typeof(received_exchange_rate)='object' AND received_at IS NOT NULL)
+  )
 );
-CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_cycle_unique ON recharge_orders(user_id,account_email,period_start,period_end) WHERE fulfillment_status<>'cancelled';
+CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_cycle_unique ON recharge_orders(user_id,account_email,period_start,period_end) WHERE order_status='active' AND payment_status<>'refunded' AND fulfillment_status<>'cancelled';
 CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_payment_reference_unique ON recharge_orders(payment_reference) WHERE payment_reference<>'';
 CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_purchase_reference_unique ON recharge_orders(purchase_reference) WHERE purchase_reference<>'';
 CREATE INDEX IF NOT EXISTS recharge_orders_owner_idx ON recharge_orders(user_id,id DESC);
-COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：客户收款、官网扣款与开通核验分别记录，按账号邮箱及周期防重，金额为 USD 美分。';
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存订单来源、下单 SKU 和汇率快照、CNY/USD 实收及收款汇率快照；来源可自定义并从未删除订单汇总为下拉选项；毛利按实收减成本计算，历史未知实收不推算；退款或废弃释放周期且禁止继续操作，金额均为对应币种的分。';
 
 CREATE TABLE IF NOT EXISTS operation_events (
   id BIGSERIAL PRIMARY KEY,
@@ -322,7 +342,8 @@ CREATE INDEX IF NOT EXISTS operation_events_history_idx ON operation_events(enti
 COMMENT ON TABLE operation_events IS '操作审计：记录操作者、操作及非敏感前后快照，同时保存订单操作幂等结果，不记录卡号、密码和 Session。';
 
 CREATE TABLE IF NOT EXISTS auth_limits (
-  key TEXT PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
+  key TEXT NOT NULL,
   count INTEGER NOT NULL DEFAULT 0,
   window_start TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -330,10 +351,11 @@ CREATE TABLE IF NOT EXISTS auth_limits (
   deleted_at TIMESTAMPTZ
 );
 COMMENT ON TABLE auth_limits IS '认证限流：按不可逆摘要保存邮箱或来源的窗口计数，多进程共享，不保存明文凭据。';
+CREATE UNIQUE INDEX IF NOT EXISTS auth_limits_key_key ON auth_limits(key);
 
 CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_legacy_subscription_idx ON bank_card_ledger(account_id) WHERE kind='subscription' AND order_id IS NULL AND period_start IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_order_unique ON bank_card_ledger(order_id) WHERE kind='subscription' AND order_id IS NOT NULL AND reversed_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_cycle_unique ON bank_card_ledger(account_email,period_start,period_end) WHERE kind='subscription' AND period_start IS NOT NULL AND reversed_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_cycle_unique ON bank_card_ledger(account_email,period_start,period_end) WHERE kind='subscription' AND order_id IS NULL AND period_start IS NOT NULL AND reversed_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_reference_unique ON bank_card_ledger(external_reference) WHERE external_reference<>'';
 CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_reversal_unique ON bank_card_ledger(reference_id) WHERE kind='reversal';
 
@@ -398,18 +420,18 @@ COMMENT ON TABLE payment_exceptions IS '支付异常：记录 Stripe 退款、�
 COMMIT;
 
 CREATE TABLE IF NOT EXISTS exchange_rates (
-    id BIGSERIAL PRIMARY KEY,
-    base_currency TEXT NOT NULL CHECK (base_currency = 'PHP'),
-    quote_currency TEXT NOT NULL CHECK (quote_currency IN ('USD','CNY')),
-    rate NUMERIC(20,12) NOT NULL CONSTRAINT exchange_rates_rate_check CHECK (
+  id BIGSERIAL PRIMARY KEY,
+  base_currency TEXT NOT NULL CHECK (base_currency = 'PHP'),
+  quote_currency TEXT NOT NULL CHECK (quote_currency IN ('USD','CNY')),
+  rate NUMERIC(20,12) NOT NULL CONSTRAINT exchange_rates_rate_check CHECK (
     (quote_currency='USD' AND rate >= 0.001 AND rate <= 0.1)
     OR (quote_currency='CNY' AND rate >= 0.01 AND rate <= 1)
 ),
-    source TEXT NOT NULL,
-    effective_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ
+  source TEXT NOT NULL,
+  effective_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS exchange_rates_latest_idx ON exchange_rates(base_currency,quote_currency,created_at DESC,id DESC) WHERE deleted_at IS NULL;
 COMMENT ON TABLE exchange_rates IS '每日汇率同步历史：rate 表示 1 PHP 折合 quote_currency（USD 或 CNY）的金额；同批币种在一个事务内写入并共享生效与同步时间，保留来源及软删除历史，供套餐折算与订单快照追溯。';

@@ -25,13 +25,14 @@ import (
 )
 
 type Server struct {
-	db      *sql.DB
-	secret  []byte
-	admin   adminConfig
-	mailer  *cloudflareMailer
-	billing billingConfig
-	stripe  stripeGateway
-	browser browserService
+	db                *sql.DB
+	secret            []byte
+	admin             adminConfig
+	mailer            *cloudflareMailer
+	billing           billingConfig
+	stripe            stripeGateway
+	browser           browserService
+	exchangeRateFetch func(context.Context, time.Time) (*ExchangeRate, error)
 }
 type User struct {
 	ID          int64    `json:"id"`

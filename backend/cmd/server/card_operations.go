@@ -35,10 +35,10 @@ func postCardEntry(r *http.Request, tx *sql.Tx, actor, cardID int64, p cardPosti
 	if p.Amount < 0 {
 		now := time.Now().UTC()
 		if status != "active" || year < now.Year() || (year == now.Year() && month < int(now.Month())) {
-			return fmt.Errorf("card unavailable")
+			return operationConflict("付款卡已停用或过期，请检查银行卡状态和有效期")
 		}
 		if balance+p.Amount < reserved {
-			return fmt.Errorf("insufficient available balance")
+			return operationConflict("付款卡可用 USD 余额不足，请核对卡片余额及预授权占用金额")
 		}
 		if limit > 0 {
 			var spent int64
@@ -47,7 +47,7 @@ func postCardEntry(r *http.Request, tx *sql.Tx, actor, cardID int64, p cardPosti
 				return err
 			}
 			if spent-p.Amount > limit {
-				return fmt.Errorf("daily limit")
+				return operationConflict("本次扣款将超过付款卡的每日限额，请核对当日支出及限额设置")
 			}
 		}
 	}
@@ -81,12 +81,13 @@ func postCardEntry(r *http.Request, tx *sql.Tx, actor, cardID int64, p cardPosti
 			return err
 		}
 		var overlaps bool
-		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM bank_card_ledger WHERE kind='subscription' AND account_email=$1 AND period_start<$3::date AND period_end>$2::date AND reversed_at IS NULL)`, p.AccountEmail, p.PeriodStart, p.PeriodEnd).Scan(&overlaps)
+		// 新订单可接替已结束订单的周期，原支出和交易号仍保留；无订单的直接扣款不放宽防重。
+		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM bank_card_ledger l WHERE kind='subscription' AND account_email=$1 AND period_start<$3::date AND period_end>$2::date AND reversed_at IS NULL AND NOT ($4 AND EXISTS(SELECT 1 FROM recharge_orders o WHERE o.id=l.order_id AND o.order_status IN ('refunded','discarded'))))`, p.AccountEmail, p.PeriodStart, p.PeriodEnd, p.OrderID != nil).Scan(&overlaps)
 		if err != nil {
 			return err
 		}
 		if overlaps {
-			return fmt.Errorf("overlapping subscription charge")
+			return operationConflict("此账号在该周期已有扣款流水，请核对原订单及银行卡流水，勿重复记账")
 		}
 	}
 	var start, end, original any
@@ -206,7 +207,7 @@ func (s *Server) cardOperations(w http.ResponseWriter, r *http.Request) {
 		}
 		if linked.Valid {
 			var locked int64
-			err = tx.QueryRowContext(r.Context(), `SELECT id FROM recharge_orders WHERE id=$1 FOR UPDATE`, linked.Int64).Scan(&locked)
+			err = tx.QueryRowContext(r.Context(), `SELECT id FROM recharge_orders WHERE id=$1 AND order_status='active' AND deleted_at IS NULL FOR UPDATE`, linked.Int64).Scan(&locked)
 			if err != nil {
 				operationError(w, err)
 				return

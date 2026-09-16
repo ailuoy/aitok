@@ -479,7 +479,6 @@ CREATE TABLE IF NOT EXISTS recharge_orders (
   deleted_at TIMESTAMPTZ,
   UNIQUE(user_id,request_key)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_cycle_unique ON recharge_orders(user_id,account_email,period_start,period_end) WHERE fulfillment_status<>'cancelled';
 CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_payment_reference_unique ON recharge_orders(payment_reference) WHERE payment_reference<>'';
 CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_purchase_reference_unique ON recharge_orders(purchase_reference) WHERE purchase_reference<>'';
 CREATE INDEX IF NOT EXISTS recharge_orders_owner_idx ON recharge_orders(user_id,id DESC);
@@ -530,7 +529,6 @@ ALTER TABLE bank_card_ledger ADD CONSTRAINT bank_card_ledger_sign_check CHECK ((
 DROP INDEX IF EXISTS bank_card_ledger_subscription_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_legacy_subscription_idx ON bank_card_ledger(account_id) WHERE kind='subscription' AND order_id IS NULL AND period_start IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_order_unique ON bank_card_ledger(order_id) WHERE kind='subscription' AND order_id IS NOT NULL AND reversed_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_cycle_unique ON bank_card_ledger(account_email,period_start,period_end) WHERE kind='subscription' AND period_start IS NOT NULL AND reversed_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_reference_unique ON bank_card_ledger(external_reference) WHERE external_reference<>'';
 CREATE UNIQUE INDEX IF NOT EXISTS bank_card_ledger_reversal_unique ON bank_card_ledger(reference_id) WHERE kind='reversal';
 
@@ -636,5 +634,116 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_pending_expires_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT NOT NULL DEFAULT -1;
 COMMENT ON TABLE users IS '系统用户与角色；管理员验证器密钥加密保存，待绑定密钥限时确认，TOTP 时间步防重放；空角色按普通用户处理';
+
+-- 来源：019_order_lifecycle.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+ALTER TABLE recharge_orders ADD COLUMN IF NOT EXISTS order_status TEXT NOT NULL DEFAULT 'active'
+  CHECK (order_status IN ('active','refunded','discarded'));
+
+DROP INDEX IF EXISTS recharge_orders_cycle_unique;
+CREATE UNIQUE INDEX recharge_orders_cycle_unique ON recharge_orders(user_id,account_email,period_start,period_end)
+  WHERE order_status='active' AND payment_status<>'refunded' AND fulfillment_status<>'cancelled';
+
+-- 关联订单的扣款由订单唯一索引及应用层周期锁防重；结束订单允许新的订单重新记账。
+DROP INDEX IF EXISTS bank_card_ledger_cycle_unique;
+CREATE UNIQUE INDEX bank_card_ledger_cycle_unique ON bank_card_ledger(account_email,period_start,period_end)
+  WHERE kind='subscription' AND order_id IS NULL AND period_start IS NOT NULL AND reversed_at IS NULL;
+
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存下单 SKU 价格及汇率快照；正常、已退款、已废弃状态独立于资金记录，结束订单释放周期且禁止继续操作；金额为 USD 美分。';
+
+-- 来源：020_order_lifecycle_backfill.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 仅归类历史订单状态，保留订单号、金额、余额、流水及原操作记录；重复执行不改已结束订单。
+UPDATE recharge_orders o
+SET order_status=CASE
+    WHEN payment_status='refunded' OR EXISTS (
+      SELECT 1 FROM operation_events e WHERE e.entity_type='order' AND e.entity_id=o.id
+        AND e.action='refund_note' AND e.deleted_at IS NULL
+    ) THEN 'refunded'
+    ELSE 'discarded' END,
+    version=version+1, updated_at=NOW()
+WHERE o.order_status='active' AND o.deleted_at IS NULL AND (
+  payment_status='refunded' OR fulfillment_status='cancelled' OR EXISTS (
+    SELECT 1 FROM operation_events e WHERE e.entity_type='order' AND e.entity_id=o.id
+      AND e.action='refund_note' AND e.deleted_at IS NULL
+  )
+);
+
+-- 来源：021_order_receipts.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 历史收款币种及金额不可推算，保持未记录；新线下收款由应用一次写入快照。
+ALTER TABLE recharge_orders
+  ADD COLUMN IF NOT EXISTS received_currency TEXT NOT NULL DEFAULT '' CHECK (received_currency IN ('','CNY','USD')),
+  ADD COLUMN IF NOT EXISTS received_amount_minor BIGINT NOT NULL DEFAULT 0 CHECK (received_amount_minor>=0),
+  ADD COLUMN IF NOT EXISTS received_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (received_usd_minor>=0),
+  ADD COLUMN IF NOT EXISTS received_exchange_rate JSONB,
+  ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ;
+ALTER TABLE recharge_orders DROP CONSTRAINT IF EXISTS recharge_orders_receipt_complete;
+ALTER TABLE recharge_orders ADD CONSTRAINT recharge_orders_receipt_complete CHECK (
+  (received_currency='' AND received_amount_minor=0 AND received_usd_minor=0 AND received_exchange_rate IS NULL AND received_at IS NULL)
+  OR (received_currency IN ('CNY','USD') AND received_amount_minor>0 AND received_usd_minor>0 AND received_exchange_rate IS NOT NULL AND jsonb_typeof(received_exchange_rate)='object' AND received_at IS NOT NULL)
+);
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存下单 SKU 和汇率快照、CNY/USD 实收及收款汇率快照；毛利按实收减成本计算，历史未知实收不推算；退款或废弃释放周期且禁止继续操作，金额均为对应币种的分。';
+
+-- 来源：022_order_source.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 来源随订单保存；已有记录保持未填写，不推算或回填业务来源。
+ALTER TABLE recharge_orders
+  ADD COLUMN IF NOT EXISTS order_source TEXT NOT NULL DEFAULT '' CHECK (char_length(order_source)<=80);
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存订单来源、下单 SKU 和汇率快照、CNY/USD 实收及收款汇率快照；来源可自定义并从未删除订单汇总为下拉选项；毛利按实收减成本计算，历史未知实收不推算；退款或废弃释放周期且禁止继续操作，金额均为对应币种的分。';
+
+-- 来源：023_bank_card_wallet_address.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 钱包地址用于管理员转账时查看和复制，不自动发起任何资金操作。
+ALTER TABLE bank_cards
+  ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT '' CHECK (char_length(wallet_address)<=200);
+COMMENT ON TABLE bank_cards IS '银行卡：加密卡号、平台、备注、转账用钱包地址、USD 美分余额、冻结金额、可用状态和限额；钱包地址仅用于展示和复制，不自动转账；不保存安全码。';
+
+-- 来源：024_bank_card_cvc_wallet_qr.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 旧卡默认未填写；旧钱包地址保留，不将文本猜测转换成二维码。
+ALTER TABLE bank_cards
+  ADD COLUMN IF NOT EXISTS cvc_ciphertext TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS wallet_qr_image TEXT NOT NULL DEFAULT '' CHECK (octet_length(wallet_qr_image)<=2800000);
+COMMENT ON TABLE bank_cards IS '银行卡：加密卡号及安全码、平台、备注、钱包地址二维码截图、历史钱包地址、USD 美分余额、冻结金额、状态和限额；图片仅供人工转账使用，不自动付款。';
+
+-- 来源：025_table_ids.sql
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '5min';
+
+-- 为所有存量行（含软删除历史）自动分配 ID；重放时保留已有 ID 和序列。
+-- 原业务主键改为全量唯一索引，保留业务防重及 ON CONFLICT 的行为。
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS wallets_user_id_key ON wallets(user_id);
+ALTER TABLE wallets DROP CONSTRAINT IF EXISTS wallets_pkey;
+ALTER TABLE wallets ADD CONSTRAINT wallets_pkey PRIMARY KEY(id);
+
+ALTER TABLE topup_orders ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS topup_orders_order_no_key ON topup_orders(order_no);
+ALTER TABLE topup_orders DROP CONSTRAINT IF EXISTS topup_orders_pkey;
+ALTER TABLE topup_orders ADD CONSTRAINT topup_orders_pkey PRIMARY KEY(id);
+
+ALTER TABLE account_renewals ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS account_renewals_user_id_request_key_key ON account_renewals(user_id,request_key);
+ALTER TABLE account_renewals DROP CONSTRAINT IF EXISTS account_renewals_pkey;
+ALTER TABLE account_renewals ADD CONSTRAINT account_renewals_pkey PRIMARY KEY(id);
+
+ALTER TABLE auth_limits ADD COLUMN IF NOT EXISTS id BIGSERIAL;
+CREATE UNIQUE INDEX IF NOT EXISTS auth_limits_key_key ON auth_limits(key);
+ALTER TABLE auth_limits DROP CONSTRAINT IF EXISTS auth_limits_pkey;
+ALTER TABLE auth_limits ADD CONSTRAINT auth_limits_pkey PRIMARY KEY(id);
+
 
 COMMIT;

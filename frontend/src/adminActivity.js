@@ -36,7 +36,7 @@ function controlFor(element) {
     [/^(关闭浏览器|关闭账号窗口)/, 'close_browser'], [/^(详情|完整资料|查看|使用记录|全部使用记录|余额 \/ 对账单|运营 \/ 核对)/, 'view'],
     [/^复制/, 'copy'], [/^(自动|白色|黑色)$/, 'theme'], [/^(上一页|下一页)$/, 'paginate'], [/^测试/, 'test'],
     [/^获取 IP/, 'get_ip'], [/^分配/, 'assign'], [/^核验/, 'verify'], [/^(退款|申请原路退款|批准原路退款|原申请重试)/, 'refund'],
-    [/^记录存入/, 'deposit'], [/^(官网扣款|记录开通扣款|核对并记账)/, 'purchase'], [/^管理分组/, 'group'],
+    [/^记录存入/, 'deposit'], [/^(官网扣款|记录开通扣款|核对并记账)/, 'purchase'], [/^管理分组/, 'group'], [/^废弃/, 'discard'],
     [/^(开启|关闭)续费提醒/, 'subscription'],
   ];
   return labels.find(([pattern]) => pattern.test(text))?.[1] || 'button';
