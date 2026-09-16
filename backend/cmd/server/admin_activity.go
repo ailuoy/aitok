@@ -20,7 +20,7 @@ var auditControls = map[string]string{
 	"search": "搜索", "refresh": "刷新", "export": "导出", "import": "导入", "open_browser": "打开浏览器", "close_browser": "关闭浏览器",
 	"view": "查看详情", "copy": "复制", "theme": "切换主题", "paginate": "翻页", "test": "测试代理", "get_ip": "获取出口 IP",
 	"assign": "分配处理人", "verify": "核验开通", "refund": "退款", "deposit": "记录存入", "purchase": "记录官网扣款", "group": "管理分组",
-	"subscription": "修改续费提醒", "proxy_create": "新增本机代理", "proxy_update": "编辑本机代理", "proxy_delete": "删除本机代理",
+	"subscription": "修改是否续订", "proxy_create": "新增本机代理", "proxy_update": "编辑本机代理", "proxy_delete": "删除本机代理",
 	"discard":    "废弃订单",
 	"proxy_read": "查看本机代理", "proxy_test": "测试本机代理", "proxy_import": "解析代理导入", "proxy_bind": "绑定账号代理",
 }
@@ -155,6 +155,7 @@ func (s *Server) auditFilter(next http.Handler) http.Handler {
 // 未知路径可能夹带凭据，只保留已知资源、数字 ID 和固定动作段。
 func safeAuditResource(path string) string {
 	known := map[string]bool{"api": true, "accounts": true, "account-groups": true, "addresses": true, "bank-cards": true, "card-operations": true, "orders": true, "packages": true, "users": true, "wallet": true, "topups": true, "audit": true, "proxy-activity": true, "payment-exceptions": true, "notices": true, "order-operators": true, "me": true, "logout": true, "export": true, "import": true, "ledger": true, "access": true, "role": true, "group": true, "login": true, "subscription": true, "browser": true, "browser-session": true, "session": true, "renewal-date": true, "renew": true, "sync": true, "refund": true, "collection-quote": true, "record": true}
+	known["payment-card"], known["payment-cards"] = true, true
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	for i, part := range parts {
 		if !known[part] && !auditNumericID.MatchString(part) {

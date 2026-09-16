@@ -1,6 +1,6 @@
 # Linux Nginx 域名转发
 
-`nginx.conf` 用于运行 AiTok Docker 服务的 Linux 宿主机。它监听 HTTP 80，将 `toktopup.com` 的全部流量转发到 `127.0.0.1:15680`，保留原路径和查询参数。文件只配置 HTTP 反向代理；如已有面板管理的 HTTPS 站点，可将 `location /` 段合并到该站点。
+`nginx.conf` 用于运行 AiTok Docker 服务的 Linux 宿主机。它监听 HTTP 80，将 `toktopup.com` 的全部流量转发到 `127.0.0.1:15680`，保留原路径和查询参数。文件只配置 HTTP 反向代理；如已有面板管理的 HTTPS 站点，须将 `client_max_body_size 9m;` 和 `location /` 段一并合并到实际承接请求的 `server` 中。
 
 请求路径：
 
@@ -37,3 +37,9 @@ curl -i "http://toktopup.com/api/me"
 ```
 
 仅使用本文件时，预期页面返回 200，未携带登录 token 时 API 返回 401。API 返回 JSON 表示请求已到达 Go 服务。
+
+## 图片上传返回 413
+
+宿主机和 Web 容器的 Nginx 请求体上限均为 9 MB，用于容纳最多 8 MB 的图文凭据及 JSON 包装。单张图片仍限 2 MB，Base64 编码后约增大三分之一；未配置的 Nginx 默认只允许 1 MB，合法图片也可能在到达后端前被拒绝。
+
+已有站点须在实际生效的 HTTP/HTTPS `server` 中添加 `client_max_body_size 9m;`，并检查处理上传请求的 `location` 是否覆盖了更小的限制。面板或其他前置代理也需允许至少 9 MB 请求。执行 `sudo nginx -t` 检查后再重载 Nginx；仅更新 Docker 容器不会应用宿主机配置。本次修复无需数据库迁移。

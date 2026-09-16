@@ -314,7 +314,18 @@ button,input,textarea{font-family:inherit}
 .data-table .text-btn{font-size:11px;padding:5px 3px}
 .data-table .icon-btn{padding:5px;display:inline-flex}
 .data-table .proxy-result{font-size:11px;min-width:160px;gap:3px}
-.accounts-table{min-width:1250px}.proxy-table{min-width:1120px}.address-table{min-width:1050px}
+.accounts-table{min-width:1530px}.proxy-table{min-width:1120px}.address-table{min-width:1050px}
+.table-sort{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;white-space:nowrap;cursor:pointer}
+.table-sort:hover,.table-sort:focus-visible{color:var(--accent)}
+.table-sort:focus-visible{outline:2px solid currentColor;outline-offset:4px;border-radius:2px}
+.table-sort:disabled{opacity:.55;cursor:not-allowed}
+.account-renewal-switch{display:inline-flex;align-items:center;gap:7px;padding:4px 0;border:0;background:transparent;color:var(--text);font:inherit;white-space:nowrap;cursor:pointer}
+.switch-track{display:inline-flex;align-items:center;width:32px;height:19px;padding:2px;border-radius:12px;background:var(--muted);transition:background .15s}
+.switch-track>span{width:15px;height:15px;border-radius:50%;background:#fff;transition:transform .15s}
+.account-renewal-switch[aria-checked=true] .switch-track{background:var(--accent)}
+.account-renewal-switch[aria-checked=true] .switch-track>span{transform:translateX(13px)}
+.account-renewal-switch:disabled{opacity:.55;cursor:wait}
+.account-payment-card .custom-select{min-width:175px;max-width:240px}
 @media(max-width:760px){.data-table .table-actions{position:static}.data-table th,.data-table td{padding:10px}.data-table .row-actions,.data-table .account-actions{max-width:230px}}
 @media(pointer:coarse){.data-table .small,.data-table .text-btn,.data-table .icon-btn,.data-table .select-trigger{min-height:44px}.data-table .icon-btn{min-width:44px}}
 
@@ -339,4 +350,11 @@ button,input,textarea{font-family:inherit}
 .bank-card-wallet button{display:inline-flex;align-items:center;gap:4px}
 
 .order-record-form>.order-source-field{grid-column:1/-1}
+.launcher-settings{margin:12px 0;font-size:12px;border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.launcher-settings summary{cursor:pointer;font-weight:600}
+.launcher-settings .browser-buttons{align-items:flex-end;flex-wrap:wrap;margin:10px 0}
+.launcher-settings label{display:flex;flex-direction:column;gap:5px}
+.launcher-settings input{max-width:160px}
+.launcher-settings details{margin-top:12px}
+.launcher-settings strong{overflow-wrap:anywhere}
 @media(max-width:700px){.order-record-form .collection-preview{grid-template-columns:repeat(2,minmax(0,1fr))}}

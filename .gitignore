@@ -25,6 +25,7 @@ dist/
 /backend/tmp/
 /backend/server
 /backend/server.exe
+/desktop/build/
 *.test
 
 # Python 自动生成的字节码缓存

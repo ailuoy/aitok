@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Plus, RefreshCw } from 'lucide-react';
-import { launcherCommand, launcherRequest } from './localBrowser';
+import { launcherRequest } from './localBrowser';
+import LauncherConnection from './LauncherConnection';
 import Dialog from './Dialog';
 import ProxyHistory from './ProxyHistory';
 import { formatUTC8 } from './time';
@@ -51,7 +52,8 @@ export default function ProxyManager({ config, error: connectionError, refresh, 
   return <section className="account-section proxy-manager">
     <div className="section-title"><h2>SOCKS5 管理</h2><div className="browser-buttons"><button className="outline small" disabled={!config} onClick={() => setImporting(true)}>导入代理</button><button className="outline small" disabled={!config} onClick={() => setHistory({})}>全部使用记录</button><button className="text-btn" onClick={refresh}><RefreshCw size={15} />刷新</button><button className="primary small" disabled={!config || Boolean(busy)} onClick={() => { setEditing({}); setError(''); setTested(null); }}><Plus size={15} />添加代理</button></div></div>
     <p className="muted">代理与账号绑定保存在本机。测试通过所选 SOCKS5 访问 api.ipify.org；出口 IP 与代理主机 IP 一致显示绿色，不一致显示红色。</p>
-    {connectionError && <div className="notice"><p>{connectionError}</p><p>在本机项目目录运行启动器后点击刷新：</p><pre className="launcher-command"><code>{launcherCommand()}</code></pre></div>}
+    {connectionError && <p className="notice">{connectionError}</p>}
+    <LauncherConnection onConnected={refresh} />
     {error && <p className="error" role="alert">{error}</p>}
     {editing && <form className="proxy-form" onSubmit={save} onChange={() => setTested(null)} key={editing.id || 'new'}>
       <h3>{editing.id ? '编辑代理' : '添加代理'}</h3>

@@ -80,6 +80,12 @@ func TestSchemaSnapshotMatchesMigrations(t *testing.T) {
 	snapshot := read("../../migrations/schema.sql")
 	release := read("../../migrations/release.sql")
 	legacyUpgrade := strings.ReplaceAll(read("../../migrations/upgrade-from-002.sql"), "SET LOCAL search_path TO public, pg_catalog;", "SET LOCAL search_path TO pg_temp;")
+	// 截图升级包固定到 025；后续结构通过新增迁移继续升级，历史包保持不变。
+	for _, file := range files {
+		if filepath.Base(file) > "025_table_ids.sql" {
+			legacyUpgrade += "\n" + read(file)
+		}
+	}
 	generated, err := exec.Command("bash", "../../../scripts/build-release-sql.sh").Output()
 	if err != nil {
 		t.Fatal(err)

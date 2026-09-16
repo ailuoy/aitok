@@ -131,20 +131,35 @@ func (s *Server) subscriptionSettings(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 	var in struct {
-		Enabled bool `json:"renewal_enabled"`
+		Enabled *bool `json:"renewal_enabled"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1024)
-	if jsonBody(r, &in) != nil {
+	if jsonBody(r, &in) != nil || in.Enabled == nil {
 		w.WriteHeader(400)
 		return
 	}
-	var saved bool
-	err := s.db.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts SET renewal_enabled=$3,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $4) RETURNING renewal_enabled`, id, user, in.Enabled, s.permitted(r.Context(), user, "accounts")).Scan(&saved)
+	tx, err := s.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		operationError(w, err)
 		return
 	}
-	reply(w, map[string]any{"renewal_enabled": saved, "message": "已更新本系统续费提醒；官网自动续费需在官网账单中取消"}, 200)
+	defer tx.Rollback()
+	var previous bool
+	err = tx.QueryRowContext(r.Context(), `SELECT a.renewal_enabled FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL WHERE a.id=$1 AND a.deleted_at IS NULL FOR UPDATE OF a`, id).Scan(&previous)
+	if err == nil && previous != *in.Enabled {
+		_, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET renewal_enabled=$2,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, id, *in.Enabled)
+		if err == nil {
+			err = recordEvent(r.Context(), tx, user, id, "account", "subscription", eventKey(), map[string]any{"renewal_enabled": previous}, map[string]any{"renewal_enabled": *in.Enabled})
+		}
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		operationError(w, err)
+		return
+	}
+	reply(w, map[string]any{"renewal_enabled": *in.Enabled, "message": "已更新是否续订；此设置用于本系统续订安排与提醒"}, 200)
 }
 
 // 普通用户采用明确白名单，新管理接口默认不可访问。

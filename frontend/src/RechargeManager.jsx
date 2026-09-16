@@ -57,7 +57,15 @@ export default function RechargeManager({ token, accounts, packagesOnly = false 
         rows.push(...result.cards); total = result.total; page++;
         if (!result.cards.length) break;
       } while (rows.length < total);
-      if (!controller.signal.aborted) setCards(rows);
+      if (!controller.signal.aborted) {
+        const now = new Date();
+        const available = rows.filter(card => (!card.status || card.status === 'active') && !card.deleted_at && (card.exp_year > now.getUTCFullYear() || (card.exp_year === now.getUTCFullYear() && card.exp_month >= now.getUTCMonth() + 1)));
+        setCards(available);
+        if (dialog.type === 'record') {
+          const bound = accounts.find(account => account.id === dialog.item.account_id)?.payment_card_id;
+          if (available.some(card => card.id === bound)) setDraft(current => ({ ...current, card_id: current.card_id || String(bound) }));
+        }
+      }
     }
     loadCards().catch(e => { if (!controller.signal.aborted) setFormError(e.message); }).finally(() => { if (!controller.signal.aborted) setCardsLoading(false); });
     return () => controller.abort();
@@ -66,7 +74,17 @@ export default function RechargeManager({ token, accounts, packagesOnly = false 
     pending.current = null; setCollectionQuote(null); setEvidenceBusy(false); setFormError(''); setDialog({ type, item });
     setDraft(type === 'package' ? { plan: 'plus', region: 'PH', currency: 'PHP', months: 1, enabled: true, wallet_tokens: 0, auto_usd: false, ...item } : { received_currency: 'CNY', received_amount: '', order_source: item?.order_source || '' });
   }
-  const field = (key, value) => { if (['received_currency', 'received_amount', 'package_id'].includes(key)) setCollectionQuote(null); setDraft(current => ({ ...current, [key]: value })); };
+  const field = (key, value) => {
+    if (['received_currency', 'received_amount', 'package_id'].includes(key)) setCollectionQuote(null);
+    setDraft(current => {
+      const next = { ...current, [key]: value };
+      if (key === 'account_id') {
+        const bound = accounts.find(account => account.id === Number(value))?.payment_card_id;
+        next.card_id = cards.some(card => card.id === bound) ? String(bound) : '';
+      }
+      return next;
+    });
+  };
   async function save(event) {
     event.preventDefault(); if (writing.current || evidenceBusy) return; writing.current = true; setBusy(true); setFormError('');
     try {
@@ -110,7 +128,7 @@ export default function RechargeManager({ token, accounts, packagesOnly = false 
     {dialog && <Dialog className={['create', 'record'].includes(dialog.type) ? 'order-record-dialog' : ''} title={dialog.type === 'package' ? '配置充值套餐' : dialog.type === 'delete-package' ? '确认删除套餐' : dialog.type === 'create' ? '录入充值订单' : actionLabels[dialog.type]} onClose={() => { if (!busy) setDialog(null); }}><form className={['create', 'record'].includes(dialog.type) ? 'order-record-form' : undefined} onSubmit={save}>
       {dialog.item?.order_no && <p>{dialog.item.account_email} · {dialog.item.order_no}</p>}
       {dialog.type === 'package' && <><label>套餐名称<input name="name" defaultValue={draft.name} required maxLength={100} /></label><div className="proxy-fields"><label>官方套餐<Select label="官方套餐" value={draft.plan} onChange={v => field('plan', v)} options={plans} /></label><label>地区<input name="region" defaultValue={draft.region} required maxLength={80} /></label><label>美元定价<Select label="美元定价方式" value={String(draft.auto_usd)} onChange={v => setDraft(current => ({ ...current, auto_usd: v === 'true', ...(v === 'true' ? { currency: 'PHP' } : {}) }))} options={[{ value: 'false', label: '固定 USD 售价' }, { value: 'true', label: 'PHP 每日汇率折算' }]} /></label><label>原币种<input name="currency" value={draft.currency} onChange={e => field('currency', e.target.value)} readOnly={draft.auto_usd} required pattern="[A-Z]{3}" maxLength={3} /></label><label>原币价格<input name="original_amount" onChange={e => field('original_amount_minor', Math.round(Number(e.target.value) * 100))} type="number" min="0.01" step="0.01" defaultValue={draft.original_amount_minor ? (draft.original_amount_minor / 100).toFixed(2) : ''} required /></label><label>{draft.auto_usd ? '折算 USD' : '售价 USD'}{draft.auto_usd ? <input aria-label="折算 USD" value={exchangeRate && draft.original_amount_minor > 0 ? (draft.original_amount_minor / 100 * Number(exchangeRate.rate)).toFixed(2) : '等待汇率同步'} readOnly /> : <input name="sale_usd" type="number" min="0.01" step="0.01" defaultValue={draft.sale_usd_minor ? (draft.sale_usd_minor / 100).toFixed(2) : ''} required />}</label><label>代币价格<input name="wallet_tokens" type="number" min="0" step="1" defaultValue={draft.wallet_tokens} required /></label><label>周期（月）<input name="months" type="number" min="1" max="36" defaultValue={draft.months} required /></label><label>上架状态<Select label="套餐上架状态" value={String(draft.enabled)} onChange={v => field('enabled', v === 'true')} options={[{ value: 'true', label: '上架' }, { value: 'false', label: '下架' }]} /></label></div><label>备注<textarea name="notes" defaultValue={draft.notes} maxLength={2000} /></label></>}
-      {dialog.type === 'create' && <><label>账号<Select label="订单账号" value={draft.account_id || ''} onChange={v => field('account_id', v)} options={[{ value: '', label: '请选择账号' }, ...accounts.map(a => ({ value: String(a.id), label: a.email }))]} /></label><label>套餐<Select label="订单套餐" value={draft.package_id || ''} onChange={v => field('package_id', v)} options={[{ value: '', label: '请选择上架套餐' }, ...packages.filter(p => p.enabled && p.price_ready !== false).map(p => ({ value: String(p.id), label: `${p.name} · ${formatCardUSD(p.sale_usd_minor)} / ${p.months}个月` }))]} /></label><label>订单备注<textarea name="notes" rows={2} maxLength={2000} /></label></>}
+      {dialog.type === 'create' && <><label>账号<Select disabled={cardsLoading || busy} label="订单账号" value={draft.account_id || ''} onChange={v => field('account_id', v)} options={[{ value: '', label: '请选择账号' }, ...accounts.map(a => ({ value: String(a.id), label: a.email }))]} /></label><label>套餐<Select label="订单套餐" value={draft.package_id || ''} onChange={v => field('package_id', v)} options={[{ value: '', label: '请选择上架套餐' }, ...packages.filter(p => p.enabled && p.price_ready !== false).map(p => ({ value: String(p.id), label: `${p.name} · ${formatCardUSD(p.sale_usd_minor)} / ${p.months}个月` }))]} /></label><label>订单备注<textarea name="notes" rows={2} maxLength={2000} /></label></>}
       {['create', 'record'].includes(dialog.type) && <><label>付款卡<Select disabled={cardsLoading || busy} label="订单付款卡" value={draft.card_id || ''} onChange={v => field('card_id', v)} options={[{ value: '', label: '选择付款卡' }, ...cards.map(c => ({ value: String(c.id), label: `${c.label} · ${c.last4} · ${formatCardUSD(c.balance_usd_minor)}${c.platform ? ' · ' + c.platform : ''}` }))]} /></label>
         <label>扣款 USD<input aria-label="扣款 USD" value={(() => { const price = dialog.item?.sale_usd_minor ?? packages.find(p => p.id === Number(draft.package_id))?.sale_usd_minor; return price ? (price / 100).toFixed(2) : ''; })()} readOnly /></label>
         {needsCollection ? <CollectionFields disabled={busy} token={token} order={dialog.item || { package_id: draft.package_id }} draft={draft} onChange={field} onQuoteChange={setCollectionQuote} /> : <CollectionDetails order={dialog.item} />}

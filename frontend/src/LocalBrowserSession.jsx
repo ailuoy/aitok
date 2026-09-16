@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import TwoFactor from './TwoFactor';
 import { stateLabels } from './BrowserSession';
-import { browserEnvironmentID, launcherCommand, launcherRequest, openLocalAccount } from './localBrowser';
+import { browserEnvironmentID, launcherRequest, openLocalAccount } from './localBrowser';
+import LauncherConnection from './LauncherConnection';
+import useLauncherPort from './useLauncherPort';
 
 export default function LocalBrowserSession({ account, userID, token, onStatus, onClosed }) {
+  const port = useLauncherPort();
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -13,6 +16,7 @@ export default function LocalBrowserSession({ account, userID, token, onStatus, 
   const hasOpened = useRef(false);
   const statusPath = '/browsers/' + encodeURIComponent(browserEnvironmentID(userID, account.id));
   const running = status && !['closed', 'unavailable'].includes(status.state);
+  useEffect(() => { hasOpened.current = false; setStatus(null); setVerifying(true); }, [port]);
   useEffect(() => {
     if (!status) return;
     onStatus?.(account.id, status);
@@ -35,7 +39,7 @@ export default function LocalBrowserSession({ account, userID, token, onStatus, 
     };
     timer = setTimeout(poll, 3000);
     return () => { mounted.current = false; controller.abort(); clearTimeout(timer); };
-  }, [account, userID, token, statusPath]);
+  }, [account, userID, token, statusPath, port]);
 
   async function act(action, totpCode) {
     if (busyRef.current) return;
@@ -51,7 +55,8 @@ export default function LocalBrowserSession({ account, userID, token, onStatus, 
     <p className="muted">{account.label} · {account.email}</p>
     <div className="browser-status-row"><span>本机浏览器</span><strong>{busy ? '正在处理…' : status ? stateLabels[status.state] || status.state : '尚未打开'}</strong></div>
     {status?.message && <p className={status.state === 'authenticated' ? 'success' : 'notice'} role="status">{status.message}</p>}
-    {error && <>{!verifying && <p className="error" role="alert">{error}</p>}<details><summary>启动器使用说明</summary><p className="muted">本机安装 Node.js 22+ 和 Chrome / Edge，在项目目录运行并保持终端开启，无需配对密钥：</p><pre className="launcher-command"><code>{launcherCommand()}</code></pre></details></>}
+    {error && !verifying && <p className="error" role="alert">{error}</p>}
+    <LauncherConnection onConnected={() => setError('')} />
     {verifying && !running && <TwoFactor token={token} onVerify={code => act('start', code)} />}
     <div className="browser-buttons"><button className="primary" disabled={busy || running} onClick={() => setVerifying(true)}>重新打开</button><button className="outline" disabled={busy || !running} onClick={() => act('stop')}>关闭账号窗口</button></div>
   </div>;

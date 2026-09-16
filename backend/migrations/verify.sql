@@ -2,7 +2,7 @@
 WITH required(table_name,column_names) AS (VALUES
 ('users',ARRAY['id','email','password_hash','role','session_version','disabled','permissions','totp_ciphertext','totp_pending_ciphertext','totp_pending_expires_at','totp_enabled_at','totp_last_step','created_at','updated_at','deleted_at']),
 ('account_groups',ARRAY['id','user_id','name','created_at','updated_at','deleted_at']),
-('chatgpt_accounts',ARRAY['id','user_id','label','email','api_key','session_ciphertext','renewal_date','group_id','last_login_at','verified_plan','verified_at','subscription_ends_at','renewal_enabled','created_at','updated_at','deleted_at']),
+('chatgpt_accounts',ARRAY['id','user_id','label','email','api_key','session_ciphertext','renewal_date','group_id','last_login_at','verified_plan','verified_at','subscription_ends_at','renewal_enabled','payment_card_id','created_at','updated_at','deleted_at']),
 ('email_codes',ARRAY['id','email','purpose','code','expires_at','attempts','created_at','updated_at','deleted_at']),
 ('wallets',ARRAY['id','user_id','balance','created_at','updated_at','deleted_at']),
 ('topup_orders',ARRAY['id','order_no','user_id','request_key','amount_minor','tokens','currency','status','session_id','checkout_url','quantity','unit_amount_minor','price_id','payment_intent','refunded_minor','reversed_tokens','dispute_status','created_at','updated_at','deleted_at']),

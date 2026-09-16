@@ -17,7 +17,7 @@ export async function request(path, token, { method = 'GET', body, signal, totpC
   if (response.status === 204) return null;
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error(data.error || `请求失败（${response.status}）`);
+    const error = new Error(data.error || (response.status === 413 ? '提交内容超过服务器大小限制，请缩小图片或减少图片数量后重试（413）' : `请求失败（${response.status}）`));
     error.status = response.status;
     throw error;
   }

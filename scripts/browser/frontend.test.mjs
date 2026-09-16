@@ -30,7 +30,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   t.after(() => child.kill());
   const cdp = new CDP(child);
   const user = { id: 3, username: 'admin', role: 'super_admin' };
-  const account = { id: 1, user_id: 1, label: '工作账号', email: 'chat@example.com', has_session: true };
+  const account = { id: 1, user_id: 1, label: '工作账号', email: 'chat@example.com', has_session: true, renewal_enabled: true, payment_card_id: null };
   const errors = [], imported = [], launches = [], requests = [];
   const localLaunches = [], localRequests = [];
   let localState = 'closed', exportCount = 0, exportExpired = false;
@@ -43,6 +43,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let addressRows = Array.from({ length: 21 }, (_, index) => ({ id: index + 1, address_line1: index === 0 ? '4111 Gateway [Road]' : `${index + 1} Test Street`, address_line2: '', city: 'Portland', state: 'OR', postal_code: '97201', country: 'US', source_url: 'https://www.meiguodizhi.com/usa-address/oregon', source_data: { Full_Name: 'Test User', Occupation: 'Engineer', Extra_Field: 'Preserved value', CVV2: '123' }, can_edit: true }));
   const addressWrites = [];
   let bankCards = [];
+  let bankUploadTooLarge = false;
+  let accountSettingsFail = false;
   const bankWrites = [];
   const cardLedger = [], ledgerWrites = [];
   let ledgerResponseLost = false;
@@ -58,7 +60,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await cdp.send('Network.setBlockedURLs', { urls: ['https://fonts.googleapis.com/*', 'https://fonts.gstatic.com/*'] }, sessionId);
   await cdp.send('Runtime.enable', {}, sessionId);
   await cdp.send('Page.enable', {}, sessionId);
-  await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*://*/api/*' }, { urlPattern: 'http://127.0.0.1:15683/*' }] }, sessionId);
+  await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*://*/api/*' }, { urlPattern: 'http://127.0.0.1:15684/*' }, { urlPattern: 'http://127.0.0.1:15685/*' }] }, sessionId);
   cdp.on('message', message => {
     if (message.method === 'Runtime.exceptionThrown') errors.push(message.params.exceptionDetails.text);
     if (message.method !== 'Fetch.requestPaused') return;
@@ -71,7 +73,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       }
       let data = {};
       let responseCode = request.method === 'OPTIONS' ? 204 : 200;
-      if (url.origin === 'http://127.0.0.1:15683') {
+      if (['http://127.0.0.1:15684', 'http://127.0.0.1:15685'].includes(url.origin)) {
         localRequests.push(request);
         if (url.pathname === '/activity-export') data = {device_id:'test-device',events:[],next_cursor:0};
         else if (url.pathname === '/health') data = { status: 'ok', version: 2 };
@@ -184,6 +186,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         } else {
           data = { entries: cardLedger, total: cardLedger.length, balance_usd_minor: bankCards[0].balance_usd_minor, deposited_usd_minor: cardLedger.reduce((sum, entry) => sum + Math.max(0, entry.amount_usd_minor), 0), spent_usd_minor: cardLedger.reduce((sum, entry) => sum - Math.min(0, entry.amount_usd_minor), 0) };
         }
+      } else if (bankUploadTooLarge && url.pathname.startsWith('/api/bank-cards') && ['POST', 'PATCH'].includes(request.method)) {
+        responseCode = 413;
+        data = '<html><body>413 Request Entity Too Large</body></html>';
       } else if (url.pathname.startsWith('/api/bank-cards')) {
         const input = request.postData ? JSON.parse(request.postData) : {};
         if (['POST', 'PATCH', 'DELETE'].includes(request.method)) bankWrites.push(request.method);
@@ -202,6 +207,19 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const page = Number(url.searchParams.get('page') || 1);
         const pageSize = Number(url.searchParams.get('page_size') || 20);
         data = { addresses: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, page_size: pageSize };
+      } else if (url.pathname === '/api/accounts/payment-cards') {
+        data = { cards: bankCards.map(({ id, label, last4, brand }) => ({ id, label, last4, brand })) };
+      } else if (request.method === 'PATCH' && (url.pathname === '/api/accounts/1/subscription' || url.pathname === '/api/accounts/1/payment-card')) {
+        if (accountSettingsFail) { responseCode = 409; data = { error: '模拟账号设置保存失败' }; }
+        else {
+          const input = JSON.parse(request.postData);
+          Object.assign(account, input);
+          if ('payment_card_id' in input) {
+            const card = bankCards.find(card => card.id === input.payment_card_id);
+            Object.assign(account, { payment_card_label: card?.label || '', payment_card_last4: card?.last4 || '', payment_card_available: Boolean(card) });
+          }
+          data = input;
+        }
       } else if (url.pathname === '/api/accounts/1' && request.method === 'DELETE') { accountDeletes++;
       } else if (url.pathname === '/api/accounts/1/browser-session') {
         if (request.method === 'POST') exportCount++;
@@ -226,12 +244,12 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       await cdp.send('Fetch.fulfillRequest', {
         requestId, responseCode,
         responseHeaders: [
-          { name: 'Content-Type', value: 'application/json' }, { name: 'Access-Control-Allow-Origin', value: '*' },
+          { name: 'Content-Type', value: typeof data === 'string' ? 'text/html' : 'application/json' }, { name: 'Access-Control-Allow-Origin', value: '*' },
           { name: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, X-AiTok-Client, X-Aitok-Page, X-Aitok-TOTP' },
           { name: 'Access-Control-Allow-Methods', value: 'GET, POST, PATCH, DELETE, OPTIONS' },
           { name: 'Access-Control-Allow-Private-Network', value: 'true' },
         ],
-        body: request.method === 'OPTIONS' ? '' : Buffer.from(JSON.stringify(data)).toString('base64'),
+        body: request.method === 'OPTIONS' ? '' : Buffer.from(typeof data === 'string' ? data : JSON.stringify(data)).toString('base64'),
       }, message.sessionId);
     })().catch(error => errors.push(error.message));
   });
@@ -309,6 +327,26 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
     assert.ok(await evaluate('Math.abs(document.querySelector(".accounts-table th.table-actions").getBoundingClientRect().left - document.querySelector(".account-row td.table-actions").getBoundingClientRect().left) < 1'));
   }
   await evaluate('document.querySelector(".data-table-wrap").scrollLeft = 0');
+  await evaluate('document.querySelector("button[aria-label=续订日期：升序排序]").click()');
+  await wait('document.querySelector("button[aria-label=续订日期：降序排序]")?.closest("th").getAttribute("aria-sort") === "ascending"');
+  await delay(100);
+  assert.ok(requests.some(url => url.includes('sort=renewal_date') && url.includes('direction=asc')));
+  await evaluate('document.querySelector("button[aria-label=续订日期：降序排序]").click()');
+  await wait('document.querySelector("button[aria-label=续订日期：升序排序]")?.closest("th").getAttribute("aria-sort") === "descending"');
+  await delay(100);
+  assert.ok(requests.some(url => url.includes('sort=renewal_date') && url.includes('direction=desc')));
+  await evaluate('document.querySelector(".account-renewal-switch").click()');
+  await wait('document.querySelector(".account-renewal-switch").getAttribute("aria-checked") === "false" && !document.querySelector(".account-renewal-switch").disabled');
+  assert.equal(account.renewal_enabled, false);
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-renewal-switch")?.getAttribute("aria-checked") === "false"');
+  accountSettingsFail = true;
+  await evaluate('document.querySelector(".account-renewal-switch").click()');
+  await wait('document.body.innerText.includes("模拟账号设置保存失败") && !document.querySelector(".account-renewal-switch").disabled');
+  assert.equal(await evaluate('document.querySelector(".account-renewal-switch").getAttribute("aria-checked")'), 'false');
+  accountSettingsFail = false;
+  await evaluate('document.querySelector(".account-renewal-switch").click()');
+  await wait('document.querySelector(".account-renewal-switch").getAttribute("aria-checked") === "true"');
   // 新充值页面使用真实构建产物，资金接口在浏览器边界全部模拟。
   await navigateAdmin('packages');
   await wait('document.body.innerText.includes("尚未配置套餐")');
@@ -322,9 +360,32 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(rechargePackages[0].original_amount_minor,100000);
   await navigateAdmin('orders');
   await wait('document.body.innerText.includes("暂无充值订单")');
-  bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000}];
+  bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000,exp_month:12,exp_year:2035,status:'active'}];
+  await navigateAdmin('accounts');
+  await wait('Boolean(document.querySelector(".account-payment-card button:not(:disabled)"))');
+  await select('账号 chat@example.com 的付款卡', '运营测试卡 · •••• 4242');
+  await wait('document.querySelector(".account-payment-card button").innerText.includes("运营测试卡") && !document.querySelector(".account-payment-card button").disabled');
+  assert.equal(account.payment_card_id, 9);
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-payment-card button")?.innerText.includes("运营测试卡") && !document.querySelector(".account-payment-card button").disabled');
+  accountSettingsFail = true;
+  await select('账号 chat@example.com 的付款卡', '未绑定付款卡');
+  await wait('document.body.innerText.includes("模拟账号设置保存失败")');
+  assert.equal(account.payment_card_id, 9);
+  assert.ok(await evaluate('document.querySelector(".account-payment-card button").innerText.includes("运营测试卡")'));
+  accountSettingsFail = false;
+  await select('账号 chat@example.com 的付款卡', '未绑定付款卡');
+  await wait('document.querySelector(".account-payment-card button").innerText.includes("未绑定付款卡") && !document.querySelector(".account-payment-card button").disabled');
+  assert.equal(account.payment_card_id, null);
+  await select('账号 chat@example.com 的付款卡', '运营测试卡 · •••• 4242');
+  await wait('document.querySelector(".account-payment-card button").innerText.includes("运营测试卡") && !document.querySelector(".account-payment-card button").disabled');
+  await evaluate('document.querySelector(".data-table-wrap").scrollLeft = document.querySelector(".data-table-wrap").scrollWidth');
+  await writeFile(join(directory, 'account-settings.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  await navigateAdmin('orders');
   await click('录入充值订单');
+  await wait('!document.querySelector("button[aria-label=订单付款卡]").disabled');
   await select('订单账号',account.email);
+  assert.ok(await evaluate('document.querySelector("button[aria-label=订单付款卡]").innerText.includes("运营测试卡")'));
   await select('订单套餐','测试 Plus · $200.00 / 1个月');
   assert.equal(await evaluate('Boolean(document.querySelector("input[name=period_start]"))'),false);
   await fill('input[aria-label="实收金额"]','1680.00');
@@ -853,6 +914,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'));
   const bankCardShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'bank-card-platform.png'), Buffer.from(bankCardShot.data, 'base64'));
+  bankUploadTooLarge = true;
+  await click('保存银行卡');
+  await wait('document.querySelector("dialog .error")?.textContent.includes("提交内容超过服务器大小限制")');
+  assert.equal(bankWrites.length, 0);
+  assert.equal(await evaluate('document.querySelector(".image-upload img").src'), await evaluate('window.testWalletQR'));
+  assert.equal(await evaluate('document.querySelector("dialog textarea[name=notes]").value'), '月度订阅\n仅工作用途');
+  bankUploadTooLarge = false;
   await click('保存银行卡');
   await wait('!document.querySelector("dialog") && Boolean(document.querySelector(".bank-card-row"))');
   assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("4242424242424242")'), true);
@@ -1007,6 +1075,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(Object.values(bindings)[0], 'proxy-1');
   await click('打开账号');
   await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  await evaluate('document.querySelector(".launcher-settings").open = true');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=本机连接端口]").value'), '15684');
+  await fill('input[aria-label=本机连接端口]', '15685');
+  await click('测试连接');
+  await wait('document.querySelector(".launcher-settings .success")?.textContent.includes("连接成功")');
+  await click('保存端口');
+  await wait('localStorage.getItem("aitok.launcher.port") === "15685"');
   await fill('.two-factor input[inputmode=numeric]', '654321');
   await click('验证并打开浏览器');
   await wait('document.querySelector(".browser-status-row strong")?.textContent === "已打开"');
@@ -1014,6 +1089,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(exportCount, 1); assert.equal(localLaunches.length, 1);
   assert.equal(localLaunches[0].session.accessToken, 'local-test-access');
   assert.equal(localLaunches[0].expected_email, account.email);
+  assert.ok(localRequests.some(request => request.url.startsWith('http://127.0.0.1:15685/browsers') && request.method === 'POST'));
   assert.equal(localLaunches[0].environment_id, 'http://127.0.0.1:' + server.address().port + ':user:1:account:1');
   for (const request of localRequests.filter(request => request.method !== 'OPTIONS')) {
     const headers = Object.fromEntries(Object.entries(request.headers).map(([name, value]) => [name.toLowerCase(), value]));
@@ -1029,6 +1105,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   await cdp.send('Page.reload', {}, sessionId);
   await wait('document.querySelector(".account-actions")?.innerText.includes("关闭浏览器")');
+  assert.equal(await evaluate('localStorage.getItem("aitok.launcher.port")'), '15685');
   assert.equal(localLaunches.length, 1);
   await click('关闭浏览器');
   await wait('document.querySelector(".account-actions").innerText.includes("打开账号")');

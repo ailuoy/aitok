@@ -25,6 +25,7 @@ export async function recordAdminActivity(context, event) {
 }
 
 function controlFor(element) {
+  if (element.matches('.account-renewal-switch')) return 'subscription';
   if (element.closest('.pagination-pages')) return 'paginate';
   if (element.getAttribute('role') === 'option' || element.getAttribute('role') === 'combobox') return 'select';
   if (element.matches('a')) return 'link';

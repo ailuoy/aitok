@@ -332,7 +332,13 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" && id > 0 {
-		result, err := s.db.ExecContext(r.Context(), `UPDATE bank_cards SET updated_at=NOW(),deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND reserved_usd_minor=0 AND (user_id=$2 OR $3)`, id, user, admin)
+		tx, err := s.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			cardError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		result, err := tx.ExecContext(r.Context(), `UPDATE bank_cards SET updated_at=NOW(),deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND reserved_usd_minor=0 AND (user_id=$2 OR $3)`, id, user, admin)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -344,6 +350,40 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		}
 		if n == 0 {
 			http.NotFound(w, r)
+			return
+		}
+		rows, err := tx.QueryContext(r.Context(), `UPDATE chatgpt_accounts SET payment_card_id=NULL,updated_at=NOW() WHERE payment_card_id=$1 AND deleted_at IS NULL RETURNING id`, id)
+		if err != nil {
+			cardError(w, err)
+			return
+		}
+		var accounts []int64
+		for rows.Next() {
+			var account int64
+			if err = rows.Scan(&account); err != nil {
+				rows.Close()
+				cardError(w, err)
+				return
+			}
+			accounts = append(accounts, account)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			cardError(w, err)
+			return
+		}
+		for _, account := range accounts {
+			if err = recordEvent(r.Context(), tx, user, account, "account", "payment_card", eventKey(), map[string]any{"payment_card_id": id}, map[string]any{"payment_card_id": nil, "reason": "card_deleted"}); err != nil {
+				cardError(w, err)
+				return
+			}
+		}
+		if err = recordEvent(r.Context(), tx, user, id, "bank_card", "delete", eventKey(), map[string]any{}, map[string]any{"unbound_accounts": len(accounts)}); err == nil {
+			err = tx.Commit()
+		}
+		if err != nil {
+			cardError(w, err)
 			return
 		}
 		w.WriteHeader(204)

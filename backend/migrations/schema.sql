@@ -54,11 +54,13 @@ CREATE TABLE IF NOT EXISTS chatgpt_accounts (
   verified_at TIMESTAMPTZ,
   subscription_ends_at DATE,
   renewal_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  payment_card_id BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
 );
-COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、上次登录、人工续订日期及有订单凭据的订阅核验状态。';
+CREATE INDEX IF NOT EXISTS chatgpt_accounts_payment_card_idx ON chatgpt_accounts(payment_card_id) WHERE deleted_at IS NULL AND payment_card_id IS NOT NULL;
+COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、上次登录、续订意愿及提醒、人工续订日期、默认付款卡及有订单凭据的订阅核验状态；默认付款卡不代表官网绑卡或自动扣款。';
 
 -- 邮箱验证码：按邮箱及用途保存验证码哈希和过期时间。
 CREATE TABLE IF NOT EXISTS email_codes (

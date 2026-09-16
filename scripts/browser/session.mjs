@@ -9,6 +9,7 @@ import { checkBrowserIP, IPIFY_URL, BILLING_URL, CLEANIP_URL } from './browser-i
 import { configureProfile } from './profile.mjs';
 import { EventEmitter } from 'node:events';
 import { BrowserAssistant } from './assistant.mjs';
+import { homedir } from 'node:os';
 
 export function validateSession(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.accessToken !== 'string' || !value.accessToken || value.accessToken.length > 128000 || /[^\x21-\x7e]/.test(value.accessToken)) {
@@ -33,13 +34,18 @@ export async function findChrome(explicit) {
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     '/Applications/Chromium.app/Contents/MacOS/Chromium',
     '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    join(homedir(), 'Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+    join(homedir(), 'Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'),
   ] : process.platform === 'win32' ? [
     join(process.env.PROGRAMFILES || 'C:/Program Files', 'Google/Chrome/Application/chrome.exe'),
     join(process.env.LOCALAPPDATA || '', 'Google/Chrome/Application/chrome.exe'),
+    join(process.env['PROGRAMFILES(X86)'] || 'C:/Program Files (x86)', 'Google/Chrome/Application/chrome.exe'),
+    join(process.env.PROGRAMFILES || 'C:/Program Files', 'Microsoft/Edge/Application/msedge.exe'),
+    join(process.env.LOCALAPPDATA || '', 'Microsoft/Edge/Application/msedge.exe'),
     join(process.env['PROGRAMFILES(X86)'] || 'C:/Program Files (x86)', 'Microsoft/Edge/Application/msedge.exe'),
   ] : ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'];
   for (const path of paths) { try { await access(path); return path; } catch {} }
-  throw new Error('未找到 Chromium 浏览器，请使用 --chrome 指定可执行文件路径');
+  throw new Error('未找到 Chrome / Edge，请先安装浏览器；命令行也可用 --chrome 指定可执行文件路径');
 }
 
 export class SessionBrowser extends EventEmitter {
@@ -53,6 +59,7 @@ export class SessionBrowser extends EventEmitter {
     this.cleanipURL = cleanipURL;
     this.checkIP = checkIP;
     this.environments = new Map();
+    this.closed = false;
   }
 
   status(id) {
@@ -62,6 +69,7 @@ export class SessionBrowser extends EventEmitter {
   }
 
   async start({ environment_id: id, session: raw, proxy_url: proxyURL = '', expected_email: expectedEmail, assistant_token: assistantToken, assistant_endpoint: assistantEndpoint }) {
+    if (this.closed) throw new Error('此站点的浏览器服务已停止');
     if (typeof id !== 'string' || id.length < 1 || id.length > 300) throw new Error('浏览器环境标识无效');
     const session = validateSession(raw);
     const proxy = parseProxy(proxyURL);
@@ -73,7 +81,9 @@ export class SessionBrowser extends EventEmitter {
       const profile = join(this.directory, createHash('sha256').update(id).digest('hex'));
       await mkdir(profile, { recursive: true, mode: 0o700 });
       await configureProfile(profile, expectedEmail || session.user?.email);
+      if (this.closed) throw new Error('此站点的浏览器服务已停止');
       if (proxy) environment.proxy = await createProxyBridge(proxy);
+      if (this.closed) throw new Error('此站点的浏览器服务已停止');
       const args = [
         `--user-data-dir=${profile}`, '--profile-directory=Default', '--remote-debugging-pipe', '--no-first-run', '--no-default-browser-check',
         '--disable-background-networking', '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
@@ -230,5 +240,23 @@ export class SessionBrowser extends EventEmitter {
     return { state: 'closing', api_status: null, message: '正在关闭浏览器' };
   }
 
-  close() { for (const environment of this.environments.values()) { environment.controller.abort(); clearInterval(environment.verifyTimer); clearInterval(environment.pageTimer); environment.child?.kill(); environment.proxy?.close(); } }
+  close() {
+    this.closed = true;
+    const exits = [];
+    for (const environment of this.environments.values()) {
+      environment.controller.abort();
+      clearInterval(environment.verifyTimer); clearInterval(environment.pageTimer);
+      environment.assistant?.close(); environment.proxy?.close();
+      const child = environment.child;
+      if (!child || child.exitCode !== null || child.signalCode !== null) continue;
+      exits.push(new Promise(resolve => {
+        const finished = () => { clearTimeout(timer); child.off('exit', finished); child.off('error', finished); resolve(); };
+        const timer = setTimeout(() => { child.kill('SIGKILL'); finished(); }, 5000);
+        timer.unref();
+        child.once('exit', finished); child.once('error', finished);
+        child.kill();
+      }));
+    }
+    return Promise.all(exits);
+  }
 }

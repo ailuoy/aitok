@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 func (s *Server) insertAccount(ctx context.Context, user int64, label, email, encrypted string) (Account, error) {
@@ -46,6 +47,11 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 		w.WriteHeader(400)
 		return
 	}
+	order, err := accountOrder(r.URL.Query().Get("sort"), r.URL.Query().Get("direction"), admin)
+	if err != nil {
+		reply(w, map[string]string{"error": err.Error()}, 400)
+		return
+	}
 	group := r.URL.Query().Get("group")
 	if !admin {
 		group = ""
@@ -61,7 +67,7 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 			return
 		}
 	}
-	const filter = ` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) AND strpos(lower(a.label||' '||a.email),lower($3))>0 AND ($4::bigint=-1 OR COALESCE(a.group_id,0)=$4)`
+	const filter = ` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN account_groups g ON g.id=a.group_id AND g.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) AND strpos(lower(a.label||' '||a.email),lower($3))>0 AND ($4::bigint=-1 OR COALESCE(a.group_id,0)=$4)`
 	args := []any{user, admin, r.URL.Query().Get("q"), gid}
 	var total int
 	if err := s.db.QueryRowContext(r.Context(), `SELECT count(*)`+filter, args...).Scan(&total); err != nil {
@@ -78,11 +84,11 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 			return
 		}
 	}
-	projection := `(to_jsonb(a)-'session_ciphertext'-'api_key')||jsonb_build_object('has_session',COALESCE(a.session_ciphertext,'')<>'','owner_email',CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE u.email END)`
+	projection := `(to_jsonb(a)-'session_ciphertext'-'api_key')||jsonb_build_object('has_session',COALESCE(a.session_ciphertext,'')<>'','owner_email',CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE u.email END,` + accountPaymentCardJSON + `)`
 	if !admin {
 		projection = `jsonb_build_object('id',a.id,'label',a.label,'email',a.email,'last_login_at',a.last_login_at)`
 	}
-	rows, err := jsonRows(r.Context(), s.db, "SELECT "+projection+filter+` ORDER BY a.id DESC LIMIT $5 OFFSET $6`, append(args, limit, offset)...)
+	rows, err := jsonRows(r.Context(), s.db, "SELECT "+projection+filter+` ORDER BY `+order+` LIMIT $5 OFFSET $6`, append(args, limit, offset)...)
 	if err != nil {
 		operationError(w, err)
 		return
@@ -102,6 +108,30 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 		return
 	}
 	reply(w, map[string]any{"accounts": rows, "total": total, "page": p, "page_size": size}, 200)
+}
+
+// 排序字段及方向只允许固定枚举，先排序再分页；空日期置后，同值用 ID 稳定排序。
+func accountOrder(key, direction string, admin bool) (string, error) {
+	if key == "" {
+		key = "id"
+	}
+	if direction == "" {
+		direction = "desc"
+	}
+	fields := map[string]string{"id": "a.id", "account": "lower(a.label)", "last_login_at": "a.last_login_at"}
+	if admin {
+		fields["owner"] = "lower(CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE u.email END)"
+		fields["group"] = "lower(g.name)"
+		fields["session"] = "(COALESCE(a.session_ciphertext,'')<>'')"
+		fields["renewal_date"] = "a.renewal_date"
+		fields["renewal_enabled"] = "a.renewal_enabled"
+		fields["payment_card"] = "lower(c.label)"
+	}
+	field, ok := fields[key]
+	if !ok || (direction != "asc" && direction != "desc") {
+		return "", fmt.Errorf("排序字段或方向无效")
+	}
+	return field + " " + strings.ToUpper(direction) + " NULLS LAST, a.id DESC", nil
 }
 
 var _ = sql.ErrNoRows

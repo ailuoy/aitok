@@ -14,6 +14,15 @@ import { loginCookies, restoreLoginCookies } from './cookies.mjs';
 
 const session = { accessToken: 'test-access-only', user: { email: 'test@example.com' }, refreshToken: 'never-export' };
 
+test('停止站点时中止尚未启动的账号，退出后不能再生成浏览器进程', async () => {
+  const browser = new SessionBrowser({ chrome: 'must-not-run', directory: await mkdtemp(join(tmpdir(), 'aitok-close-test-')) });
+  const starting = browser.start({ environment_id: 'pending', session });
+  browser.close();
+  await assert.rejects(starting, /服务已停止/);
+  assert.equal(browser.environments.size, 0);
+  await assert.rejects(browser.start({ environment_id: 'after-close', session }), /服务已停止/);
+});
+
 test('Session 拒绝过期和头部注入，过滤长期凭据', () => {
   assert.equal(validateSession(session).refreshToken, undefined);
   for (const value of [null, [], {}, { accessToken: 'x\r\nAuthorization: x' }, { accessToken: 'x\0' }, { ...session, expires: '2020-01-01T00:00:00Z' }]) {

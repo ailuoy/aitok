@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'">
+  <title>AiTok 助手</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header><div class="brand"><img src="../assets/icon.png" alt="" width="34" height="34"><div><h1>AiTok 助手 <span id="version"></span></h1><p>账号浏览器，在本机运行</p></div></div><span class="badge" id="summary">正在加载</span></header>
+  <main>
+    <div class="heading"><div><h2>连接的站点</h2><p>同时连接线上与开发环境，各自管理浏览器和代理。</p></div><button id="add" class="primary">＋ 添加站点</button></div>
+    <p id="error" class="error" role="alert" hidden></p>
+    <div id="sites" class="sites" aria-live="polite"></div>
+    <section class="preferences"><div><h2>后台运行</h2><p>关闭此窗口后，助手继续在菜单栏或系统托盘运行。</p></div><label class="check"><input type="checkbox" id="startup">开机启动</label></section>
+    <p class="footnote">本机需安装 Chrome 或 Edge。打开后台网页，点击账号的「打开浏览器」即可。</p>
+  </main>
+  <dialog id="editor">
+    <form id="site-form">
+      <div class="dialog-heading"><h2 id="editor-title">添加站点</h2><button type="button" id="cancel-x" class="icon" aria-label="关闭">×</button></div>
+      <label>站点名称<input name="name" required maxlength="60" placeholder="例如：测试环境"></label>
+      <label>站点地址<input name="origin" type="url" required placeholder="https://toktopup.com" spellcheck="false"></label>
+      <label>本机连接端口<input name="port" type="number" required min="1024" max="65535" step="1" value="15683"></label>
+      <p class="hint">填写助手端口，不是网站服务端口。修改后，在网页的「本机助手连接」中填写相同端口。</p>
+      <label class="check"><input name="enabled" type="checkbox" checked>保存后启动，下次打开助手时自动连接</label>
+      <p id="form-error" class="error" role="alert" hidden></p>
+      <div class="actions"><button type="button" id="cancel">取消</button><button class="primary" type="submit">保存站点</button></div>
+    </form>
+  </dialog>
+</body>
+</html>

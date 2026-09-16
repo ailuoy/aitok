@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { browserEnvironmentID, launcherRequest } from './localBrowser';
 import { request } from './api';
+import useLauncherPort from './useLauncherPort';
 
 export const browserRunning = status => Boolean(status && !['closed', 'unavailable'].includes(status.state));
 
 export default function useLocalBrowsers(accounts, userID, token, setAccounts) {
+  const port = useLauncherPort();
   const [states, setStates] = useState({});
   const [closing, setClosing] = useState({});
   const versions = useRef({});
@@ -31,6 +33,7 @@ export default function useLocalBrowsers(accounts, userID, token, setAccounts) {
   }, [states, accounts, userID, token, setAccounts]);
   useEffect(() => {
     const controller = new AbortController();
+    setStates({});
     let timer;
     const poll = async () => {
       await Promise.all(JSON.parse(accountIDs).map(async id => {
@@ -44,7 +47,7 @@ export default function useLocalBrowsers(accounts, userID, token, setAccounts) {
     };
     poll();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [accountIDs, userID, update]);
+  }, [accountIDs, userID, update, port]);
   const close = async id => {
     if (closing[id]) return;
     setClosing(current => ({ ...current, [id]: true }));
