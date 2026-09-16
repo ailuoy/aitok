@@ -8,6 +8,13 @@ button:disabled{opacity:.5;cursor:not-allowed}
 @media(max-width:700px){.proxy-fields{grid-template-columns:1fr}.workspace-tabs{gap:15px;flex-wrap:wrap}.workspace-tabs a{font-size:12px}.proxy-manager>.section-title{align-items:flex-start;flex-wrap:wrap}.proxy-actions{width:100%}.account-proxy{max-width:100%}.json-editor{height:230px}}
 button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:4px}
 .muted{color:var(--muted);font-size:13px;line-height:1.7}
+.browser-status-refresh{display:inline-flex;flex-direction:column;align-items:stretch;gap:4px;max-width:100%}
+.browser-status-refresh small{font-size:11px;line-height:1.5;color:var(--muted);text-align:center}
+.browser-status-refresh .refresh-reminder{color:var(--accent)}
+.account-list-title .browser-buttons,.local-browser-session>.browser-buttons{align-items:flex-start}
+.browser-status-refresh-button.needs-refresh:not(:disabled){border-color:var(--accent);animation:browser-refresh-nudge 6s ease-in-out 3}
+.browser-status-refresh-button:hover,.browser-status-refresh-button:focus-visible{animation:none!important}
+@keyframes browser-refresh-nudge{0%,12%,100%{transform:translateX(0)}2%,6%,10%{transform:translateX(-2px)}4%,8%{transform:translateX(2px)}}
 .credit{color:var(--success)}
 .notice{background:var(--notice-bg);border:1px solid var(--notice-line);padding:13px;border-radius:8px;color:var(--notice-text);font-size:13px;line-height:1.6}
 .workspace-tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin-bottom:22px}

@@ -10,10 +10,11 @@ export default function useLocalBrowsers(accounts, userID, token, setAccounts) {
   const [states, setStates] = useState({});
   const [closing, setClosing] = useState({});
   const versions = useRef({});
+  const refreshController = useRef(null);
+  const [refreshing, setRefreshing] = useState(false);
   const recorded = useRef({});
   const recording = useRef(new Set());
   const [loginError, setLoginError] = useState('');
-  const accountIDs = JSON.stringify(accounts.map(account => account.id));
   const update = useCallback((id, status) => {
     versions.current[id] = (versions.current[id] || 0) + 1;
     setStates(current => ({ ...current, [id]: status }));
@@ -27,27 +28,34 @@ export default function useLocalBrowsers(accounts, userID, token, setAccounts) {
       recording.current.add(key);
       request('/accounts/' + id + '/login', token, { method: 'POST', body: { logged_in_at: at } })
         .then(data => { recorded.current[key] = true; setLoginError(''); setAccounts(current => current.map(account => String(account.id) === id ? { ...account, last_login_at: data.last_login_at } : account)); })
-        .catch(() => setLoginError('登录时间暂未同步，正在重试。'))
+        .catch(() => setLoginError('登录时间暂未同步，请刷新浏览器状态重试。'))
         .finally(() => recording.current.delete(key));
     }
   }, [states, accounts, userID, token, setAccounts]);
   useEffect(() => {
-    const controller = new AbortController();
     setStates({});
-    let timer;
-    const poll = async () => {
-      await Promise.all(JSON.parse(accountIDs).map(async id => {
+    return () => { refreshController.current?.abort(); };
+  }, [userID, port]);
+  const refresh = async visibleAccounts => {
+    if (refreshController.current) return;
+    const controller = new AbortController();
+    refreshController.current = controller;
+    setRefreshing(true);
+    try {
+      // 仅手动检查当前页，逐个请求；助手不可达时立即停止。
+      for (const { id } of visibleAccounts) {
+        if (controller.signal.aborted) return;
         const version = versions.current[id];
-        try {
-          const status = await launcherRequest('/browsers/' + encodeURIComponent(browserEnvironmentID(userID, id)), { signal: controller.signal });
-          if (!controller.signal.aborted && versions.current[id] === version) update(id, status);
-        } catch { /* 暂时断连时保留状态，避免把仍在运行的窗口误报为已关闭。 */ }
-      }));
-      if (!controller.signal.aborted) timer = setTimeout(poll, 2000);
-    };
-    poll();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [accountIDs, userID, update, port]);
+        const status = await launcherRequest('/browsers/' + encodeURIComponent(browserEnvironmentID(userID, id)), { signal: controller.signal, port });
+        if (!controller.signal.aborted && versions.current[id] === version) update(id, status);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      refreshController.current = null;
+      setRefreshing(false);
+    }
+  };
   const close = async id => {
     if (closing[id]) return;
     setClosing(current => ({ ...current, [id]: true }));
@@ -55,5 +63,5 @@ export default function useLocalBrowsers(accounts, userID, token, setAccounts) {
     try { update(id, await launcherRequest('/browsers/' + encodeURIComponent(browserEnvironmentID(userID, id)), { method: 'DELETE' })); }
     finally { setClosing(current => ({ ...current, [id]: false })); }
   };
-  return { states, closing, update, close, loginError };
+  return { states, closing, update, close, refresh, refreshing, loginError };
 }

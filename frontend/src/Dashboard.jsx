@@ -9,6 +9,7 @@ import WalletPanel from './WalletPanel';
 import SessionFields from './SessionFields';
 import BrowserSession from './BrowserSession';
 import LocalBrowserSession from './LocalBrowserSession';
+import BrowserStatusRefresh from './BrowserStatusRefresh';
 import ProxyManager from './ProxyManager';
 import { browserEnvironmentID, launcherPort, launcherRequest } from './localBrowser';
 import { Link, navigate, canonicalAdminPath } from './router';
@@ -62,7 +63,6 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     sync(); const timer = setInterval(sync, 30000);
     return () => { stopped = true; clearInterval(timer); };
   }, [token, user?.id, admin, localPort]);
-  const localBrowsers = useLocalBrowsers(admin ? accounts : [], user?.id, token, setAccounts);
   const [accountQuery,setAccountQuery]=useState(''), [accountPageIndex,setAccountPageIndex]=useState(1),[accountPage,setAccountPage]=useState({accounts:[],total:0});
   const [accountSort, setAccountSort] = useState({ key: 'id', direction: 'desc' });
   const [paymentCards, setPaymentCards] = useState([]), [cardsLoading, setCardsLoading] = useState(true);
@@ -197,6 +197,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   const activeCount = accounts.filter(a => a.renewal_date && a.renewal_date > today).length;
   const displayedPage = admin && accountSort.key === 'proxy' ? accountProxyPage(accounts, { config: proxyConfig, environmentID: id => browserEnvironmentID(user.id, id), query: accountQuery, group: groupFilter, direction: accountSort.direction, page: accountPageIndex, pageSize }) : accountPage;
   const visibleAccounts = displayedPage.accounts;
+  const localBrowsers = useLocalBrowsers(admin ? accounts : [], user?.id, token, setAccounts);
   return <main className="dashboard">
     {admin && tab === 'accounts' && <div className="stats"><div><span>{admin ? '全部账号' : '我的账号'}</span><b>{accounts.length}</b></div><div><span>有效会员账号</span><b>{activeCount}</b></div><div><span>我的钱包</span><button className="balance-link" onClick={() => navigate('/admin/wallet')}><b>{wallet?.balance ?? '—'}</b> 代币 <Coins size={16} /></button></div></div>}
 
@@ -204,7 +205,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     {message && <p className="success" role="status">{message}</p>}
     {localBrowsers.loginError && <p className="notice" role="status">{localBrowsers.loginError}</p>}
     {tab==='payment-exceptions' ? <PaymentExceptions token={token}/> : tab === 'orders' || tab==='packages' ? <RechargeManager key={tab} token={token} accounts={accounts} packagesOnly={tab==='packages'}/> : ['notices','audit','proxy-activity'].includes(tab) ? <OperationHistory key={tab} token={token} mode={tab}/> : tab === 'users' ? user.role === 'super_admin' ? <UserManager token={token} /> : <section className="account-section"><h2>无权访问用户列表</h2><p className="muted">只有超级管理员可以管理用户角色。</p><Link to="/admin/accounts" className="outline small">返回账号管理</Link></section> : tab === 'addresses' ? <AddressManager token={token} /> : tab === 'bank-cards' ? <BankCardManager token={token} accounts={accounts} /> : tab === 'proxies' ? <ProxyManager config={proxyConfig} error={proxyError} refresh={refreshProxies} onChange={setProxyConfig} /> : tab === 'wallet' ? <WalletPanel wallet={wallet} token={token} refresh={refresh} user={user || {}} notice={notice} /> : <section className="account-section">
-      <div className="section-title account-list-title"><h2>{admin ? '全部 ChatGPT 账号' : '你的 ChatGPT 账号'}</h2><div className="browser-buttons"><button className="text-btn" onClick={() => refresh().catch(e => setError(e.message))}><RefreshCw size={15} />刷新</button><button className="primary small" onClick={() => open('add')}><Plus size={15} />添加账号</button></div></div>
+      <div className="section-title account-list-title"><h2>{admin ? '全部 ChatGPT 账号' : '你的 ChatGPT 账号'}</h2><div className="browser-buttons"><button className="text-btn" onClick={() => refresh().catch(e => setError(e.message))}><RefreshCw size={15} />刷新</button>{admin && <BrowserStatusRefresh className="small" reminderKey={`${localPort}:${visibleAccounts.map(account => account.id).join(',')}`} disabled={localBrowsers.refreshing} onClick={() => localBrowsers.refresh(visibleAccounts).then(() => setError('')).catch(e => setError(e.message))}>{localBrowsers.refreshing ? '正在刷新…' : '刷新浏览器状态'}</BrowserStatusRefresh>}<button className="primary small" onClick={() => open('add')}><Plus size={15} />添加账号</button></div></div>
       <div className="address-search"><input aria-label="搜索账号" placeholder="搜索账号邮箱或名称" value={accountQuery} onChange={e=>setAccountQuery(e.target.value)}/>{admin && <><button className="outline small" onClick={()=>downloadCSV('/accounts/export?'+new URLSearchParams({q:accountQuery,group:groupFilter==='all'?'':groupFilter===''?'none':groupFilter,sort:accountSort.key === 'proxy' ? 'id' : accountSort.key,direction:accountSort.direction}),token,'账号清单.csv').catch(e=>setError(e.message))}>导出清单</button></>}</div>{admin && <div className="account-toolbar"><Select label="筛选账号分组" value={groupFilter} onChange={setGroupFilter} options={[{ value: 'all', label: '全部分组 · ' + accounts.length }, { value: '', label: '未分组 · ' + accounts.filter(account => !account.group_id).length }, ...groups.map(group => ({ value: String(group.id), label: group.name + ' · ' + group.account_count }))]} /><button className="outline small" onClick={() => setGroupManager(true)}>管理分组</button><span className="muted">{displayedPage.total} 个账号</span></div>}
       <DataTable searchQuery={accountQuery} label="ChatGPT 账号列表" className={admin ? 'accounts-table' : 'accounts-table user-accounts-table'} sort={accountSort} onSort={sortAccounts} stickyActions={admin} columns={[{ label: '账号', key: 'account' }, ...(admin ? [{ label: '所属用户', key: 'owner' }, { label: '分组', key: 'group' }, { label: 'SOCKS5', key: 'proxy', disabled: !proxyConfig }, { label: 'Session', key: 'session' }, { label: '续订日期', key: 'renewal_date' }, { label: '是否续订', key: 'renewal_enabled' }, { label: '付款卡', key: 'payment_card' }] : []), { label: '上次登录（UTC+8）', key: 'last_login_at' }, ...(admin ? ['操作'] : [])]} empty={!visibleAccounts.length && (accounts.length ? (accountQuery ? '没有匹配的账号。' : '此分组暂无账号。') : <div className="empty"><KeyRound size={24} /><h3>还没有添加账号</h3><p>粘贴 Session JSON，保存你的 ChatGPT 账号。</p><button className="outline" onClick={() => open('add')}>添加第一个账号</button></div>)}>
         {visibleAccounts.map(account => <tr className="account-row" key={account.id}>
