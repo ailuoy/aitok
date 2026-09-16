@@ -27,8 +27,8 @@ func envDefault(key, fallback string) string {
 
 func loadAdminConfig() adminConfig {
 	return adminConfig{
-		Username: envDefault("ADMIN_USERNAME", envDefault("SUPER_ADMIN_USERNAME", "admin")),
-		Password: envDefault("ADMIN_PASSWORD", envDefault("SUPER_ADMIN_PASSWORD", "")),
+		Username: envDefault("ADMIN_USERNAME", "admin"),
+		Password: envDefault("ADMIN_PASSWORD", ""),
 	}
 }
 

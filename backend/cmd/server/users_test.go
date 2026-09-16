@@ -10,13 +10,18 @@ import (
 	"time"
 )
 
-func TestAdminEnvironmentPriority(t *testing.T) {
-	t.Setenv("ADMIN_USERNAME", "new-admin")
-	t.Setenv("ADMIN_PASSWORD", "new-password")
+func TestAdminEnvironmentIgnoresLegacyKeys(t *testing.T) {
+	t.Setenv("ADMIN_USERNAME", "")
+	t.Setenv("ADMIN_PASSWORD", "")
 	t.Setenv("SUPER_ADMIN_USERNAME", "legacy-admin")
 	t.Setenv("SUPER_ADMIN_PASSWORD", "legacy-password")
+	if config := loadAdminConfig(); config.Username != "admin" || config.Password != "" {
+		t.Fatal("旧变量不应再启用管理员登录")
+	}
+	t.Setenv("ADMIN_USERNAME", "new-admin")
+	t.Setenv("ADMIN_PASSWORD", "new-password")
 	if config := loadAdminConfig(); config.Username != "new-admin" || config.Password != "new-password" {
-		t.Fatal("ADMIN 配置应优先于兼容配置")
+		t.Fatal("未读取 ADMIN 配置")
 	}
 }
 

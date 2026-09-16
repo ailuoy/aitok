@@ -13,13 +13,11 @@ import (
 func TestAdminConfigAndRejectedCredentials(t *testing.T) {
 	t.Setenv("ADMIN_USERNAME", "")
 	t.Setenv("ADMIN_PASSWORD", "")
-	t.Setenv("SUPER_ADMIN_USERNAME", "")
-	t.Setenv("SUPER_ADMIN_PASSWORD", "")
 	if got := loadAdminConfig(); got.Username != "admin" || got.Password != "" {
 		t.Fatal("默认超管配置错误")
 	}
-	t.Setenv("SUPER_ADMIN_USERNAME", "operator")
-	t.Setenv("SUPER_ADMIN_PASSWORD", "custom-password")
+	t.Setenv("ADMIN_USERNAME", "operator")
+	t.Setenv("ADMIN_PASSWORD", "custom-password")
 	s := &Server{admin: loadAdminConfig()}
 	if s.admin.Username != "operator" || s.admin.Password != "custom-password" {
 		t.Fatal("未读取环境配置")

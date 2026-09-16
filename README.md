@@ -285,7 +285,7 @@ python3 scripts/import-oregon-addresses.py --count 100 --output backend/data/ore
 
 ## 用户角色与后台导航
 
-后端优先读取 `ADMIN_USERNAME`、`ADMIN_PASSWORD`，兼容旧 `SUPER_ADMIN_USERNAME`、`SUPER_ADMIN_PASSWORD`。本地配置在 `backend/.env`，示例见 `backend/.env.example`。环境账号是固定超级管理员，保留全部业务管理权限和用户角色管理权限，不能从用户列表降级或创建另一个超级管理员。
+后端统一读取 `ADMIN_USERNAME`、`ADMIN_PASSWORD`，不再读取旧超管变量；升级前请将现有环境中的管理员变量改为这两个名称。`ADMIN_USERNAME` 默认 admin，`ADMIN_PASSWORD` 必填，部署配置检查会拒绝缺失或空密码。本地配置在 `backend/.env`，示例见 `backend/.env.example`；部署脚本先读取根目录 `.env`，再由 `backend/.env` 覆盖同名值，修改后需重新创建后端容器。环境账号是固定超级管理员，保留全部业务管理权限和用户角色管理权限，不能从用户列表降级或创建另一个超级管理员。
 
 迁移 `backend/migrations/009_user_roles.sql` 为用户增加 `role`：`admin` 为管理员，`user` 为用户；NULL、空字符串按用户处理。密码注册和验证码首次登录均强制创建用户身份，请求中传入 role 不会提权。管理员可管理全部账号、分组、地址和银行卡；普通用户只管理自己的数据并使用共享地址。钱包按登录用户记账，本机代理仍保存在访问者电脑，账号助手使用限权只读凭据。
 
