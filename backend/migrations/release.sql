@@ -753,4 +753,8 @@ CREATE INDEX IF NOT EXISTS chatgpt_accounts_payment_card_idx ON chatgpt_accounts
 COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、上次登录、续订意愿及提醒、人工续订日期、默认付款卡及有订单凭据的订阅核验状态；默认付款卡不代表官网绑卡或自动扣款。';
 
 
+-- 来源：027_account_renewal_default_off.sql
+-- 新账号默认不续订，保留已有账号明确保存的续订选择。
+ALTER TABLE chatgpt_accounts ALTER COLUMN renewal_enabled SET DEFAULT FALSE;
+
 COMMIT;

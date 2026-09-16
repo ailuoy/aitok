@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Server) insertAccount(ctx context.Context, user int64, label, email, encrypted string) (Account, error) {
-	a := Account{UserID: user, Label: label, Email: email, HasSession: true, RenewalEnabled: true}
+	a := Account{UserID: user, Label: label, Email: email, HasSession: true}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return a, err
@@ -31,7 +31,7 @@ func (s *Server) insertAccount(ctx context.Context, user int64, label, email, en
 	if duplicate {
 		return a, fmt.Errorf("该邮箱账号已存在，请更新原账号的 Session")
 	}
-	err = tx.QueryRowContext(ctx, `INSERT INTO chatgpt_accounts(user_id,label,email,session_ciphertext) VALUES($1,$2,$3,$4) RETURNING id,created_at`, user, label, email, encrypted).Scan(&a.ID, &a.CreatedAt)
+	err = tx.QueryRowContext(ctx, `INSERT INTO chatgpt_accounts(user_id,label,email,session_ciphertext) VALUES($1,$2,$3,$4) RETURNING id,created_at,renewal_enabled`, user, label, email, encrypted).Scan(&a.ID, &a.CreatedAt, &a.RenewalEnabled)
 	if err == nil {
 		err = recordEvent(ctx, tx, user, a.ID, "account", "create", eventKey(), map[string]any{}, map[string]any{"email": email, "label": label})
 	}

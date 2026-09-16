@@ -127,6 +127,10 @@ func TestWalletAndRenewalIntegration(t *testing.T) {
 	a := call("POST", "/api/accounts", accountBody, 1, 201)["account"].(map[string]any)
 	aid := int64(a["id"].(float64))
 	path := fmt.Sprintf("/api/accounts/%d", aid)
+	var renewalEnabled bool
+	if err := db.QueryRow(`SELECT renewal_enabled FROM chatgpt_accounts WHERE id=$1`, aid).Scan(&renewalEnabled); err != nil || renewalEnabled {
+		t.Fatal("新账号续订应默认关闭", err)
+	}
 	var stored string
 	db.QueryRow(`SELECT session_ciphertext FROM chatgpt_accounts WHERE id=$1`, aid).Scan(&stored)
 	if stored == "" || strings.Contains(stored, "secret-value") {
@@ -141,6 +145,9 @@ func TestWalletAndRenewalIntegration(t *testing.T) {
 	list = call("GET", "/api/accounts", nil, 3, 200)["accounts"].([]any)
 	if len(list) != 1 {
 		t.Fatal("超管应能查看全部账号")
+	}
+	if list[0].(map[string]any)["renewal_enabled"] != false {
+		t.Fatal("账号列表应返回默认关闭的续订状态")
 	}
 	encodedList, _ := json.Marshal(list)
 	if strings.Contains(string(encodedList), "secret-value") || strings.Contains(string(encodedList), "session_ciphertext") {

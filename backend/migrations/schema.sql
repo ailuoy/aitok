@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS chatgpt_accounts (
   verified_plan TEXT NOT NULL DEFAULT '',
   verified_at TIMESTAMPTZ,
   subscription_ends_at DATE,
-  renewal_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  renewal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   payment_card_id BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

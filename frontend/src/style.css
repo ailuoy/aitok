@@ -320,10 +320,10 @@ button,input,textarea{font-family:inherit}
 .table-sort:focus-visible{outline:2px solid currentColor;outline-offset:4px;border-radius:2px}
 .table-sort:disabled{opacity:.55;cursor:not-allowed}
 .account-renewal-switch{display:inline-flex;align-items:center;gap:7px;padding:4px 0;border:0;background:transparent;color:var(--text);font:inherit;white-space:nowrap;cursor:pointer}
-.switch-track{display:inline-flex;align-items:center;width:32px;height:19px;padding:2px;border-radius:12px;background:var(--muted);transition:background .15s}
+.switch-track{display:inline-flex;align-items:center;width:32px;height:19px;padding:2px;border-radius:12px;background:#9ca3af;transition:background .15s}
 .switch-track>span{width:15px;height:15px;border-radius:50%;background:#fff;transition:transform .15s}
-.account-renewal-switch[aria-checked=true] .switch-track{background:var(--accent)}
-.account-renewal-switch[aria-checked=true] .switch-track>span{transform:translateX(13px)}
+[role=switch][aria-checked=true] .switch-track{background:var(--success)}
+[role=switch][aria-checked=true] .switch-track>span{transform:translateX(13px)}
 .account-renewal-switch:disabled{opacity:.55;cursor:wait}
 .account-payment-card .custom-select{min-width:175px;max-width:240px}
 @media(max-width:760px){.data-table .table-actions{position:static}.data-table th,.data-table td{padding:10px}.data-table .row-actions,.data-table .account-actions{max-width:230px}}

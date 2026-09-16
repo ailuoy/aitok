@@ -37,7 +37,8 @@ SELECT table_name,
      AND pg_get_serial_sequence(format('%I.%I',current_schema(),r.table_name),'id') IS NOT NULL
      AND pg_get_expr(d.adbin,d.adrelid) LIKE 'nextval(%'
  ) invalid_id,
+ (r.table_name='chatgpt_accounts' AND NOT EXISTS(SELECT 1 FROM information_schema.columns c WHERE c.table_schema=current_schema() AND c.table_name=r.table_name AND c.column_name='renewal_enabled' AND c.data_type='boolean' AND c.is_nullable='NO' AND c.column_default='false')) invalid_renewal_default,
  (r.table_name='exchange_rates' AND (SELECT count(*) FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid WHERE c.relnamespace=current_schema()::regnamespace AND c.relname=r.table_name AND k.conname IN ('exchange_rates_quote_currency_check','exchange_rates_rate_check') AND pg_get_constraintdef(k.oid) LIKE '%CNY%')<>2) invalid_fx_constraints
 FROM required r
 )
-SELECT current_database(),current_schema(),table_name,CASE WHEN cardinality(missing)+cardinality(invalid)+cardinality(triggers)>0 OR has_fk OR invalid_fx_constraints OR invalid_id THEN 'INVALID' ELSE 'OK' END,missing,invalid,triggers,invalid_id FROM checked ORDER BY table_name;
+SELECT current_database(),current_schema(),table_name,CASE WHEN cardinality(missing)+cardinality(invalid)+cardinality(triggers)>0 OR has_fk OR invalid_fx_constraints OR invalid_id OR invalid_renewal_default THEN 'INVALID' ELSE 'OK' END,missing,invalid,triggers,invalid_id FROM checked ORDER BY table_name;
