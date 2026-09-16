@@ -8,6 +8,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 @media(max-width:700px){.proxy-fields{grid-template-columns:1fr}.workspace-tabs{gap:15px;flex-wrap:wrap}.workspace-tabs a{font-size:12px}.proxy-manager>.section-title{align-items:flex-start;flex-wrap:wrap}.proxy-actions{width:100%}.account-proxy{max-width:100%}.json-editor{height:230px}}
 button:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:4px}
 .muted{color:var(--muted);font-size:13px;line-height:1.7}
+.account-owner{display:grid;justify-items:start;gap:6px;overflow-wrap:anywhere}
+.account-owner-bind{font-size:var(--font-caption);padding:0}
+.account-owner-match{display:grid;gap:6px;overflow-wrap:anywhere}
+.account-owner-match p{margin:0}
 .browser-status-refresh{display:inline-flex;flex-direction:column;align-items:stretch;gap:4px;max-width:100%}
 .browser-status-refresh small{font-size:11px;line-height:1.5;color:var(--muted);text-align:center}
 .browser-status-refresh .refresh-reminder{color:var(--accent)}

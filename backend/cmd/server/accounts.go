@@ -183,6 +183,10 @@ func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
 		s.subscriptionSettings(w, r, id, aid)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "owner" {
+		s.accountOwner(w, r, id, aid)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "payment-card" {
 		s.setAccountPaymentCard(w, r, id, aid)
 		return

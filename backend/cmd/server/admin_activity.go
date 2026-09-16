@@ -22,6 +22,7 @@ var auditControls = map[string]string{
 	"assign": "分配处理人", "verify": "核验开通", "refund": "退款", "deposit": "记录存入", "purchase": "记录官网扣款", "group": "管理分组",
 	"subscription": "修改是否续订", "proxy_create": "新增本机代理", "proxy_update": "编辑本机代理", "proxy_delete": "删除本机代理",
 	"discard":    "废弃订单",
+	"bind_user":  "绑定账号所属用户",
 	"proxy_read": "查看本机代理", "proxy_test": "测试本机代理", "proxy_import": "解析代理导入", "proxy_bind": "绑定账号代理",
 }
 
@@ -156,6 +157,7 @@ func (s *Server) auditFilter(next http.Handler) http.Handler {
 func safeAuditResource(path string) string {
 	known := map[string]bool{"api": true, "accounts": true, "account-groups": true, "addresses": true, "bank-cards": true, "card-operations": true, "orders": true, "packages": true, "users": true, "wallet": true, "topups": true, "audit": true, "proxy-activity": true, "payment-exceptions": true, "notices": true, "order-operators": true, "me": true, "logout": true, "export": true, "import": true, "ledger": true, "access": true, "role": true, "group": true, "login": true, "subscription": true, "browser": true, "browser-session": true, "session": true, "renewal-date": true, "renew": true, "sync": true, "refund": true, "collection-quote": true, "record": true}
 	known["payment-card"], known["payment-cards"] = true, true
+	known["owner"] = true
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	for i, part := range parts {
 		if !known[part] && !auditNumericID.MatchString(part) {

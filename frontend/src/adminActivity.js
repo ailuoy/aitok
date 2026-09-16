@@ -25,6 +25,7 @@ export async function recordAdminActivity(context, event) {
 }
 
 function controlFor(element) {
+  if (element.matches('.account-owner-bind')) return 'bind_user';
   if (element.matches('.account-renewal-switch')) return 'subscription';
   if (element.closest('.pagination-pages')) return 'paginate';
   if (element.getAttribute('role') === 'option' || element.getAttribute('role') === 'combobox') return 'select';
@@ -32,7 +33,7 @@ function controlFor(element) {
   const text = (element.textContent || '').trim();
   const labels = [
     [/^(添加|新增|创建|新建)/, 'add'], [/^编辑/, 'edit'], [/^删除/, 'delete'], [/^确认/, 'confirm'],
-    [/^(取消|返回修改|收起|关闭$)/, 'cancel'], [/^保存/, 'save'], [/^搜索/, 'search'], [/^(刷新|重试|立即重试)/, 'refresh'],
+    [/^(取消|返回修改|收起|关闭$)/, 'cancel'], [/^保存/, 'save'], [/^(搜索|查找)/, 'search'], [/^(刷新|重试|立即重试)/, 'refresh'],
     [/^导出/, 'export'], [/^(导入|批量导入|测试并导入)/, 'import'], [/^(打开账号|打开浏览器)/, 'open_browser'],
     [/^(关闭浏览器|关闭账号窗口)/, 'close_browser'], [/^(详情|完整资料|查看|使用记录|全部使用记录|余额 \/ 对账单|运营 \/ 核对)/, 'view'],
     [/^复制/, 'copy'], [/^(自动|白色|黑色)$/, 'theme'], [/^(上一页|下一页)$/, 'paginate'], [/^测试/, 'test'],

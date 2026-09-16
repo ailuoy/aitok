@@ -23,6 +23,7 @@ import Select from './Select';
 import GroupManager from './GroupManager';
 import CreateAccountGroup from './CreateAccountGroup';
 import AccountPaymentCard from './AccountPaymentCard';
+import AccountOwnerBinding from './AccountOwnerBinding';
 import AccountRenewal from './AccountRenewal';
 import { accountProxyPage } from './accountProxyPage.mjs';
 import { formatUTC8 } from './time';
@@ -44,6 +45,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   const [proxyConfig, setProxyConfig] = useState(null);
   const [proxyError, setProxyError] = useState('');
   const [bindingAccount, setBindingAccount] = useState(null);
+  const [ownerAccount, setOwnerAccount] = useState(null);
   useEffect(() => {
     let stopped = false, running = false;
     async function sync() {
@@ -87,7 +89,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   function updateAccount(id, value) {
     const update = current => current.map(account => account.id === id ? { ...account, ...value } : account);
     setAccounts(update); setAccountPage(current => ({ ...current, accounts: update(current.accounts) }));
-    setError(''); setMessage('renewal_enabled' in value ? '是否续订已更新' : '账号付款卡绑定已更新');
+    setError(''); setMessage('user_id' in value ? '账号所属用户已更新' : 'renewal_enabled' in value ? '是否续订已更新' : '账号付款卡绑定已更新');
   }
   const [groupManager, setGroupManager] = useState(false);
   const [creatingGroup, setCreatingGroup] = useState(null);
@@ -210,7 +212,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
       <DataTable searchQuery={accountQuery} label="ChatGPT 账号列表" className={admin ? 'accounts-table' : 'accounts-table user-accounts-table'} sort={accountSort} onSort={sortAccounts} stickyActions={admin} columns={[{ label: '账号', key: 'account' }, ...(admin ? [{ label: '所属用户', key: 'owner' }, { label: '分组', key: 'group' }, { label: 'SOCKS5', key: 'proxy', disabled: !proxyConfig }, { label: 'Session', key: 'session' }, { label: '续订日期', key: 'renewal_date' }, { label: '是否续订', key: 'renewal_enabled' }, { label: '付款卡', key: 'payment_card' }] : []), { label: '上次登录（UTC+8）', key: 'last_login_at' }, ...(admin ? ['操作'] : [])]} empty={!visibleAccounts.length && (accounts.length ? (accountQuery ? '没有匹配的账号。' : '此分组暂无账号。') : <div className="empty"><KeyRound size={24} /><h3>还没有添加账号</h3><p>粘贴 Session JSON，保存你的 ChatGPT 账号。</p><button className="outline" onClick={() => open('add')}>添加第一个账号</button></div>)}>
         {visibleAccounts.map(account => <tr className="account-row" key={account.id}>
           <td className="table-text"><strong>{account.label}</strong>{account.label !== account.email && <small className="cell-secondary">{account.email}</small>}</td>
-          {admin && <td className="table-text">{account.owner_email || '—'}</td>}
+          {admin && <td className="table-text"><div className="account-owner"><span>{account.owner_email || '—'}</span><button className="text-btn account-owner-bind" aria-label={`绑定账号 ${account.email} 的所属用户`} onClick={() => setOwnerAccount(account)}>绑定用户</button></div></td>}
           {admin && <><td className="table-selector"><div className="account-group"><Select label={'账号 ' + account.email + ' 的分组'} value={account.group_id ?? ''} onChange={value => bindGroup(account, value)} disabled={groupBusy !== null} options={[{ value: '', label: '未分组' }, ...groups.filter(group => group.user_id === account.user_id).map(group => ({ value: String(group.id), label: group.name }))]} searchPlaceholder="输入分组名称过滤…" createLabel="新建分组" onCreate={name => setCreatingGroup({ account, name })} /></div></td>
           <td className="table-selector">{admin && <div className="account-proxy"><Select label={'账号 ' + account.email + ' 的 SOCKS5'} value={proxyConfig?.bindings[browserEnvironmentID(user.id, account.id)] || ''} disabled={!proxyConfig || bindingAccount !== null} onChange={value => bindProxy(account, value)} options={[{ value: '', label: proxyConfig ? '直连（不使用代理）' : '请先启动本机启动器' }, ...(proxyConfig?.proxies || []).map(proxy => ({ value: proxy.id, label: proxy.name + ' · ' + proxy.host }))]} /></div>}</td>
           <td><span className={account.has_session ? 'credit' : 'muted'}>{account.has_session ? 'Session 已保存' : '未保存 Session'}</span></td>
@@ -222,6 +224,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
         </tr>)}
       </DataTable><Pagination page={accountPageIndex} pageSize={pageSize} total={displayedPage.total} onPageChange={setAccountPageIndex} onPageSizeChange={setPageSize} disabled={false} />
     </section>}
+    {ownerAccount && admin && <AccountOwnerBinding account={ownerAccount} token={token} onBound={value => { updateAccount(ownerAccount.id, value); refreshGroups().catch(error => setError('账号已绑定，但分组刷新失败：' + error.message)); }} onClose={() => setOwnerAccount(null)} />}
     {creatingGroup && <CreateAccountGroup token={token} account={creatingGroup.account} initialName={creatingGroup.name} onCreated={refreshGrouping} onClose={() => setCreatingGroup(null)} />}
     {groupManager && <GroupManager groups={groups} token={token} user={user} accounts={accounts} onChange={refreshGrouping} onClose={() => setGroupManager(false)} />}
     {dialog && <Dialog title={{ add: '导入 ChatGPT 账号', session: '更新账号 Session', browser: '账号浏览器管理', 'local-browser': '在本机打开账号', date: '设置续订日期', delete: '删除账号' }[dialog.type]} onClose={() => { if (!busy) setDialog(null); }}>{dialog.type === 'local-browser' ? <LocalBrowserSession key={dialog.key} account={dialog.account} userID={user.id} token={token} onStatus={localBrowsers.update} onClosed={closeBrowserDialog} /> : dialog.type === 'browser' ? <BrowserSession account={dialog.account} token={token} onClosed={closeBrowserDialog} /> : <form onSubmit={submit}>

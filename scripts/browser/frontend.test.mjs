@@ -50,6 +50,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let ledgerResponseLost = false;
   const userRows = [{ id: 3, username: 'admin', email: '', role: 'super_admin', created_at: '2026-09-01T00:00:00Z' }, { id: 1, email: 'member@example.com', role: '', created_at: '2026-09-02T00:00:00Z' }];
   const roleWrites = [];
+  const ownerLookups = [], ownerWrites = [];
+  const ownerTargets = [{ id: 4, email: 'recipient@example.com' }, { id: 1, email: 'member@example.com' }];
   let rechargePackages=[], rechargeOrders=[];
   let phpRate='0.01589', phpCNYRate='0.1067';
   const operationWrites=[];
@@ -169,6 +171,22 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         if (request.method === 'PATCH') account.group_id = JSON.parse(request.postData).group_id;
         groups.forEach(group => { group.account_count = group.id === account.group_id ? 1 : 0; });
         data = { group_id: account.group_id };
+      } else if (url.pathname === '/api/accounts/1/owner') {
+        const input = request.postData ? JSON.parse(request.postData) : {};
+        const target = ownerTargets.find(user => user.email === input.email);
+        if (request.method === 'POST') {
+          ownerLookups.push(input);
+          if (target) data = { user: target };
+          else { responseCode = 404; data = { error: '未找到该邮箱对应的可用注册用户，请核对完整邮箱' }; }
+        } else if (request.method === 'PATCH') {
+          ownerWrites.push(input);
+          if (!target || input.user_id !== target.id || input.expected_owner_id !== account.user_id) { responseCode = 409; data = { error: '账号或目标用户已变更，请重新查找' }; }
+          else {
+            account.user_id = target.id; account.owner_email = target.email; account.group_id = null;
+            groups.forEach(group => { group.account_count = 0; });
+            data = { user_id: account.user_id, owner_email: account.owner_email, group_id: null };
+          }
+        }
       } else if (url.pathname === '/api/accounts/1/login') {
         if (request.method === 'POST') { loginWrites++; account.last_login_at = JSON.parse(request.postData).logged_in_at; }
         data = { last_login_at: account.last_login_at };
@@ -612,6 +630,52 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('Boolean(document.querySelector(".account-toolbar"))');
   const sidebarShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'admin-sidebar.png'), Buffer.from(sidebarShot.data, 'base64'));
+  const userListRequestsBeforeBinding = requests.filter(url => new URL(url).pathname === '/api/users').length;
+  await click('绑定用户');
+  await wait('Boolean(document.querySelector(".account-owner-dialog input[name=owner_email]"))');
+  assert.equal(await evaluate('document.querySelectorAll(".account-owner-dialog select,.account-owner-dialog [role=combobox],.account-owner-dialog datalist").length'), 0);
+  assert.equal(await evaluate('document.querySelector(".account-owner-dialog .primary").disabled'), true);
+  await fill('input[name=owner_email]', 'recipient');
+  await click('查找用户');
+  await delay(100);
+  assert.equal(ownerLookups.length, 0, '不完整邮箱不能发起查找');
+  await fill('input[name=owner_email]', 'recipient@example.co');
+  await click('查找用户');
+  await wait('document.querySelector(".account-owner-dialog .error")?.innerText.includes("未找到")');
+  assert.equal(await evaluate('document.querySelector(".account-owner-dialog .primary").disabled'), true);
+  await fill('input[name=owner_email]', 'RECIPIENT@EXAMPLE.COM');
+  await click('查找用户');
+  await wait('document.querySelector(".account-owner-match")?.innerText.includes("recipient@example.com")');
+  assert.deepEqual(ownerLookups.at(-1), { email: 'recipient@example.com' });
+  assert.equal(ownerWrites.length, 0, '查找成功不能自动绑定');
+  await fill('input[name=owner_email]', 'other@example.com');
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-owner-match"))'), false);
+  assert.equal(await evaluate('document.querySelector(".account-owner-dialog .primary").disabled'), true, '修改邮箱必须重新查找');
+  await click('取消');
+  await wait('!document.querySelector("dialog")');
+  assert.equal(ownerWrites.length, 0);
+  await click('绑定用户');
+  await fill('input[name=owner_email]', 'recipient@example.com');
+  await click('查找用户');
+  await wait('!document.querySelector(".account-owner-dialog .primary").disabled');
+  await writeFile(join(directory, 'account-owner-binding.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  await click('确认绑定');
+  await wait('!document.querySelector("dialog") && document.querySelector(".account-owner")?.innerText.includes("recipient@example.com")');
+  assert.deepEqual(ownerWrites[0], { email: 'recipient@example.com', user_id: 4, expected_owner_id: 1 });
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-owner")?.innerText.includes("recipient@example.com")');
+  await click('绑定用户');
+  await fill('input[name=owner_email]', 'recipient@example.com');
+  await click('查找用户');
+  await wait('document.querySelector(".account-owner-match")?.innerText.includes("无需重复绑定")');
+  assert.equal(await evaluate('document.querySelector(".account-owner-dialog .primary").disabled'), true);
+  await fill('input[name=owner_email]', 'member@example.com');
+  await click('查找用户');
+  await wait('!document.querySelector(".account-owner-dialog .primary").disabled');
+  await click('确认绑定');
+  await wait('!document.querySelector("dialog") && document.querySelector(".account-owner")?.innerText.includes("member@example.com")');
+  assert.equal(ownerWrites.length, 2);
+  assert.equal(requests.filter(url => new URL(url).pathname === '/api/users').length, userListRequestsBeforeBinding, '绑定操作不能下载用户列表');
   await navigateAdmin('users');
   await wait('Boolean(document.querySelector(".user-manager tbody tr"))');
   assert.equal(await evaluate('document.querySelectorAll(".user-manager tbody button[role=combobox]").length'), 1);
@@ -662,7 +726,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   await click('管理分组');
   await fill('input[name=group_name]', '团队 A');
-  await select('分组所属用户', '1');
+  await select('分组所属用户', 'member@example.com');
   await click('添加分组');
   await wait('document.querySelector(".group-row")?.innerText.includes("团队 A")');
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
@@ -878,6 +942,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("工作账号")');
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"),a=>a.getAttribute("href"))'),['/admin/accounts']);
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','上次登录（UTC+8）']);
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-owner-bind"))'), false, '普通用户不能分配账号');
   assert.equal(await evaluate('Boolean(document.querySelector(".account-actions,.account-toolbar,.stats"))'),false);
   assert.equal(await evaluate('Boolean(document.querySelector(".user-menu a[href$=wallet]"))'),false);
   const requestMark = requests.length, localMark = localRequests.length;
