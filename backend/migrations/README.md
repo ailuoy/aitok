@@ -1,6 +1,6 @@
 # 上线 SQL
 
-使用 PostgreSQL 16。目标数据库应已创建，通常使用 `public` schema；执行 SQL 的连接应与应用使用相同的数据库及 schema，并具备相应建表和修改表权限。
+PostgreSQL 版本固定为 18.3，与线上一致；开发及隔离测试统一使用 `postgres:18.3-alpine`。目标数据库应已创建，通常使用 `public` schema；执行 SQL 的连接应与应用使用相同的数据库及 schema，并具备相应建表和修改表权限。本文的结构迁移不会升级 PostgreSQL 引擎版本，旧版本数据库须先单独完成版本迁移。
 
 ## 执行入口
 

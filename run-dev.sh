@@ -12,10 +12,16 @@ DB_PORT="${DB_PORT:-15682}"
 export DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres@localhost:${DB_PORT}/getgpt?sslmode=disable}"
 export BACKEND_ADDR="${BACKEND_ADDR:-:${BACKEND_PORT}}"
 DB_CONTAINER_NAME="${DB_CONTAINER_NAME:-getgpt-postgres-15682}"
+readonly DEV_POSTGRES_IMAGE="postgres:18.3-alpine"
 command -v go >/dev/null || { echo "缺少 go" >&2; exit 1; }
 command -v npm >/dev/null || { echo "缺少 npm" >&2; exit 1; }
 if command -v docker >/dev/null; then
   if docker container inspect "$DB_CONTAINER_NAME" >/dev/null 2>&1; then
+    container_image="$(docker container inspect --format '{{.Config.Image}}' "$DB_CONTAINER_NAME")"
+    if [ "$container_image" != "$DEV_POSTGRES_IMAGE" ]; then
+      echo "数据库容器使用 ${container_image}，项目要求 ${DEV_POSTGRES_IMAGE}；请先备份并完成数据库版本迁移，再重建容器。" >&2
+      exit 1
+    fi
     docker start "$DB_CONTAINER_NAME" >/dev/null 2>&1 || true
   else
     docker run -d --name "$DB_CONTAINER_NAME" \
@@ -23,8 +29,8 @@ if command -v docker >/dev/null; then
       -e POSTGRES_PASSWORD=postgres \
       -e POSTGRES_DB=getgpt \
       -p "${DB_PORT}:5432" \
-      -v getgpt_pgdata:/var/lib/postgresql/data \
-      postgres:16-alpine >/dev/null
+      -v "getgpt_pgdata:/var/lib/postgresql" \
+      "$DEV_POSTGRES_IMAGE" >/dev/null
   fi
   for _ in $(seq 1 30); do
     docker exec "$DB_CONTAINER_NAME" pg_isready -U postgres -d getgpt >/dev/null 2>&1 && break

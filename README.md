@@ -8,6 +8,8 @@ bash run-dev.sh
 
 前端地址为 `http://localhost:15680`，后端使用 `15681`，PostgreSQL 使用 `15682`。
 
+PostgreSQL 固定为 **18.3**，与线上一致；Compose 和 `run-dev.sh` 均使用 `postgres:18.3-alpine`，不跟随浮动版本。原生脚本检测到已有容器使用其他镜像版本时会停止启动。
+
 后端使用 Go Kratos v2.9.2，由 Kratos HTTP Server 注册路由，Kratos App 管理启动及 SIGINT/SIGTERM 优雅停机（最多等待 5 秒）。HTTP 服务与路由集中在 `backend/cmd/server/http.go`，业务处理函数继续使用标准 `http.HandlerFunc`，保留原有 REST JSON、鉴权和 CORS 协议。监听地址由 `BACKEND_ADDR` 配置，默认 `:15681`；关闭框架默认的 1 秒请求超时，由业务控制外部调用时限。
 
 ## 本地 Docker 启动
@@ -29,6 +31,8 @@ bash run-dev.sh
 启动或重启服务前自动释放对应端口：停止冲突的 Docker 容器（保留容器和数据卷），对本机监听进程先发送 TERM，等待约 3 秒后仍占用则发送 KILL。当前项目对应的服务容器会跳过；仅启动数据库时只处理数据库端口，仅启动应用时只处理前后端端口。
 
 Docker 开发使用独立的 `aitok-dev` Compose 项目和 `aitok-dev_getgpt_pgdata` 数据卷，不复用 `run-dev.sh` 的数据库数据。`db-start` 先启动并初始化本地库，随后可用 `app-start` 单独启动应用；`app-restart` 和 `db-restart` 只重建对应容器，不删除数据卷。前后端复用现有 Go / Nginx 镜像配置，修改代码后再次执行 `up` 构建更新，不提供热更新。此模式和原生开发、部署模式使用相同默认端口，不能同时占用。后台账号浏览器需要宿主机图形桌面，请使用 `run-dev.sh` 运行该功能。
+
+PostgreSQL 18.3 的数据卷挂载到 `/var/lib/postgresql`，镜像默认数据目录为 `/var/lib/postgresql/18/docker`。已有 PostgreSQL 16 数据不能通过替换镜像直接升级：须先备份，再经确认使用 `pg_upgrade` 或导出/导入迁移至 18.3；保留旧卷，禁止清空数据来完成升级。修改配置不会自动迁移现有数据库。
 
 开发网络显式使用 `10.253.0.0/24`，避免 Docker 默认地址池耗尽时报 `all predefined address pools have been fully subnetted`。若与已有 Docker 网络、局域网或 VPN 网段冲突，可在 `.env.docker` 设置 `DEV_NETWORK_SUBNET` 为未占用的私有子网；同时运行多个开发项目时需为各项目指定不同子网。已有网络的子网变更需先执行 `./run-dev-docker.sh down`，再执行 `./run-dev-docker.sh up` 重建网络（保留数据库卷）。
 
