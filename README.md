@@ -39,7 +39,7 @@ Docker 开发使用独立的 `aitok-dev` Compose 项目和 `aitok-dev_getgpt_pgd
 在服务器项目根目录配置 `.env`（可选的 `backend/.env` 会覆盖同名项）。设置已有数据库的 `DATABASE_URL`、固定的 `JWT_SECRET`、`SESSION_ENCRYPTION_KEY` 和实际站点地址 `APP_BASE_URL`，邮件、Stripe 等继续使用现有环境变量。
 
 ```bash
-# 仅检查配置，不拉取、构建或启动
+# 检查配置及 Docker 服务端 CPU 预算，不拉取、构建或启动
 bash scripts/deploy.sh --check
 
 # 拉取当前分支最新代码，构建并更新前后端
@@ -53,7 +53,11 @@ bash scripts/deploy.sh --skip-pull
 
 前端默认发布 `15680`，Web 容器的 Nginx 提供静态文件、页面路由回退以及 `/api/` 到后端的代理；浏览器始终使用同域 `/api`。Linux 宿主机的域名配置位于 `deploy/nginx.conf`，监听 `toktopup.com` 的 HTTP 80 端口并转发到本机 `15680`，安装方式见 [域名反向代理说明](deploy/README.md)。后端默认发布到 `127.0.0.1:15681`，通过 `BACKEND_BIND_HOST` 调整绑定地址。Stripe Webhook 使用 `https://toktopup.com/api/stripe/webhook`。开发服务和部署服务使用相同默认端口，不应同时占用这些端口。
 
-默认 `BUILD_CPU_COUNT=1`、`COMPOSE_PARALLEL_LIMIT=1`，BuildKit 内部串行执行构建任务。可在 `.env` 中调整，CPU 数变化时默认使用对应的新构建器。镜像构建成功后才更新容器，容器配置自动重启及日志轮转。脚本等待两项服务健康检查通过后报告成功，默认等待 120 秒，可通过 `DEPLOY_WAIT_TIMEOUT` 调整；健康检查只验证 HTTP 服务，不检查数据库表结构。启动失败时返回非零退出码，不自动回滚。
+构建默认最多使用 Docker 服务端可用逻辑 CPU 的 **50%**，通过 BuildKit 容器的 CPU period/quota 限制前后端构建任务的总量：8 核限 4 核、3 核限 1.5 核、单核限 0.5 核。Go 编译并行度向下取整且至少为 1；`BUILD_CPU_COUNT` 可选，仅用于进一步降低上限，不能突破 50%。无需设置该变量即可自动适应服务器，已有 `BUILD_CPU_COUNT=1` 会继续限制为最多 1 核。默认 `COMPOSE_PARALLEL_LIMIT=1`，BuildKit 内部串行调度。
+
+默认构建器名称包含 CPU 配额，也可通过 `DEPLOY_BUILDER_NAME` 指定独立名称；只允许单节点 `docker-container` 构建器。每次构建前读取容器实际 CPU 限额，旧配置不一致时通过 Docker update 校正并重新验证，保留缓存；无法确认限额时停止构建。限制针对 BuildKit 容器及构建任务，应用运行容器的 CPU 配置不变，Docker 守护进程自身的额外开销不包含在该容器限额内。
+
+`--check` 需要 Docker 服务可访问，会检查配置、密钥格式和 CPU 预算，但不创建构建器或更新容器。默认部署在 pull 前检查已跟踪文件是否有未提交修改；pull 成功后重新执行新版脚本。`--skip-pull` 用于明确部署当前工作区。镜像全部构建成功后才更新服务，容器配置自动重启及日志轮转。脚本等待两项服务健康检查通过后报告成功，默认等待 120 秒，可通过 `DEPLOY_WAIT_TIMEOUT` 调整；健康检查只验证 HTTP 服务，不检查数据库表结构。启动失败时返回非零退出码，不自动回滚。部署流程回归测试：`python3 scripts/test_deploy.py`，使用模拟 Docker/Git，不操作实际服务。
 
 ## 页面地址
 
