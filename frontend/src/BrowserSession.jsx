@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { request } from './api';
 import Select from './Select';
 import TwoFactor from './TwoFactor';
+import BrowserFingerprint from './BrowserFingerprint';
 
 export const stateLabels = { closed: '未打开', authenticated: '已确认登录', login_required: '需要网页登录', unverified: '登录待确认', starting: '正在启动', checking_ip: '已打开 · 核对 IP 中', ip_check_failed: 'IP 核对未通过', opened: '已打开', api_verified: '账号接口已验证', rejected: '上游未接受凭据', signed_out: '已退出会话适配', closing: '正在关闭', unavailable: '浏览器服务不可用', error: '会话适配失败' };
 
@@ -45,14 +46,15 @@ export default function BrowserSession({ account, token, onClosed }) {
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true); setError(''); setMessage('');
     try {
-      const body = proxyMode === 'saved' ? {} : { proxy_url: proxyMode === 'direct' ? '' : proxy.trim() };
-      if (action !== 'stop' && proxyMode === 'socks5' && !proxy.trim()) throw new Error('请填写 SOCKS5 代理地址');
-      const data = await request(endpoint, token, { totpCode, method: action === 'start' ? 'POST' : action === 'save' ? 'PATCH' : 'DELETE', ...(action === 'stop' ? {} : { body }) });
+      const body = action === 'fingerprint' ? { action: 'reset_fingerprint' } : proxyMode === 'saved' ? {} : { proxy_url: proxyMode === 'direct' ? '' : proxy.trim() };
+      if (['start', 'save'].includes(action) && proxyMode === 'socks5' && !proxy.trim()) throw new Error('请填写 SOCKS5 代理地址');
+      const data = await request(endpoint, token, { totpCode, method: action === 'start' ? 'POST' : ['save', 'fingerprint'].includes(action) ? 'PATCH' : 'DELETE', ...(action === 'stop' ? {} : { body }) });
       if (mounted.current) {
         if (data.browser) setStatus(data.browser);
         if (action === 'start') setVerifying(false);
         setSettings(data.settings); setProxyMode('saved'); setProxy('');
         if (action === 'save') setMessage('代理配置已加密保存，下次打开浏览器时使用。');
+        if (action === 'fingerprint') setMessage('已重新生成指纹，下次打开生效；原浏览器目录和登录数据保留。');
       }
     } catch (error) { if (action === 'start') throw error; if (mounted.current) setError(error.message); }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
@@ -64,6 +66,9 @@ export default function BrowserSession({ account, token, onClosed }) {
     <p className="muted">{account.label} · {account.email}</p>
     <p className="notice">浏览器窗口将在后台所在电脑上打开，每个账号使用独立环境。恢复网页登录需要登录 Cookie；仅有 accessToken 时请在独立窗口中登录一次。</p>
     <div className="browser-status-row"><span>浏览器状态</span><strong>{status ? stateLabels[status.state] || status.state : '正在读取…'}</strong></div>
+    <BrowserFingerprint status={status} />
+    {status?.fingerprint_warning && <p className="notice" role="status">{status.fingerprint_warning}</p>}
+    <button className="outline" disabled={busy || running || !status} onClick={() => { if (window.confirm('重新生成账号指纹？原登录数据保留，下次打开时网站可能要求重新验证。')) void act('fingerprint'); }}>重新随机生成指纹</button>
     {status?.message && <p className={status.state === 'authenticated' ? 'success' : 'muted'} role="status">{status.message}</p>}
     <label>网络连接<Select label="网络连接" value={proxyMode} onChange={setProxyMode} disabled={busy || running || !settings} options={[{ value: 'saved', label: settings?.has_proxy ? '已保存：' + settings.proxy_address : '当前配置：直连' }, { value: 'direct', label: '改用直连' }, { value: 'socks5', label: '设置 SOCKS5 代理' }]} /></label>
     {proxyMode === 'socks5' && <label>SOCKS5 代理<input type="password" value={proxy} onChange={event => setProxy(event.target.value)} placeholder="socks5://用户名:密码@主机:端口" autoComplete="off" disabled={busy || running} /></label>}

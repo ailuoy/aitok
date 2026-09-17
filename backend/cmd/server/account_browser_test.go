@@ -107,6 +107,12 @@ func TestManagedAccountBrowserIntegration(t *testing.T) {
 		t.Fatal("启动凭据范围错误或凭据被返回前端")
 	}
 	call("DELETE", path+"/browser", 3, nil, 200)
+	call("PATCH", path+"/browser", 3, map[string]string{"action": "reset_fingerprint"}, 200)
+	if worker.methods[len(worker.methods)-1] != "reset_fingerprint" || len(worker.params[len(worker.params)-1]) != 1 {
+		t.Fatal("重生成指纹不应导出 Session 或代理凭据")
+	}
+	call("PATCH", path+"/browser", 3, map[string]string{"action": "reset_fingerprint", "proxy_url": ""}, 400)
+	call("PATCH", path+"/browser", 3, map[string]string{"action": "unknown"}, 400)
 	call("PATCH", path+"/browser", 3, map[string]string{"proxy_url": ""}, 200)
 	call("POST", path+"/browser", 3, map[string]any{}, 200)
 	if worker.params[len(worker.params)-1]["proxy_url"] != "" {

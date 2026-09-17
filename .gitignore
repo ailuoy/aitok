@@ -26,6 +26,7 @@ dist/
 /backend/server
 /backend/server.exe
 /desktop/build/
+/desktop/.pack/
 *.test
 
 # Python 自动生成的字节码缓存

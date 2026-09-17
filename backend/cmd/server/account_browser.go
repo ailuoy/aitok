@@ -116,9 +116,27 @@ func (s *Server) accountBrowser(w http.ResponseWriter, r *http.Request, userID, 
 		r.Body = http.MaxBytesReader(w, r.Body, 32<<10)
 		var in struct {
 			ProxyURL *string `json:"proxy_url"`
+			Action   string  `json:"action"`
 		}
 		if jsonBody(r, &in) != nil {
 			reply(w, map[string]string{"error": "请求格式错误"}, 400)
+			return
+		}
+		if in.Action != "" {
+			if in.Action != "reset_fingerprint" || r.Method != "PATCH" || in.ProxyURL != nil {
+				reply(w, map[string]string{"error": "浏览器操作无效"}, 400)
+				return
+			}
+			if s.browser == nil {
+				reply(w, map[string]string{"error": "服务器浏览器服务未配置"}, 503)
+				return
+			}
+			result, resetErr := s.browser.Call(ctx, "reset_fingerprint", params)
+			if resetErr != nil {
+				reply(w, map[string]string{"error": resetErr.Error()}, 503)
+				return
+			}
+			reply(w, map[string]any{"browser": result, "settings": browserProxySettings(credentials.ProxyURL)}, 200)
 			return
 		}
 		if in.ProxyURL != nil {

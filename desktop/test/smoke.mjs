@@ -41,8 +41,8 @@ try {
   assert.equal((await evaluate('window.assistant.state()')).sites[0].port, 19884);
   assert.equal(await evaluate('document.querySelector("#editor").open'), false);
   await delay(150);
-  await mkdir(new URL('../dist/', import.meta.url), { recursive: true });
-  await writeFile(new URL('../dist/desktop-smoke.png', import.meta.url), (await window.webContents.capturePage()).toPNG());
+  await mkdir(new URL('../.pack/test-artifacts/', import.meta.url), { recursive: true });
+  await writeFile(new URL('../.pack/test-artifacts/desktop-smoke.png', import.meta.url), (await window.webContents.capturePage()).toPNG());
   window.close();
   assert.equal(window.isDestroyed(), false);
   assert.equal(window.isVisible(), false);

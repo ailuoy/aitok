@@ -7,7 +7,7 @@ import { Plus, Trash2, CalendarDays, Coins, RefreshCw, KeyRound, Monitor } from 
 import { request } from './api';
 import WalletPanel from './WalletPanel';
 import SessionFields from './SessionFields';
-import BrowserSession from './BrowserSession';
+import AccountProxySelect from './AccountProxySelect';
 import LocalBrowserSession from './LocalBrowserSession';
 import BrowserStatusRefresh from './BrowserStatusRefresh';
 import ProxyManager from './ProxyManager';
@@ -44,6 +44,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   const [message, setMessage] = useState('');
   const [proxyConfig, setProxyConfig] = useState(null);
   const [proxyError, setProxyError] = useState('');
+  const [proxyBindingError, setProxyBindingError] = useState('');
   const [bindingAccount, setBindingAccount] = useState(null);
   const [ownerAccount, setOwnerAccount] = useState(null);
   useEffect(() => {
@@ -116,13 +117,17 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     try { const data = await launcherRequest('/proxies', { port: localPort }); if (localPort === launcherPort()) { setProxyConfig(data); setProxyError(''); } }
     catch (error) { if (localPort === launcherPort()) { setProxyConfig(null); setProxyError(error.message); } }
   }, [localPort]);
-  useEffect(() => { if (admin) refreshProxies(); }, [refreshProxies, tab, admin]);
+  useEffect(() => { setProxyConfig(null); if (admin) refreshProxies(); }, [refreshProxies, tab, admin]);
   async function bindProxy(account, proxyID) {
+    const port = localPort;
+    setProxyBindingError('');
     setBindingAccount(account.id);
     try {
-      setProxyConfig(await launcherRequest('/browsers/' + encodeURIComponent(browserEnvironmentID(user.id, account.id)) + '/proxy', { method: 'PATCH', body: { proxy_id: proxyID || null } }));
+      const data = await launcherRequest('/browsers/' + encodeURIComponent(browserEnvironmentID(user.id, account.id)) + '/proxy', { port, method: 'PATCH', body: { proxy_id: proxyID || null } });
+      if (port !== launcherPort()) return;
+      setProxyConfig(data);
       setMessage('代理选择已保存，下次打开账号时使用'); setError('');
-    } catch (error) { setError(error.message); }
+    } catch (error) { if (port === launcherPort()) { setProxyBindingError(error.message); setError(error.message); } }
     finally { setBindingAccount(null); }
   }
   const refresh = useCallback(async (syncPending = false) => {
@@ -214,7 +219,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
           <td className="table-text"><strong>{account.label}</strong>{account.label !== account.email && <small className="cell-secondary">{account.email}</small>}</td>
           {admin && <td className="table-text"><div className="account-owner"><span>{account.owner_email || '—'}</span><button className="text-btn account-owner-bind" aria-label={`绑定账号 ${account.email} 的所属用户`} onClick={() => setOwnerAccount(account)}>绑定用户</button></div></td>}
           {admin && <><td className="table-selector"><div className="account-group"><Select label={'账号 ' + account.email + ' 的分组'} value={account.group_id ?? ''} onChange={value => bindGroup(account, value)} disabled={groupBusy !== null} options={[{ value: '', label: '未分组' }, ...groups.filter(group => group.user_id === account.user_id).map(group => ({ value: String(group.id), label: group.name }))]} searchPlaceholder="输入分组名称过滤…" createLabel="新建分组" onCreate={name => setCreatingGroup({ account, name })} /></div></td>
-          <td className="table-selector">{admin && <div className="account-proxy"><Select label={'账号 ' + account.email + ' 的 SOCKS5'} value={proxyConfig?.bindings[browserEnvironmentID(user.id, account.id)] || ''} disabled={!proxyConfig || bindingAccount !== null} onChange={value => bindProxy(account, value)} options={[{ value: '', label: proxyConfig ? '直连（不使用代理）' : '请先启动本机启动器' }, ...(proxyConfig?.proxies || []).map(proxy => ({ value: proxy.id, label: proxy.name + ' · ' + proxy.host }))]} /></div>}</td>
+          <td className="table-selector">{admin && <div className="account-proxy"><AccountProxySelect account={account} userID={user.id} config={proxyConfig} disabled={bindingAccount !== null} onChange={value => bindProxy(account, value)} /></div>}</td>
           <td><span className={account.has_session ? 'credit' : 'muted'}>{account.has_session ? 'Session 已保存' : '未保存 Session'}</span></td>
           <td><strong>{account.renewal_date || '未设置'}</strong><small className={'cell-secondary ' + (account.renewal_date && account.renewal_date > today ? 'credit' : 'muted')}>{account.verified_at ? `已开通 ${account.verified_plan} · 到期 ${account.subscription_ends_at || '未知'}` : '人工维护日期'}</small></td>
           <td><AccountRenewal account={account} token={token} onChange={updateAccount} onError={setError} /></td>
@@ -227,7 +232,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     {ownerAccount && admin && <AccountOwnerBinding account={ownerAccount} token={token} onBound={value => { updateAccount(ownerAccount.id, value); refreshGroups().catch(error => setError('账号已绑定，但分组刷新失败：' + error.message)); }} onClose={() => setOwnerAccount(null)} />}
     {creatingGroup && <CreateAccountGroup token={token} account={creatingGroup.account} initialName={creatingGroup.name} onCreated={refreshGrouping} onClose={() => setCreatingGroup(null)} />}
     {groupManager && <GroupManager groups={groups} token={token} user={user} accounts={accounts} onChange={refreshGrouping} onClose={() => setGroupManager(false)} />}
-    {dialog && <Dialog title={{ add: '导入 ChatGPT 账号', session: '更新账号 Session', browser: '账号浏览器管理', 'local-browser': '在本机打开账号', date: '设置续订日期', delete: '删除账号' }[dialog.type]} onClose={() => { if (!busy) setDialog(null); }}>{dialog.type === 'local-browser' ? <LocalBrowserSession key={dialog.key} account={dialog.account} userID={user.id} token={token} onStatus={localBrowsers.update} onClosed={closeBrowserDialog} /> : dialog.type === 'browser' ? <BrowserSession account={dialog.account} token={token} onClosed={closeBrowserDialog} /> : <form onSubmit={submit}>
+    {dialog && <Dialog title={{ add: '导入 ChatGPT 账号', session: '更新账号 Session', browser: '本机浏览器管理', 'local-browser': '在本机打开账号', date: '设置续订日期', delete: '删除账号' }[dialog.type]} onClose={() => { if (!busy) setDialog(null); }}>{['local-browser', 'browser'].includes(dialog.type) ? <LocalBrowserSession key={dialog.key + ':' + localPort} account={dialog.account} userID={user.id} token={token} managing={dialog.type === 'browser'} proxyConfig={proxyConfig} proxyBusy={bindingAccount !== null} proxyError={proxyBindingError || proxyError} onProxyChange={value => bindProxy(dialog.account, value)} onProxyRefresh={refreshProxies} onStatus={localBrowsers.update} onClosed={closeBrowserDialog} /> : <form onSubmit={submit}>
       {(dialog.type === 'add' || dialog.type === 'session') && <SessionFields updating={dialog.type === 'session'} />}
       {dialog.type === 'date' && <><p className="muted">{dialog.account.label} · {dialog.account.email}</p><label>下次续订日期<input type="date" name="renewal_date" defaultValue={dialog.account.renewal_date || ''} min="2000-01-01" max="9999-12-31" autoFocus /></label><p className="muted">清空日期可取消设置；此操作不扣除钱包代币。</p></>}
       {dialog.type === 'delete' && <p className="muted">确认删除「{dialog.account.label}」？账号将从列表隐藏，原始记录及钱包流水会保留。</p>}

@@ -45,6 +45,7 @@ export async function openLocalAccount(account, userID, token, totpCode, { loadA
   const port = launcherPort();
   const health = await launcherRequest('/health', { port });
   if (health.version !== 2) throw new Error('请重启最新版本机启动器');
+  if (health.fingerprint !== 'native-noise-v1') throw new Error('请更新并重启支持独立指纹的本机助手');
   const id = browserEnvironmentID(userID, account.id);
   const status = await launcherRequest('/browsers/' + encodeURIComponent(id), { port });
   if (!['closed', 'unavailable'].includes(status.state)) return status;

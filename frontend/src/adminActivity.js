@@ -72,6 +72,7 @@ export function installAdminActivity(token, userID) {
 }
 
 export function localActivityControl(path, method) {
+  if (/^\/browsers\/[^/]+\/fingerprint$/.test(path) && method === 'POST') return 'browser_fingerprint';
   if (/^\/browsers\/[^/]+\/proxy$/.test(path) && method === 'PATCH') return 'proxy_bind';
   if (path === '/browsers' && method === 'POST') return 'open_browser';
   if (/^\/browsers\/[^/]+$/.test(path) && method === 'DELETE') return 'close_browser';

@@ -48,7 +48,7 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
     }
     try {
       if (request.method === 'GET' && request.url === '/health') {
-        send(200, { status: 'ok', version: 2, origin }); return;
+        send(200, { status: 'ok', version: 2, origin, fingerprint: 'native-noise-v1' }); return;
       }
       let input;
       if (['POST', 'PATCH'].includes(request.method)) {
@@ -67,7 +67,7 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
       }
       // 各站点只能操作自己的浏览器标识，旧目录可继续复用且不会跨站抢占。
       if (enforceOriginScope && request.url?.startsWith('/browsers')) {
-        const route = /^\/browsers\/([^/?]+)(?:\/proxy)?$/.exec(request.url);
+        const route = /^\/browsers\/([^/?]+)(?:\/(?:proxy|fingerprint))?$/.exec(request.url);
         const id = request.url === '/browsers' ? input?.environment_id : route && decodeURIComponent(route[1]);
         if (typeof id !== 'string' || !id.startsWith(origin + ':user:') || id.length > 300) {
           send(403, { error: '浏览器环境不属于当前站点' }); return;
@@ -137,6 +137,11 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
         await store.bind(decodeURIComponent(binding[1]), input.proxy_id);
         send(200, store.list()); return;
       }
+      const fingerprintRoute = /^\/browsers\/([^/?]+)\/fingerprint$/.exec(request.url || '');
+      if (fingerprintRoute && request.method === 'POST') {
+        if (!browser.resetFingerprint) throw new Error('请更新并重启本机助手以使用独立指纹');
+        send(200, await browser.resetFingerprint(decodeURIComponent(fingerprintRoute[1]))); return;
+      }
       if (request.method === 'POST' && request.url === '/browsers') {
         const proxyID = store?.data.bindings[input.environment_id];
         const proxyURL = proxyID ? store.url(proxyID) : '';
@@ -158,7 +163,7 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
         const id = decodeURIComponent(match[1]);
         const status = request.method === 'DELETE' ? await browser.stop(id) : browser.status(id);
         // 即使后台页面暂时关闭，下一次访问也能同步已确认的登录时间。
-        send(200, { ...status, authenticated_at: status.authenticated_at || store?.data.logins?.[id] }); return;
+        send(200, { ...status, ...(browser.fingerprintInfo ? { fingerprint: await browser.fingerprintInfo(id) } : {}), authenticated_at: status.authenticated_at || store?.data.logins?.[id] }); return;
       }
       send(404, { error: '接口不存在' });
     } catch (error) {

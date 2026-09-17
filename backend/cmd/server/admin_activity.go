@@ -15,6 +15,7 @@ import (
 
 var adminPagePattern = regexp.MustCompile(`^/admin/(accounts|proxies|addresses|bank-cards|users|wallet|orders|packages|notices|audit|proxy-activity|payment-exceptions)(/[0-9]+)?$`)
 var auditControls = map[string]string{
+	"browser_fingerprint": "重新生成浏览器指纹",
 	"button": "点击按钮", "link": "打开链接", "form": "提交表单", "select": "选择选项", "toggle": "切换选项",
 	"add": "新增", "edit": "编辑", "delete": "删除", "confirm": "确认操作", "cancel": "取消操作", "save": "保存",
 	"search": "搜索", "refresh": "刷新", "export": "导出", "import": "导入", "open_browser": "打开浏览器", "close_browser": "关闭浏览器",
@@ -68,7 +69,7 @@ func (s *Server) adminActivity(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "local_request":
-		if action == "" || !(strings.HasPrefix(in.Control, "proxy_") || in.Control == "open_browser" || in.Control == "close_browser") || (in.Result != "success" && in.Result != "failure" && in.Result != "cancelled") {
+		if action == "" || !(strings.HasPrefix(in.Control, "proxy_") || in.Control == "open_browser" || in.Control == "close_browser" || in.Control == "browser_fingerprint") || (in.Result != "success" && in.Result != "failure" && in.Result != "cancelled") {
 			w.WriteHeader(400)
 			return
 		}

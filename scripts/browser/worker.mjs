@@ -17,7 +17,8 @@ export function runWorker(browser, input = process.stdin, output = process.stdou
         if (line.length > 300000 || !request.params || typeof request.params.environment_id !== 'string') throw new Error('浏览器请求格式错误');
         const id = request.params.environment_id;
         let result;
-        if (request.method === 'status') result = browser.status(id);
+        if (request.method === 'status') result = { ...browser.status(id), ...(browser.fingerprintInfo ? { fingerprint: await browser.fingerprintInfo(id) } : {}) };
+        else if (request.method === 'reset_fingerprint') result = await browser.resetFingerprint(id);
         else if (request.method === 'start') {
           if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
             throw new Error('后台所在电脑没有可用桌面，请在图形桌面会话中运行后台');

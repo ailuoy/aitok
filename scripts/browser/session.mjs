@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdir, access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
 import { CDP } from './cdp.mjs';
 import { loginCookies, restoreLoginCookies } from './cookies.mjs';
 import { parseProxy, createProxyBridge } from './proxy.mjs';
@@ -11,6 +10,8 @@ import { EventEmitter } from 'node:events';
 import { BrowserAssistant } from './assistant.mjs';
 import { homedir } from 'node:os';
 import { loginCheckSource } from './page-verification.mjs';
+import { profileDirectory, readFingerprint, writeFingerprint, fingerprintSummary, assertProfileClosed } from './fingerprint-store.mjs';
+import { FingerprintRuntime, prepareFingerprintExtension } from './fingerprint-runtime.mjs';
 
 export function validateSession(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.accessToken !== 'string' || !value.accessToken || value.accessToken.length > 128000 || /[^\x21-\x7e]/.test(value.accessToken)) {
@@ -60,13 +61,38 @@ export class SessionBrowser extends EventEmitter {
     this.cleanipURL = cleanipURL;
     this.checkIP = checkIP;
     this.environments = new Map();
+    this.fingerprints = new Map();
+    this.fingerprintBusy = new Set();
     this.closed = false;
   }
 
   status(id) {
     const environment = this.environments.get(id);
-    if (!environment) return { state: 'closed', api_status: null };
-    return { state: environment.state, api_status: environment.apiStatus, message: environment.message, ip_check: environment.ipCheck, authenticated_at: environment.authenticatedAt };
+    const fingerprint = fingerprintSummary(this.fingerprints.get(id));
+    if (!environment) return { state: 'closed', api_status: null, fingerprint };
+    return { state: environment.state, api_status: environment.apiStatus, message: environment.message, ip_check: environment.ipCheck, authenticated_at: environment.authenticatedAt, fingerprint,
+      fingerprint_warning: environment.fingerprintRuntime?.errors ? '部分页面的指纹初始化未完成，请关闭账号窗口后重试。' : undefined };
+  }
+
+  async fingerprintInfo(id) {
+    const fingerprint = await readFingerprint(profileDirectory(this.directory, id));
+    if (fingerprint) this.fingerprints.set(id, fingerprint);
+    return fingerprintSummary(fingerprint);
+  }
+
+  async resetFingerprint(id) {
+    if (this.closed) throw new Error('此站点的浏览器服务已停止');
+    const directory = profileDirectory(this.directory, id);
+    if (this.environments.has(id)) throw new Error('请先关闭账号窗口，再重新生成指纹');
+    if (this.fingerprintBusy.has(id)) throw new Error('账号指纹正在更新，请稍后重试');
+    this.fingerprintBusy.add(id);
+    try {
+      await assertProfileClosed(directory);
+      const previous = await readFingerprint(directory);
+      const fingerprint = await writeFingerprint(directory, previous);
+      this.fingerprints.set(id, fingerprint);
+      return { ...this.status(id), message: '已重新生成账号指纹，下次打开生效；原浏览器目录和登录数据保留。' };
+    } finally { this.fingerprintBusy.delete(id); }
   }
 
   async start({ environment_id: id, session: raw, proxy_url: proxyURL = '', expected_email: expectedEmail, assistant_token: assistantToken, assistant_endpoint: assistantEndpoint }) {
@@ -74,13 +100,18 @@ export class SessionBrowser extends EventEmitter {
     if (typeof id !== 'string' || id.length < 1 || id.length > 300) throw new Error('浏览器环境标识无效');
     const session = validateSession(raw);
     const proxy = parseProxy(proxyURL);
+    if (this.fingerprintBusy.has(id)) throw new Error('账号指纹正在更新，请稍后重试');
     if (this.environments.has(id)) throw new Error('该环境已经打开，请关闭后再更新 Session 或代理');
     if (this.environments.size >= 10) throw new Error('最多同时打开 10 个浏览器环境');
     const environment = { id, state: 'starting', apiStatus: null, message: '正在启动浏览器', session, expectedEmail, pages: new Map(), controller: new AbortController() };
     this.environments.set(id, environment);
     try {
-      const profile = join(this.directory, createHash('sha256').update(id).digest('hex'));
+      const profile = profileDirectory(this.directory, id);
       await mkdir(profile, { recursive: true, mode: 0o700 });
+      await assertProfileClosed(profile);
+      const fingerprint = await readFingerprint(profile) || await writeFingerprint(profile);
+      this.fingerprints.set(id, fingerprint);
+      const fingerprintExtension = await prepareFingerprintExtension(profile, fingerprint);
       await configureProfile(profile, expectedEmail || session.user?.email);
       if (this.closed) throw new Error('此站点的浏览器服务已停止');
       if (proxy) environment.proxy = await createProxyBridge(proxy);
@@ -88,6 +119,8 @@ export class SessionBrowser extends EventEmitter {
       const args = [
         `--user-data-dir=${profile}`, '--profile-directory=Default', '--remote-debugging-pipe', '--no-first-run', '--no-default-browser-check',
         '--disable-background-networking', '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+        '--disable-blink-features=AutomationControlled',
+        '--enable-unsafe-extension-debugging',
         ...(proxy ? [`--proxy-server=${environment.proxy.url}`] : ['--no-proxy-server']),
         ...(this.headless ? ['--headless=new'] : []), 'about:blank',
       ];
@@ -100,6 +133,7 @@ export class SessionBrowser extends EventEmitter {
         environment.controller.abort();
         environment.proxy?.close();
         environment.assistant?.close();
+        environment.fingerprintRuntime?.close();
         environment.session = null;
         clearInterval(environment.verifyTimer);
         clearInterval(environment.pageTimer);
@@ -108,14 +142,16 @@ export class SessionBrowser extends EventEmitter {
       child.once('exit', cleanup); child.once('error', cleanup);
       const cdp = new CDP(child);
       environment.cdp = cdp;
+      environment.fingerprintRuntime = new FingerprintRuntime(cdp, fingerprint, fingerprintExtension);
+      await environment.fingerprintRuntime.start();
       if (typeof assistantToken === 'string' && assistantToken.length <= 2048 && assistantEndpoint) environment.assistant = new BrowserAssistant(environment, assistantEndpoint, assistantToken);
       environment.hasLoginCookie = await restoreLoginCookies(cdp, session);
-      // Cookie 已在浏览器级恢复，无需暂停或递归接管新标签、iframe 和 Worker。
+      // Cookie 在浏览器级恢复；指纹运行时只在新目标初始化时短暂暂停并保证恢复。
       // 复用 Chromium 启动时的空白标签，避免每次打开都额外留下 about:blank。
       const { targetInfos } = await cdp.send('Target.getTargets');
       const initialPage = targetInfos.find(target => target.type === 'page' && target.url === 'about:blank');
       const { targetId } = initialPage || await cdp.send('Target.createTarget', { url: 'about:blank' });
-      const { sessionId: pageSession } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+      const pageSession = await environment.fingerprintRuntime.pageSession(targetId);
       environment.pages.set(targetId, pageSession);
       environment.pageTimer = setInterval(() => this.syncPages(environment), 2000);
       environment.pageTimer.unref();
@@ -125,6 +161,7 @@ export class SessionBrowser extends EventEmitter {
       environment.opening = this.openBilling(environment, pageSession, proxyURL);
       return this.status(id);
     } catch (error) {
+      environment.fingerprintRuntime?.close();
       environment.child?.kill();
       environment.proxy?.close();
       this.environments.delete(id);
@@ -187,8 +224,7 @@ export class SessionBrowser extends EventEmitter {
         try {
           let pageSession = environment.pages.get(target.targetId);
           if (!pageSession) {
-            const attached = await environment.cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
-            pageSession = attached.sessionId;
+            pageSession = environment.fingerprintRuntime ? await environment.fingerprintRuntime.pageSession(target.targetId) : (await environment.cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true })).sessionId;
             environment.pages.set(target.targetId, pageSession);
           }
           const result = await environment.cdp.send('Runtime.evaluate', {
@@ -253,6 +289,7 @@ export class SessionBrowser extends EventEmitter {
       environment.controller.abort();
       clearInterval(environment.verifyTimer); clearInterval(environment.pageTimer);
       environment.assistant?.close(); environment.proxy?.close();
+      environment.fingerprintRuntime?.close();
       const child = environment.child;
       if (!child || child.exitCode !== null || child.signalCode !== null) continue;
       exits.push(new Promise(resolve => {

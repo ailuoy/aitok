@@ -13,8 +13,8 @@
     "test": "node --test test/*.test.mjs",
     "test:smoke": "npm run build && electron test/smoke.mjs",
     "pack": "npm run build && electron-builder --dir",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win"
+    "dist:mac": "npm run build && node package.mjs --mac",
+    "dist:win": "npm run build && node package.mjs --win"
   },
   "devDependencies": {
     "electron": "44.4.1",
@@ -23,7 +23,7 @@
   },
   "build": {
     "appId": "com.toktopup.assistant",
-    "directories": { "output": "dist", "buildResources": "assets" },
+    "directories": { "output": ".pack", "buildResources": "assets" },
     "files": ["build/**/*", "package.json"],
     "artifactName": "AiTok-Assistant-${version}-${os}-${arch}.${ext}",
     "mac": { "category": "public.app-category.utilities", "target": ["dmg", "zip"], "hardenedRuntime": true },

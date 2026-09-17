@@ -33,8 +33,11 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   const account = { id: 1, user_id: 1, label: '工作账号', email: 'chat@example.com', has_session: true, renewal_enabled: true, payment_card_id: null };
   const errors = [], imported = [], launches = [], requests = [];
   const localLaunches = [], localRequests = [];
+  let fingerprintResets = 0;
+  let localFingerprint = null;
   let localState = 'closed', exportCount = 0, exportExpired = false;
   let proxies = [], bindings = {}, testCount = 0, draftFails = false, proxyPassword = '', accountDeletes = 0;
+  let proxyBindingFails = false, proxiesUnavailable = false;
   let browserState = 'closed';
   let groups = [], loginWrites = 0, authenticatedAt;
   let savedProxy = '';
@@ -78,7 +81,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       if (['http://127.0.0.1:15684', 'http://127.0.0.1:15685'].includes(url.origin)) {
         localRequests.push(request);
         if (url.pathname === '/activity-export') data = {device_id:'test-device',events:[],next_cursor:0};
-        else if (url.pathname === '/health') data = { status: 'ok', version: 2 };
+        else if (url.pathname === '/health') data = { status: 'ok', version: 2, fingerprint: 'native-noise-v1' };
+        else if (url.pathname.endsWith('/fingerprint')) { if (request.method === 'POST') fingerprintResets++; localFingerprint = { id: 'test-fingerprint', generation: 2, mode: 'native-noise-v1', created_at: '2026-09-17T00:30:00Z' }; data = { state: 'closed', fingerprint: localFingerprint, message: '已重新生成账号指纹，下次打开生效' }; }
         else if (url.pathname === '/proxies/parse') data = { items: [{ line: 1, proxy: { host: '203.0.113.10', port: 1080, username: 'proxy-user', password: 'proxy-secret', name: 'Imported' } }] };
         else if (url.pathname === '/proxy-history') {
           // 模拟未重启的旧启动器，忽略 page_size，前端需合并旧分页。
@@ -101,17 +105,19 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
           if (responseCode === 200 || responseCode === 204) data = { proxies, bindings };
           if (request.method === 'GET' && url.pathname === '/proxies/proxy-1') data = { ...proxies[0], password: proxyPassword };
           if (request.method === 'POST' && url.pathname === '/proxies/test') data = { result: draftFails ? { ok: false, error: '代理认证失败' } : { ok: true, matches: true, exit_ip: '203.0.113.10' }, test_token: draftFails ? null : 'draft-token' };
+          if (proxiesUnavailable && request.method !== 'OPTIONS') { responseCode = 503; data = { error: '模拟本机代理配置读取失败' }; }
         } else if (url.pathname.endsWith('/proxy')) {
-          if (request.method === 'PATCH') {
+          if (request.method === 'PATCH' && !proxyBindingFails) {
             const id = decodeURIComponent(url.pathname.split('/')[2]);
             const { proxy_id } = JSON.parse(request.postData);
             if (proxy_id) bindings[id] = proxy_id; else delete bindings[id];
           }
           data = { proxies, bindings };
+          if (proxyBindingFails && request.method === 'PATCH') { responseCode = 400; data = { error: '模拟代理绑定保存失败' }; }
         } else {
           if (request.method === 'POST') { localLaunches.push(JSON.parse(request.postData)); localState = 'opened'; }
           if (request.method === 'DELETE') localState = 'closed';
-          data = { state: localState, authenticated_at: authenticatedAt };
+          data = { state: localState, authenticated_at: authenticatedAt, fingerprint: localFingerprint };
         }
       } else if (url.pathname === '/api/two-factor') {
         const input = request.postData ? JSON.parse(request.postData) : {};
@@ -904,12 +910,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }, sessionId);
   await wait('!document.querySelector(".select-popup")');
   assert.equal(await evaluate('Boolean(document.querySelector("dialog"))'), true);
-  await select('网络连接', '设置 SOCKS5 代理');
-  await wait('Boolean(document.querySelector(".browser-session input[type=password]"))');
-  await fill('.browser-session input[type=password]', 'socks5://u:p@proxy.example:1080');
-  await click('保存代理');
-  await wait('document.querySelector("dialog").innerText.includes("代理配置已加密保存")');
-  assert.equal(savedProxy, 'socks5://u:p@proxy.example:1080');
+  assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").textContent'), '直连（不使用代理）');
   await click('打开浏览器');
   await wait('Boolean(document.querySelector(".two-factor input[type=password]"))');
   assert.equal(launches.length,0);
@@ -921,20 +922,11 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await fill('.two-factor input[inputmode=numeric]', '123456');
   await click('确认绑定');
   await wait('document.querySelector(".two-factor")?.innerText.includes("两步验证已启用")');
-  await fill('.two-factor input[inputmode=numeric]', '654321');
-  await click('验证并打开浏览器');
-  await wait('document.querySelector(".browser-status-row strong")?.textContent === "已打开"');
-  assert.equal(launches.length, 1); assert.deepEqual(launches[0], {});
+  await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   assert.ok(!requests.some(url => url.includes('/browser-session')));
   assert.equal(localLaunches.length, 0);
-  const desktop = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
-  await writeFile(join(directory, 'desktop.png'), Buffer.from(desktop.data, 'base64'));
+  assert.equal(requests.some(url => new URL(url).pathname === '/api/accounts/1/browser'), false, '浏览器管理不能请求服务器浏览器配置');
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
-  assert.ok(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'));
-  const mobile = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
-  await writeFile(join(directory, 'mobile.png'), Buffer.from(mobile.data, 'base64'));
-  await click('关闭浏览器');
-  await wait('!document.querySelector("dialog")');
 
   // 普通用户只有账号入口，管理列、行操作和其他路由均不可访问。
   user.id = 1; user.role = 'user'; user.username = '';
@@ -1150,6 +1142,25 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await select('账号 chat@example.com 的 SOCKS5', '美国代理已编辑 · 203.0.113.10', '美国');
   await wait('document.body.innerText.includes("代理选择已保存")');
   assert.equal(Object.values(bindings)[0], 'proxy-1');
+  await click('浏览器管理');
+  await wait('document.querySelector(".browser-status-row strong")?.textContent === "未打开"');
+  assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").textContent'), '美国代理已编辑 · 203.0.113.10');
+  proxyBindingFails = true;
+  await select('网络连接', '直连（不使用代理）');
+  await wait('document.querySelector("dialog").innerText.includes("模拟代理绑定保存失败")');
+  assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").textContent'), '美国代理已编辑 · 203.0.113.10');
+  assert.equal(await evaluate('document.querySelector(".account-proxy button").textContent'), '美国代理已编辑 · 203.0.113.10');
+  proxyBindingFails = false;
+  await select('网络连接', '直连（不使用代理）');
+  await wait('document.querySelector(".account-proxy button").textContent === "直连（不使用代理）"');
+  assert.equal(Object.values(bindings).length, 0);
+  await select('网络连接', '美国代理已编辑 · 203.0.113.10');
+  await wait('document.querySelector(".account-proxy button").textContent === "美国代理已编辑 · 203.0.113.10"');
+  await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
+  await click('浏览器管理');
+  await wait('document.querySelector(".browser-status-row strong")?.textContent === "未打开"');
+  assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").textContent'), '美国代理已编辑 · 203.0.113.10');
+  await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   await click('打开账号');
   await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
   assert.equal(await evaluate('document.querySelector(".browser-assistant-option input").checked'), true);
@@ -1161,6 +1172,16 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector(".launcher-settings .success")?.textContent.includes("连接成功")');
   await click('保存端口');
   await wait('localStorage.getItem("aitok.launcher.port") === "15685"');
+  await evaluate('window.__originalConfirm = window.confirm; window.confirm = () => false');
+  await click('重新随机生成指纹');
+  assert.equal(fingerprintResets, 0);
+  await evaluate('window.confirm = () => true');
+  await click('重新随机生成指纹');
+  await wait('document.querySelector("dialog").innerText.includes("第 2 代")');
+  assert.equal(fingerprintResets, 1);
+  await evaluate('window.confirm = window.__originalConfirm');
+  await click('重新打开');
+  await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
   await fill('.two-factor input[inputmode=numeric]', '654321');
   await click('验证并打开浏览器');
   await wait('document.querySelector(".browser-status-row strong")?.textContent === "已打开"');
@@ -1193,7 +1214,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('关闭浏览器');
   await wait('document.querySelector(".account-actions").innerText.includes("打开账号")');
   assert.equal(localState, 'closed');
-  await click('打开账号');
+  await click('浏览器管理');
+  await wait('document.querySelector(".browser-status-row strong")?.textContent === "未打开"');
+  await click('打开浏览器');
   await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
   await evaluate('document.querySelector(".browser-assistant-option input").click()');
   assert.equal(await evaluate('document.querySelector(".browser-assistant-option input").checked'), false);
@@ -1230,6 +1253,17 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('关闭账号窗口');
   await wait('!document.querySelector("dialog")');
   await wait('document.querySelector(".account-actions").innerText.includes("打开账号")');
+  proxiesUnavailable = true;
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-proxy button")?.textContent === "请先连接本机助手"');
+  await click('浏览器管理');
+  await wait('document.querySelector("dialog").innerText.includes("模拟本机代理配置读取失败")');
+  assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").textContent'), '请先连接本机助手');
+  assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").disabled'), true);
+  await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
+  proxiesUnavailable = false;
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('Boolean(document.querySelector(".account-proxy button:not(:disabled)"))');
   exportExpired = true;
   await click('打开账号');
   await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
@@ -1317,12 +1351,15 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.ok(adminActivities.some(e => e.kind==='page_view' && e.page==='/admin/orders'));
   assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='proxy_test' && e.result==='failure'));
   assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='open_browser' && e.result==='success'));
+  assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='browser_fingerprint' && e.result==='success'));
   assert.ok(adminActivities.some(e => e.kind==='click' && e.control==='delete'));
   assert.ok(adminActivities.every(e=>Object.keys(e).every(k=>['request_key','page','kind','control','result'].includes(k))));
   const auditPayload=JSON.stringify(adminActivities);
   for (const secret of ['proxy-secret','4242424242424242','local-test-access']) assert.equal(auditPayload.includes(secret),false);
   assert.ok(adminActivities.every(e=>e.page.startsWith('/admin/') && !e.page.includes('?')));
-  assert.ok(otpHeaders.length >= 5 && otpHeaders.every(code=>code === '654321'));
+  assert.equal(otpHeaders.length, 4);
+  assert.ok(otpHeaders.every(code=>code === '654321'));
+  assert.equal(requests.some(url => new URL(url).pathname === '/api/accounts/1/browser'), false, '两个浏览器入口必须共用本机环境');
   assert.deepEqual(errors, []);
   t.diagnostic(`页面截图：${directory}`);
 });
