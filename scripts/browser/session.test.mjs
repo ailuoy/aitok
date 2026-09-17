@@ -52,6 +52,32 @@ test('登录 Cookie 仅限 ChatGPT 并在导入前清理旧的分段 Cookie', as
   assert.equal(calls[2].params.cookies[0].value, 'new');
 });
 
+test('完整登录 Token 按认证库规则分段，保留内容且重复校验不改变分段', () => {
+  for (const name of ['__Secure-next-auth.session-token', '__Secure-authjs.session-token']) {
+    for (const size of [3936, 3937, 7872, 16000]) {
+      const value = 'abcd'.repeat(4000).slice(0, size);
+      const cookies = loginCookies({ cookies: [{ name, value }] });
+      assert.equal(cookies.map(cookie => cookie.value).join(''), value);
+      assert.deepEqual(cookies.map(cookie => cookie.name), size <= 3936 ? [name] : Array.from({ length: Math.ceil(size / 3936) }, (_, index) => `${name}.${index}`));
+      assert.ok(cookies.every(cookie => cookie.name.length + cookie.value.length <= 4096));
+      assert.deepEqual(loginCookies({ cookies }), cookies);
+    }
+  }
+  const cookies = loginCookies({ sessionToken: 'a'.repeat(5000), cookies: [
+    { name: '__Secure-next-auth.session-token.9', value: 'stale' },
+    { name: '__Secure-authjs.session-token.0', value: 'preserved' },
+  ] });
+  assert.ok(!cookies.some(cookie => cookie.name.endsWith('.9')));
+  assert.ok(cookies.some(cookie => cookie.value === 'preserved'));
+  assert.deepEqual(loginCookies({ cookies: [{ name: ['__Secure-next-auth.session-token'], value: 'invalid-name-type' }] }), []);
+});
+
+test('已分段 Cookie 超限时在修改浏览器存储前给出明确错误', async () => {
+  await assert.rejects(restoreLoginCookies({ send: () => assert.fail('无效分段不能修改浏览器') }, {
+    cookies: [{ name: '__Secure-next-auth.session-token.0', value: 'a'.repeat(5000) }],
+  }), /Cookie 分段过长/);
+});
+
 test('无密钥启动器仍拒绝错误来源、Host 及普通表单请求', async t => {
   const calls = [];
   const browser = { start: async input => { calls.push(input); return { state: 'opened' }; }, status: () => ({ state: 'closed' }), stop: async () => ({ state: 'closing' }) };
@@ -145,14 +171,42 @@ test('只根据真实网页登录响应确认身份，退出和账号不匹配�
   assert.ok(!JSON.stringify(browser.status('unknown')).includes('test-access-only'));
 });
 
+test('Cloudflare 接口挑战期间退避，验证恢复后继续确认账号', async () => {
+  const browser = new SessionBrowser({ chrome: '', directory: '' });
+  let requests = 0, value = { challenge: true, status: 403 };
+  const environment = { state: 'opened', session, pages: new Map([['chat', 'page']]), cdp: { send: async method => {
+    requests++;
+    return method === 'Target.getTargets' ? { targetInfos: [{ type: 'page', targetId: 'chat', url: 'https://chatgpt.com/' }] } : { result: { value } };
+  } } };
+  await browser.verifyLogin(environment);
+  assert.equal(environment.state, 'unverified');
+  assert.match(environment.message, /Cloudflare/);
+  assert.ok(environment.loginCheckAfter > Date.now());
+  await browser.verifyLogin(environment);
+  assert.equal(requests, 2);
+  environment.loginCheckAfter = 0;
+  value = { status: 200, email: session.user.email };
+  await browser.verifyLogin(environment);
+  assert.equal(environment.state, 'authenticated');
+});
+
 // 只打开 about:blank；检查真实 Chromium Cookie 存储，不访问用户账号或 ChatGPT 上游。
 test('Chromium 正确恢复 HttpOnly 登录 Cookie；单独 accessToken 不声称已登录', { skip: !process.env.AITOK_BROWSER_SMOKE, timeout: 30000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'aitok-browser-smoke-'));
   const browser = new SessionBrowser({ chrome: await findChrome(), directory, headless: true, startURL: 'about:blank', billingURL: 'about:blank', cleanipURL: null, checkIP: async () => ({ ok: true, exit_ip: '203.0.113.1', matches: null }) });
   t.after(() => browser.close());
-  await browser.start({ environment_id: 'cookie-account', session: { ...session, sessionToken: 'test-login-cookie' } });
+  const longToken = 'abcd'.repeat(4000);
+  const assistantEndpoint = 'http://127.0.0.1:1/api/browser-assistant';
+  await browser.start({ environment_id: 'cookie-account', session: { ...session, sessionToken: longToken }, assistant_token: 'test-assistant', assistant_endpoint: assistantEndpoint });
   const environment = browser.environments.get('cookie-account');
   await environment.opening;
+  assert.ok(environment.assistant);
+  const restored = await environment.cdp.send('Storage.getCookies');
+  const chunks = restored.cookies.filter(cookie => cookie.name.startsWith('__Secure-next-auth.session-token.'))
+    .sort((left, right) => Number(left.name.split('.').at(-1)) - Number(right.name.split('.').at(-1)));
+  assert.equal(chunks.length, 5);
+  assert.equal(chunks.map(cookie => cookie.value).join(''), longToken);
+  assert.ok(chunks.every(cookie => cookie.httpOnly && cookie.secure));
   await environment.cdp.send('Storage.setCookies', { cookies: [
     { name: '__Secure-next-auth.session-token.1', value: 'old-chunk', domain: '.chatgpt.com', path: '/', secure: true },
     { name: 'unrelated', value: 'keep', domain: '.chatgpt.com', path: '/' },
@@ -160,7 +214,7 @@ test('Chromium 正确恢复 HttpOnly 登录 Cookie；单独 accessToken 不声�
   ] });
   await restoreLoginCookies(environment.cdp, { ...session, sessionToken: 'test-login-cookie' });
   const result = await environment.cdp.send('Storage.getCookies');
-  assert.ok(!result.cookies.some(cookie => cookie.name.endsWith('.1')));
+  assert.ok(!result.cookies.some(cookie => /^__Secure-next-auth\.session-token\.\d+$/.test(cookie.name)));
   assert.ok(result.cookies.some(cookie => cookie.name === 'unrelated' && cookie.value === 'keep'));
   assert.ok(result.cookies.some(cookie => cookie.domain === '.example.com' && cookie.value === 'foreign'));
   const cookie = result.cookies.find(cookie => cookie.name === '__Secure-next-auth.session-token' && cookie.domain === '.chatgpt.com');
@@ -169,8 +223,9 @@ test('Chromium 正确恢复 HttpOnly 登录 Cookie；单独 accessToken 不声�
   assert.equal(cookie.secure, true);
   assert.equal(browser.status('cookie-account').state, 'opened');
   await assert.rejects(browser.start({ environment_id: 'cookie-account', session }), /已经打开/);
-  await browser.start({ environment_id: 'token-only', session });
+  await browser.start({ environment_id: 'token-only', session, assistant_endpoint: assistantEndpoint });
   await browser.environments.get('token-only').opening;
+  assert.equal(browser.environments.get('token-only').assistant, undefined, '不提供助手授权时不创建面板或注入助手脚本');
   assert.equal(browser.status('token-only').state, 'opened');
   assert.match(browser.status('token-only').message, /未提供登录 Cookie/);
   await browser.stop('cookie-account');

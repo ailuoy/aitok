@@ -152,9 +152,13 @@ node scripts/session-browser.mjs --origin "http://localhost:15680" --port 15685
 
 Session 输入框支持 JSON 语法高亮和格式化。普通 `/api/auth/session` 返回的 `accessToken` 是访问凭据，无法转换成服务器签发的登录 Cookie。此前模拟 Session 接口的方式不能恢复真实网页登录，现已移除。
 
-可在导入或更新 Session 时补充“网页登录 Cookie”字段（`__Secure-next-auth.session-token` 的值），或在 JSON 中加入 `sessionToken`。分段 Cookie 使用 `cookies` 数组，每项为 `name`、`value`，可带 `domain`；仅接收 chatgpt.com 的 `__Secure-next-auth.session-token` / `__Secure-authjs.session-token` 及其数字分段，其他站点和无关 Cookie 不会导出。启动器在首次导航之前恢复这些真实 Cookie。
+可在导入或更新 Session 时补充“网页登录 Cookie”字段（`__Secure-next-auth.session-token` 的值），或在 JSON 中加入 `sessionToken`。分段 Cookie 使用 `cookies` 数组，每项为 `name`、`value`，可带 `domain`；仅接收 chatgpt.com 的 `__Secure-next-auth.session-token` / `__Secure-authjs.session-token` 及其数字分段，其他站点和无关 Cookie 不会导出。启动器在首次导航之前恢复这些真实 Cookie；超过 3,936 字符的完整登录 Token 会按 NextAuth / Auth.js 规则自动拆成 `.0`、`.1` 等分段，避免触发浏览器单条 Cookie 大小限制。已带数字后缀的 Cookie 保留原分段，超限时提示重新复制原始分段。
 
 没有登录 Cookie 时，窗口会提示本次未提供 Cookie；可沿用已有浏览器目录，或在独立窗口登录一次。Cookie 是否有效仍由 ChatGPT 校验；不会伪造登录成功。启动器只在 ChatGPT 标签检查登录，不暂停新标签或子页面；标签关闭、导航或检查失败不会结束浏览器。用户自己的 Session 和登录 Cookie 继续加密保存在数据库。
+
+检测到 Cloudflare 验证页时，助手暂停登录接口请求并隐藏悬浮面板，待手动验证完成后恢复；接口返回 Cloudflare 挑战标记时至少等待 30 秒再检查。若验证反复出现，请用相同代理和出口 IP 在普通 Chrome 中对比，并检查代理出口是否稳定；暂停助手操作不能保证网站接受验证。
+
+“在本机打开账号”弹窗底部提供“加载小助手”复选框，默认勾选。取消后，本次打开不加载账号助手悬浮面板及填充功能；Cookie 恢复、代理和登录状态检查照常运行。已打开的账号窗口需先关闭，再取消勾选并重新打开；重新进入弹窗时默认恢复勾选。
 
 ## 后台账号浏览器（实验版）
 

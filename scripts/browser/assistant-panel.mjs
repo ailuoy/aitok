@@ -1,7 +1,9 @@
-export const ASSISTANT_VERSION = '0.0.1';
-export function assistantPanelSource() { return `(${installPanel.toString()})(${JSON.stringify(ASSISTANT_VERSION)})`; }
+import { isVerificationPage } from './page-verification.mjs';
 
-function installPanel(version) {
+export const ASSISTANT_VERSION = '0.0.1';
+export function assistantPanelSource() { return `(${installPanel.toString()})(${JSON.stringify(ASSISTANT_VERSION)}, ${isVerificationPage.toString()})`; }
+
+function installPanel(version, isVerificationPage) {
   if (window !== window.top || location.protocol !== 'https:' || !['chatgpt.com', 'checkout.stripe.com', 'pay.openai.com', 'pay.chatgpt.com'].includes(location.hostname) || window.__aitokPanelInstalled) return;
   window.__aitokPanelInstalled = true;
   let sequence = 0;
@@ -14,7 +16,10 @@ function installPanel(version) {
   });
   window.__aitokAssistantReply = (id, result) => { const request = pending.get(id); if (!request) return; pending.delete(id); clearTimeout(request.timer); result.error ? request.reject(new Error(result.error)) : request.resolve(result); };
   const mount = () => {
-    if (!document.body || document.getElementById('aitok-assistant')) return;
+    if (!document.body || document.readyState === 'loading') return;
+    const existing = document.getElementById('aitok-assistant');
+    if (isVerificationPage()) { existing?.remove(); return; }
+    if (existing) return;
     const host = document.createElement('aside'); host.id = 'aitok-assistant'; host.setAttribute('aria-label', 'AiTok 账号助手');
     host.style.cssText = 'all:initial!important;position:fixed!important;right:12px!important;top:88px!important;z-index:2147483646!important;';
     const root = host.attachShadow({ mode: 'closed' });
@@ -154,5 +159,6 @@ function installPanel(version) {
     run(refresh, load);
     const timer = setInterval(() => { if (!host.isConnected) { clearInterval(timer); resizeObserver.disconnect(); window.removeEventListener('resize', position); return; } call('status').then(updateStatus).catch(() => {}); }, 5000);
   };
-  mount(); new MutationObserver(mount).observe(document, { childList: true, subtree: true });
+  document.addEventListener('DOMContentLoaded', mount, { once: true });
+  mount(); new MutationObserver(mount).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
 }

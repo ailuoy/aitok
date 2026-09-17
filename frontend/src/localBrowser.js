@@ -41,7 +41,7 @@ export async function launcherRequest(path, { method = 'GET', body, signal, port
   }
 }
 
-export async function openLocalAccount(account, userID, token, totpCode) {
+export async function openLocalAccount(account, userID, token, totpCode, { loadAssistant = true } = {}) {
   const port = launcherPort();
   const health = await launcherRequest('/health', { port });
   if (health.version !== 2) throw new Error('请重启最新版本机启动器');
@@ -50,5 +50,5 @@ export async function openLocalAccount(account, userID, token, totpCode) {
   if (!['closed', 'unavailable'].includes(status.state)) return status;
   const credentials = await request(`/accounts/${account.id}/browser-session`, token, { method: 'POST', totpCode });
   if (port !== launcherPort()) throw new Error('本机连接端口已更改，请重新打开账号');
-  return launcherRequest('/browsers', { port, method: 'POST', body: { environment_id: id, session: credentials.session, expected_email: account.email, assistant_token: credentials.assistant_token } });
+  return launcherRequest('/browsers', { port, method: 'POST', body: { environment_id: id, session: credentials.session, expected_email: account.email, ...(loadAssistant ? { assistant_token: credentials.assistant_token } : {}) } });
 }

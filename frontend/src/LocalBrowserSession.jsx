@@ -12,6 +12,7 @@ export default function LocalBrowserSession({ account, userID, token, onStatus, 
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [verifying, setVerifying] = useState(true);
+  const [loadAssistant, setLoadAssistant] = useState(true);
   const busyRef = useRef(false);
   const mounted = useRef(true);
   const hasOpened = useRef(false);
@@ -34,7 +35,7 @@ export default function LocalBrowserSession({ account, userID, token, onStatus, 
     if (busyRef.current) return;
     busyRef.current = true; setBusy(true); setError('');
     try {
-      const data = action === 'start' ? await openLocalAccount(account, userID, token, totpCode) : await launcherRequest(statusPath, { port, method: action === 'refresh' ? 'GET' : 'DELETE' });
+      const data = action === 'start' ? await openLocalAccount(account, userID, token, totpCode, { loadAssistant }) : await launcherRequest(statusPath, { port, method: action === 'refresh' ? 'GET' : 'DELETE' });
       if (mounted.current) { setStatus(data); if (action !== 'refresh') setVerifying(false); }
     } catch (error) { if (mounted.current) setError(error.message); if (action === 'start') throw error; }
     finally { busyRef.current = false; if (mounted.current) setBusy(false); }
@@ -48,6 +49,6 @@ export default function LocalBrowserSession({ account, userID, token, onStatus, 
     <LauncherConnection onConnected={() => setError('')} />
     {verifying && !running && <TwoFactor token={token} onVerify={code => act('start', code)} />}
     <p className="muted">在浏览器中登录或手动关闭窗口后，点击刷新状态更新显示。</p>
-    <div className="browser-buttons"><BrowserStatusRefresh reminderKey={port} disabled={busy} onClick={() => act('refresh')}>刷新状态</BrowserStatusRefresh><button className="primary" disabled={busy || running} onClick={() => setVerifying(true)}>重新打开</button><button className="outline" disabled={busy || !running} onClick={() => act('stop')}>关闭账号窗口</button></div>
+    <div className="browser-buttons"><BrowserStatusRefresh reminderKey={port} disabled={busy} onClick={() => act('refresh')}>刷新状态</BrowserStatusRefresh><button className="primary" disabled={busy || running} onClick={() => setVerifying(true)}>重新打开</button><button className="outline" disabled={busy || !running} onClick={() => act('stop')}>关闭账号窗口</button><label className="browser-assistant-option" title="打开账号时生效；已打开的窗口需先关闭再重新打开"><input type="checkbox" checked={loadAssistant} onChange={event => setLoadAssistant(event.target.checked)} disabled={busy || running} />加载小助手</label></div>
   </div>;
 }

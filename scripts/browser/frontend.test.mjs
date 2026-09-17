@@ -242,7 +242,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       } else if (url.pathname === '/api/accounts/1/browser-session') {
         if (request.method === 'POST') exportCount++;
         if (exportExpired) { responseCode = 422; data = { error: 'Session 已过期，请更新' }; }
-        else data = { account_id: 1, session: { accessToken: 'local-test-access', user: { email: account.email } } };
+        else data = { account_id: 1, session: { accessToken: 'local-test-access', user: { email: account.email } }, assistant_token: 'local-test-assistant' };
       } else if (url.pathname === '/api/me') data = { user, accounts: [account] };
       else if (url.pathname === '/api/accounts') {
         if (request.method === 'POST') imported.push(JSON.parse(request.postData));
@@ -1152,6 +1152,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(Object.values(bindings)[0], 'proxy-1');
   await click('打开账号');
   await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  assert.equal(await evaluate('document.querySelector(".browser-assistant-option input").checked'), true);
+  assert.equal(await evaluate('document.querySelector(".browser-assistant-option input").disabled'), false);
   await evaluate('document.querySelector(".launcher-settings").open = true');
   assert.equal(await evaluate('document.querySelector("input[aria-label=本机连接端口]").value'), '15684');
   await fill('input[aria-label=本机连接端口]', '15685');
@@ -1166,6 +1168,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(exportCount, 1); assert.equal(localLaunches.length, 1);
   assert.equal(localLaunches[0].session.accessToken, 'local-test-access');
   assert.equal(localLaunches[0].expected_email, account.email);
+  assert.equal(localLaunches[0].assistant_token, 'local-test-assistant');
+  assert.equal(await evaluate('document.querySelector(".browser-assistant-option input").disabled'), true);
   assert.ok(localRequests.some(request => request.url.startsWith('http://127.0.0.1:15685/browsers') && request.method === 'POST'));
   assert.equal(localLaunches[0].environment_id, 'http://127.0.0.1:' + server.address().port + ':user:1:account:1');
   for (const request of localRequests.filter(request => request.method !== 'OPTIONS')) {
@@ -1191,10 +1195,15 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(localState, 'closed');
   await click('打开账号');
   await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  await evaluate('document.querySelector(".browser-assistant-option input").click()');
+  assert.equal(await evaluate('document.querySelector(".browser-assistant-option input").checked'), false);
   await fill('.two-factor input[inputmode=numeric]', '654321');
   await click('验证并打开浏览器');
   await wait('document.querySelector(".browser-status-row strong")?.textContent === "已打开"');
   assert.equal(localLaunches.length, 2);
+  assert.equal(Object.hasOwn(localLaunches[1], 'assistant_token'), false);
+  assert.equal(localLaunches[1].session.accessToken, 'local-test-access');
+  assert.equal(localLaunches[1].expected_email, account.email);
   authenticatedAt = '2026-09-15T00:30:00Z'; localState = 'authenticated';
   const openStatusCount = statusRequestCount();
   await delay(5200);
@@ -1228,6 +1237,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('验证并打开浏览器');
   await wait('document.querySelector("dialog").innerText.includes("Session 已过期")');
   assert.equal(localLaunches.length, 3);
+  assert.equal(localLaunches[2].assistant_token, 'local-test-assistant', '重新进入弹窗时默认加载小助手');
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   await navigateAdmin('proxies');
   await wait('Boolean(document.querySelector(".proxy-row"))');

@@ -10,6 +10,7 @@ import { configureProfile } from './profile.mjs';
 import { EventEmitter } from 'node:events';
 import { BrowserAssistant } from './assistant.mjs';
 import { homedir } from 'node:os';
+import { loginCheckSource } from './page-verification.mjs';
 
 export function validateSession(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.accessToken !== 'string' || !value.accessToken || value.accessToken.length > 128000 || /[^\x21-\x7e]/.test(value.accessToken)) {
@@ -172,7 +173,7 @@ export class SessionBrowser extends EventEmitter {
   }
 
   async verifyLogin(environment) {
-    if (!environment.session || environment.verifying) return;
+    if (!environment.session || environment.verifying || environment.loginCheckAfter > Date.now()) return;
     environment.verifying = true;
     try {
       // 请求 ChatGPT 的真实会话接口，不伪造响应、不用 accessToken 冒充登录 Cookie。
@@ -191,7 +192,7 @@ export class SessionBrowser extends EventEmitter {
             environment.pages.set(target.targetId, pageSession);
           }
           const result = await environment.cdp.send('Runtime.evaluate', {
-            expression: "(async () => { if (location.origin !== 'https://chatgpt.com') return null; try { const response = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(8000) }); const body = await response.json().catch(() => ({})); let claims = {}; try { claims = JSON.parse(atob(body.accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch {} return { status: response.status, email: typeof body.user?.email === 'string' ? body.user.email : null, plan: body.account?.planType || body.account?.plan_type || body.user?.planType || claims['https://api.openai.com/auth']?.chatgpt_plan_type || null }; } catch { return { status: 0 }; } })()",
+            expression: loginCheckSource(),
             returnByValue: true, awaitPromise: true,
           }, pageSession);
           value = result.result?.value;
@@ -200,10 +201,15 @@ export class SessionBrowser extends EventEmitter {
       }
       if (!environment.session || environment.state === 'closing') return;
       if (!value) return;
-      environment.apiStatus = value.status;
+      environment.apiStatus = value.status ?? null;
       environment.actualEmail = value.email || null;
       environment.plan = typeof value.plan === 'string' ? value.plan.slice(0, 80) : null;
-      if (value.status === 200 && value.email) {
+      if (value.challenge) {
+        environment.state = 'unverified';
+        environment.message = '网页正在进行 Cloudflare 验证，已暂停登录请求，请在浏览器中手动完成验证。';
+        // 接口自身被挑战时退避，避免没有可见验证页时仍频繁请求。
+        if (value.status) environment.loginCheckAfter = Date.now() + 30000;
+      } else if (value.status === 200 && value.email) {
         const expected = environment.expectedEmail || environment.session.user?.email;
         if (!expected || expected.toLowerCase() !== value.email.toLowerCase()) {
           environment.state = 'rejected';
