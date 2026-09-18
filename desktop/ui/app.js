@@ -16,6 +16,8 @@ function render(next) {
   $('#login-description').textContent = reconnecting ? '连接恢复后将自动验证登录，无需重复授权。' : loggedIn ? '已通过后台鉴权，打开账号仍需两步验证。' : pending ? '请在打开的后台页面登录并确认授权，然后返回助手。' : '点击登录，将在浏览器打开' + next.profile.label + '后台进行鉴权。';
   $('#login').textContent = loggedIn || reconnecting ? '退出登录' : pending ? '取消登录' : '授权登录';
   $('#login').disabled = busy;
+  $('#retry-login').hidden = !reconnecting;
+  $('#retry-login').disabled = busy;
   showError($('#login-error'), auth.error);
   $('#summary').textContent = `${next.sites.filter(site => site.running).length} 个站点运行中`;
   $('#startup').checked = next.loginAtStartup;
@@ -42,6 +44,7 @@ function render(next) {
 }
 
 $('#login').addEventListener('click', () => act(() => ['authenticated', 'reconnecting'].includes(state.auth.status) ? window.assistant.logout() : state.auth.status === 'pending' ? window.assistant.cancelLogin() : window.assistant.login()));
+$('#retry-login').addEventListener('click', () => act(() => window.assistant.retryLogin()));
 
 async function act(action) {
   if (busy) return;

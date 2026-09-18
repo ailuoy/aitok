@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, safeStorage } from 'electron';
+import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, safeStorage, net, powerMonitor } from 'electron';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,7 @@ const smokeDirectory = !app.isPackaged && process.env.AITOK_DESKTOP_SMOKE_DIRECT
 app.setName(profile.name);
 app.setPath('userData', join(app.getPath('appData'), profile.name));
 if (smokeDirectory) app.setPath('userData', smokeDirectory);
-let window, tray, manager, authentication, quitting = false, askingQuit = false;
+let window, tray, manager, authentication, authTimer, quitting = false, askingQuit = false;
 const ownsLock = app.requestSingleInstanceLock();
 if (!ownsLock) app.quit();
 
@@ -37,6 +37,7 @@ async function quit() {
   try {
     if (activeCount() && !await confirm('退出桌面助手？', '由助手打开的账号浏览器也会关闭。')) return;
     quitting = true;
+    clearInterval(authTimer);
     await authentication?.close();
     await manager?.close();
     tray?.destroy();
@@ -60,8 +61,8 @@ function updateTray() {
 async function handle(action, value) {
   switch (action) {
     case 'state':
-      if (authentication.token && authentication.status !== 'pending') await authentication.check().catch(() => {});
       return snapshot();
+    case 'retry-login': await authentication.check(true).catch(() => {}); break;
     case 'login': await authentication.login(); break;
     case 'cancel-login': authentication.cancel(); break;
     case 'logout':
@@ -106,7 +107,7 @@ app.on('window-all-closed', () => {});
 app.on('before-quit', event => { if (!quitting) { event.preventDefault(); void quit(); } });
 
 if (ownsLock) app.whenReady().then(async () => {
-  authentication = new DesktopAuth({ profile, path: join(app.getPath('userData'), 'login-' + profile.channel + '.json'), encryption: safeStorage, openExternal: url => shell.openExternal(url), onChange: () => {
+  authentication = new DesktopAuth({ profile, path: join(app.getPath('userData'), 'login-' + profile.channel + '.json'), encryption: safeStorage, request: (url, options) => net.fetch(url, options), openExternal: url => shell.openExternal(url), onChange: () => {
     if (!manager || quitting) return;
     void manager.updateAuthentication(authentication.status).then(() => {
       if (authentication.status === 'authenticated') showWindow();
@@ -121,6 +122,12 @@ if (ownsLock) app.whenReady().then(async () => {
     authorize: () => authentication.check(),
   });
   await manager.load();
+  // 主进程独立校验，窗口隐藏或渲染进程节流时仍能自动恢复连接。
+  const checkAuthentication = (force = false) => {
+    if (!quitting && authentication.token && authentication.status !== 'pending') void authentication.check(force).catch(() => {});
+  };
+  authTimer = setInterval(checkAuthentication, 1000); authTimer.unref();
+  powerMonitor.on('resume', () => checkAuthentication(true));
   window = new BrowserWindow({
     width: 920, height: 690, minWidth: 680, minHeight: 500, show: false,
     title: profile.name, backgroundColor: '#f6f7f9', icon: join(root, 'assets/icon.png'),

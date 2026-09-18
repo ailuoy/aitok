@@ -294,7 +294,11 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       else if (url.pathname === '/api/accounts') {
         if (request.method === 'POST') imported.push(JSON.parse(request.postData));
         const group=url.searchParams.get('group');
-        const accountRows=(!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
+        const status=url.searchParams.get('renewal_status');
+        const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+        const days=(Date.parse(account.renewal_date)-Date.parse(today))/86400000;
+        const matchesStatus=!status || (Number.isFinite(days) && (status==='safe' ? days>10 : status==='soon' ? days>=0 && days<=10 : days<0));
+        const accountRows=matchesStatus && (!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
         data = { accounts: accountRows, account, total:accountRows.length, page:1, page_size:20 };
       } else if (url.pathname === '/api/wallet') data = { balance: 0, orders: [], ledger: [], renewals: [], renewal_token_cost: 20, renewal_months: 1, topup_options: [{ amount_minor: 100, tokens: 1 }], tokens_per_usd: 1, stripe_enabled: false };
       else if (url.pathname === '/api/accounts/1/browser') {
@@ -435,6 +439,20 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector("button[aria-label=续订日期：升序排序]")?.closest("th").getAttribute("aria-sort") === "descending"');
   await delay(100);
   assert.ok(requests.some(url => url.includes('sort=renewal_date') && url.includes('direction=desc')));
+  const originalRenewalDate = account.renewal_date;
+  const renewalToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  for (const [status, days] of [['safe', 11], ['soon', 0], ['overdue', -1]]) {
+    account.renewal_date = new Date(Date.parse(renewalToday) + days * 86400000).toISOString().slice(0, 10);
+    await evaluate(`document.querySelector('.account-renewal-filters [data-status="${status}"]').click()`);
+    await wait(`document.querySelector('.account-renewal-filters [data-status="${status}"]').getAttribute('aria-pressed') === 'true' && document.querySelector('.renewal-countdown')?.textContent.includes('${days < 0 ? '已逾期 1 天' : days === 0 ? '今天续费' : '距离续费 11 天'}')`);
+    assert.ok(requests.some(url => url.includes('renewal_status=' + status) && url.includes('page=1')));
+  }
+  account.renewal_date = null;
+  await evaluate('document.querySelector(".account-renewal-filters [data-status=safe]").click()');
+  await wait('!document.querySelector(".account-row") && document.body.innerText.includes("没有匹配的账号")');
+  account.renewal_date = originalRenewalDate;
+  await evaluate('document.querySelector(".account-renewal-filters [data-status=safe]").click()');
+  await wait('Boolean(document.querySelector(".account-row")) && !document.querySelector(".account-renewal-filters [aria-pressed=true]")');
   await evaluate('document.querySelector(".account-renewal-switch").click()');
   await wait('document.querySelector(".account-renewal-switch").getAttribute("aria-checked") === "false" && !document.querySelector(".account-renewal-switch").disabled');
   assert.equal(account.renewal_enabled, false);

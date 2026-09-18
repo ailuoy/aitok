@@ -160,6 +160,7 @@ func decryptSession(encoded string) (string, error) {
 
 func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, accountID int64, launch bool) {
 	w.Header().Set("Cache-Control", "no-store")
+	assistantUpdate := r.URL.Path == "/api/browser-assistant/session"
 	var encrypted, email string
 	var err error
 	// 所有浏览器凭据导出均要求管理员身份和一次性 TOTP。
@@ -203,15 +204,17 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": err.Error()}, 400)
 		return
 	}
-	if session.Email != "" && !strings.EqualFold(session.Email, email) {
+	if (assistantUpdate || session.Email != "") && !strings.EqualFold(session.Email, email) {
 		reply(w, map[string]string{"error": "Session 中的邮箱与当前账号不一致，请为该邮箱新建账号"}, 409)
 		return
 	}
-	if launch {
+	if launch || assistantUpdate {
 		if session.ExpiresAt != nil && !session.ExpiresAt.After(time.Now()) {
 			reply(w, map[string]string{"error": "Session 已过期，请重新复制 /api/auth/session 并更新"}, 422)
 			return
 		}
+	}
+	if launch {
 		reply(w, map[string]any{"account_id": accountID, "session": session.BrowserJSON, "expires_at": session.ExpiresAt, "assistant_token": s.assistantToken(userID, accountID)}, 200)
 		return
 	}
@@ -221,13 +224,29 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "账号加密未配置，请联系管理员"}, 503)
 		return
 	}
-	result, err := s.db.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),session_ciphertext=$1 WHERE id=$2 AND deleted_at IS NULL AND COALESCE(session_ciphertext,'')=$3`, encoded, accountID, encrypted)
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		reply(w, map[string]string{"error": "更新 Session 失败"}, 500)
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),session_ciphertext=$1 WHERE id=$2 AND deleted_at IS NULL AND COALESCE(session_ciphertext,'')=$3`, encoded, accountID, encrypted)
 	if err != nil {
 		reply(w, map[string]string{"error": "更新 Session 失败"}, 500)
 		return
 	}
 	if count, _ := result.RowsAffected(); count == 0 {
 		reply(w, map[string]string{"error": "账号已被更新，请刷新后重试"}, 409)
+		return
+	}
+	if assistantUpdate {
+		err = recordEvent(r.Context(), tx, userID, accountID, "account", "assistant_session_update", eventKey(), map[string]any{}, map[string]any{"source": "browser_assistant", "result": "success"})
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		reply(w, map[string]string{"error": "更新 Session 失败"}, 500)
 		return
 	}
 	reply(w, map[string]string{"message": "Session 已更新"}, 200)

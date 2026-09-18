@@ -6,7 +6,7 @@ import { dirname } from 'node:path';
 export class DesktopAuth {
   constructor({ profile, path, encryption, openExternal, onChange = () => {}, request = fetch }) {
     Object.assign(this, { profile, path, encryption, openExternal, onChange, request });
-    this.token = ''; this.user = null; this.expires = 0; this.status = 'signed_out'; this.error = ''; this.pending = null; this.generation = 0; this.lastCheck = 0; this.retryAfter = 0; this.writes = Promise.resolve();
+    this.token = ''; this.user = null; this.expires = 0; this.status = 'signed_out'; this.error = ''; this.pending = null; this.generation = 0; this.lastCheck = 0; this.retryAfter = 0; this.failures = 0; this.writes = Promise.resolve();
   }
   snapshot() { return { status: this.status, user: this.user, expires_at: this.expires, error: this.error }; }
   async persist() {
@@ -31,8 +31,8 @@ export class DesktopAuth {
     }
   }
   async inspect(token) {
-    const response = await this.request(this.profile.origin + '/api/desktop-auth/session', { headers: { Authorization: 'Bearer ' + token }, redirect: 'error', signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw Object.assign(new Error(response.status === 401 || response.status === 403 ? '登录已失效，请重新授权登录' : '后台暂时不可用，请稍后重试'), { invalid: response.status === 401 || response.status === 403 });
+    const response = await this.request(this.profile.origin + '/api/desktop-auth/session', { headers: { Authorization: 'Bearer ' + token }, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw Object.assign(new Error(response.status === 401 || response.status === 403 ? '登录已失效，请重新授权登录' : '后台暂时不可用，请稍后重试'), { invalid: response.status === 401 || response.status === 403, status: response.status });
     const data = await response.json();
     if (data.channel !== this.profile.channel || data.origin !== this.profile.origin || !Number.isSafeInteger(data.user?.id) || data.user.id < 1 || !['admin', 'super_admin'].includes(data.user.role) || !Number.isSafeInteger(data.expires_at) || data.expires_at * 1000 <= Date.now()) throw Object.assign(new Error('登录授权与当前环境不匹配，请重新登录'), { invalid: true });
     return data;
@@ -50,17 +50,19 @@ export class DesktopAuth {
           : this.inspect(token));
         if (generation !== this.generation) throw new Error('登录状态已变更');
         const recovered = this.status !== 'authenticated';
-        this.user = data.user; this.expires = data.expires_at; this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now(); this.retryAfter = 0;
+        this.user = data.user; this.expires = data.expires_at; this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now(); this.retryAfter = 0; this.failures = 0;
         if (recovered) this.onChange();
         return this.user;
       } catch (error) {
         if (generation === this.generation) {
           if (error.invalid) {
-            this.token = ''; this.user = null; this.expires = 0; this.status = 'signed_out'; this.error = error.message; this.retryAfter = 0;
+            this.token = ''; this.user = null; this.expires = 0; this.status = 'signed_out'; this.error = error.message; this.retryAfter = 0; this.failures = 0;
             await this.persist();
           } else {
             // 暂时无法校验时拒绝新操作，但保留凭证和已有浏览器，等待连接恢复。
-            this.status = 'reconnecting'; this.error = '后台连接暂时不可用，正在自动重试；已打开的浏览器会保留，暂不能打开新账号。'; this.retryAfter = Date.now() + 30000;
+            const delay = Math.min(3000 * 2 ** Math.min(this.failures++, 4), 30000);
+            const reason = error.status ? `后台返回 HTTP ${error.status}` : error.name === 'TimeoutError' || /TIMEDOUT|TIMEOUT/.test(error.cause?.code || '') ? '连接超时' : error instanceof SyntaxError ? '后台响应格式异常' : '网络连接失败';
+            this.status = 'reconnecting'; this.error = `${reason}，正在自动重试；已打开的浏览器会保留，暂不能打开新账号。`; this.retryAfter = Date.now() + delay;
           }
           this.onChange();
         }
@@ -102,7 +104,7 @@ export class DesktopAuth {
         this.token = token; this.user = data.user; this.expires = data.expires_at;
         try { await this.persist(); } catch (error) { this.token = ''; this.user = null; throw error; }
         if (generation !== this.generation) throw new Error('授权请求已取消');
-        this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now(); this.retryAfter = 0;
+        this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now(); this.retryAfter = 0; this.failures = 0;
         clearTimeout(this.pending.timer); this.pending = null;
         send(200, { ok: true }); server.close(); this.onChange();
       } catch {

@@ -17,6 +17,8 @@ async function setup(t) {
       requests++;
       assert.equal(url, profiles.test.origin + '/api/desktop-auth/session');
       assert.equal(init.headers.Authorization, 'Bearer scoped-desktop-test');
+      assert.equal(init.credentials, 'omit');
+      assert.equal(init.cache, 'no-store');
       if (failure instanceof Error) throw failure;
       if (failure) return new Response('{}', { status: failure });
       return new Response(JSON.stringify(invalid ? {error:'expired'} : claim), {status: invalid || 200});
@@ -94,6 +96,34 @@ test('离线启动保留加密凭证，恢复后自动登录，重连时主动�
   assert.equal(restored.snapshot().status, 'signed_out');
   assert.equal(JSON.parse(await readFile(options.path, 'utf8')).encrypted, '');
   await assert.rejects(restored.check(), /授权登录/);
+});
+
+test('短暂断线快速重试，持续故障退避，手动重试立即恢复且不泄露异常内容', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const fixture = await setup(t), { auth, begin, post } = fixture;
+  await post((await begin()).searchParams.get('callback'));
+  fixture.fail(new TypeError('private-token-must-not-appear'));
+  for (const delay of [3000, 6000, 12000, 24000, 30000, 30000]) {
+    await assert.rejects(auth.check(true));
+    assert.equal(auth.retryAfter - Date.now(), delay);
+    assert.ok(auth.snapshot().error.startsWith('网络连接失败'));
+    assert.ok(!JSON.stringify(auth.snapshot()).includes('private-token'));
+    const count = fixture.requests;
+    t.mock.timers.tick(delay - 1);
+    await assert.rejects(auth.check());
+    assert.equal(fixture.requests, count);
+    t.mock.timers.tick(1);
+  }
+  fixture.fail(null);
+  await auth.check(true);
+  assert.equal(auth.status, 'authenticated');
+  assert.equal(auth.failures, 0);
+  fixture.fail(503);
+  await assert.rejects(auth.check(true));
+  assert.equal(auth.retryAfter - Date.now(), 3000);
+  assert.match(auth.snapshot().error, /HTTP 503/);
+  fixture.fail(null);
+  assert.equal((await auth.check(true)).id, 7, '立即重试绕过冷却时间');
 });
 
 test('离线不延长授权有效期，明确拒绝仍清除凭证', async t => {

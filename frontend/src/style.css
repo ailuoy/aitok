@@ -117,6 +117,14 @@ button,input,textarea{font-family:inherit}
 .account-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px}
 .account-toolbar>.custom-select{width:260px;max-width:100%}
 .account-toolbar>button{white-space:nowrap}
+.account-renewal-filters{display:flex;gap:8px;flex-wrap:wrap}
+.account-renewal-filters button{white-space:nowrap}
+.account-renewal-filters [data-status=safe]{--status-color:var(--success)}
+.account-renewal-filters [data-status=soon]{--status-color:#e5b82e}
+:root[data-theme=light] .account-renewal-filters [data-status=soon]{--status-color:#947000}
+.account-renewal-filters [data-status=overdue]{--status-color:#858585}
+.account-renewal-filters button{color:var(--status-color)}
+.account-renewal-filters [aria-pressed=true]{border-color:var(--status-color);background:color-mix(in srgb,var(--status-color) 12%,var(--surface));box-shadow:inset 0 0 0 1px var(--status-color)}
 .account-toolbar>.muted{margin-left:auto}
 .account-group{max-width:300px;margin-top:8px}
 .account-proxy{max-width:300px}

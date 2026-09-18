@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
@@ -91,6 +92,51 @@ func TestAccountSortingAcrossPages(t *testing.T) {
 				t.Fatal("普通用户收到管理字段", field)
 			}
 		}
+	}
+}
+
+func TestAccountRenewalStatusFilter(t *testing.T) {
+	db, call := accountSettingsTest(t)
+	_, err := db.Exec(`UPDATE chatgpt_accounts SET renewal_date=(NOW() AT TIME ZONE 'Asia/Shanghai')::date+CASE id WHEN 1 THEN 11 WHEN 2 THEN 10 WHEN 4 THEN -1 ELSE 0 END WHERE id<>3;
+INSERT INTO chatgpt_accounts(id,user_id,label,email,group_id,renewal_date,deleted_at) VALUES
+(6,2,'Today','today@test.local',1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date,NULL),
+(7,2,'Deleted','deleted@test.local',1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date,NOW()),
+(8,2,'Tomorrow','tomorrow@test.local',1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date+1,NULL);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		status string
+		ids    []int
+	}{{"safe", []int{1}}, {"soon", []int{8, 6, 2}}, {"overdue", []int{4}}} {
+		for i, id := range c.ids {
+			data := call("GET", fmt.Sprintf("/api/accounts?paged=1&renewal_status=%s&page_size=1&page=%d", c.status, i+1), 1, nil, 200)
+			rows := data["accounts"].([]any)
+			if data["total"] != float64(len(c.ids)) || len(rows) != 1 || rows[0].(map[string]any)["id"] != float64(id) {
+				t.Fatalf("续费筛选 %s 分页错误: %v", c.status, data)
+			}
+		}
+	}
+	filtered := call("GET", "/api/accounts?paged=1&renewal_status=soon&group=1&q=Today", 1, nil, 200)
+	if filtered["total"] != float64(1) || filtered["accounts"].([]any)[0].(map[string]any)["id"] != float64(6) {
+		t.Fatal("续费状态与分组、关键词组合筛选错误", filtered)
+	}
+	if all := call("GET", "/api/accounts?paged=1", 1, nil, 200); all["total"] != float64(6) {
+		t.Fatal("取消筛选应包含未设置日期账号", all)
+	}
+	call("GET", "/api/accounts?paged=1&renewal_status=invalid", 1, nil, 400)
+	call("GET", "/api/accounts?paged=1&renewal_status=soon", 2, nil, 400)
+	s := &Server{db: db, secret: []byte("account-settings-test")}
+	r := httptest.NewRequest("GET", "/api/accounts/export?renewal_status=soon&group=1&q=Today", nil)
+	r.Header.Set("Authorization", "Bearer "+s.token(1))
+	w := httptest.NewRecorder()
+	s.routes().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("筛选导出失败: %d %s", w.Code, w.Body.String())
+	}
+	records, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(w.Body.String(), "\ufeff"))).ReadAll()
+	if err != nil || len(records) != 2 || records[1][0] != "6" {
+		t.Fatalf("导出未遵循续费筛选: %v %v", records, err)
 	}
 }
 

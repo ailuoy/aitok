@@ -1,5 +1,6 @@
 import { assistantPanelSource } from './assistant-panel.mjs';
 import { assistantPage, fillSource } from './checkout-fill.mjs';
+import { captureBrowserSession } from './session-capture.mjs';
 
 const world = 'aitok-assistant';
 export class BrowserAssistant {
@@ -10,10 +11,13 @@ export class BrowserAssistant {
   }
   close() { this.environment.cdp.off('message', this.listener); this.token = null; this.data = null; this.pages.clear(); }
   status() { const env = this.environment; return { state: env.state, email: env.actualEmail || env.expectedEmail || env.session?.user?.email, plan: ({ free: 'Free', plus: 'Plus', pro: 'Pro', pro_20x: 'Pro 20x', pro_5x: 'Pro 5x', team: 'Team', business: 'Business' })[env.plan] || env.plan || null }; }
-  async request(path = '') {
+  async request(path = '', options = {}) {
     if (!this.token) throw new Error('请从后台重新打开账号以启用助手');
-    const response = await fetch(this.endpoint + path, { headers: { Authorization: 'Bearer ' + this.token }, redirect: 'error', signal: AbortSignal.timeout(15000) });
-    if (!response.ok) throw new Error(response.status === 401 ? '助手授权已过期，请重新打开账号' : '无法读取银行卡或地址，请回后台检查');
+    const response = await fetch(this.endpoint + path, { ...options, headers: { Authorization: 'Bearer ' + this.token, ...(options.body ? { 'Content-Type': 'application/json' } : {}) }, redirect: 'error', signal: AbortSignal.timeout(15000) });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(response.status === 401 ? '助手授权已过期，请重新打开账号' : data.error || '助手请求失败，请回后台检查');
+    }
     return response.json();
   }
   async sync(targetInfos) {
@@ -47,12 +51,13 @@ export class BrowserAssistant {
     if (![...this.pages.values()].includes(sessionId) || message.params.payload.length > 2048) return;
     let input;
     try { input = JSON.parse(message.params.payload); } catch { return; }
-    if (!Number.isSafeInteger(input.id) || !['load', 'status', 'card', 'fill', 'plan'].includes(input.action)) return;
+    if (!Number.isSafeInteger(input.id) || !['load', 'status', 'card', 'fill', 'plan', 'update_session'].includes(input.action)) return;
     let result;
     try {
       const location = await cdp.send('Runtime.evaluate', { expression: 'window === window.top ? location.href : ""', contextId, returnByValue: true }, sessionId);
       if (!assistantPage(location.result?.value)) return;
       if (input.action === 'status') result = this.status();
+      else if (input.action === 'update_session') result = await this.updateSession();
       else if (input.action === 'load') { this.data = await this.request(); result = { ...this.data, status: this.status() }; }
       else if (input.action === 'card') {
         if (!Number.isSafeInteger(input.card_id) || input.card_id < 1) throw new Error('请选择有效银行卡');
@@ -69,6 +74,20 @@ export class BrowserAssistant {
       }
     } catch (error) { result = { error: /^[\u3400-\u9fff]/.test(error.message) ? error.message : '助手操作失败，请刷新后重试' }; }
     try { await cdp.send('Runtime.evaluate', { expression: `window.__aitokAssistantReply?.(${input.id},${JSON.stringify(result)})`, contextId }, sessionId); } catch { /* 页面已导航。 */ }
+  }
+  async updateSession() {
+    if (this.updatingSession) throw new Error('正在更新 Session，请稍后');
+    this.updatingSession = true;
+    try {
+      if (!this.token) throw new Error('请从后台重新打开账号以启用助手');
+      const session = await captureBrowserSession(this.environment);
+      await this.request('/session', { method: 'POST', body: JSON.stringify({ session_json: JSON.stringify(session) }) });
+      if (this.token && !this.environment.cleaned && this.environment.state !== 'closing') {
+        this.environment.session = session;
+        this.environment.hasLoginCookie = session.cookies.length > 0;
+      }
+      return { message: 'Session 已更新并保存到后台' };
+    } finally { this.updatingSession = false; }
   }
   async fill(sessionId, input) {
     if (!Number.isSafeInteger(input.card_id) || !Number.isSafeInteger(input.address_id)) throw new Error('请先选择银行卡和账单地址');

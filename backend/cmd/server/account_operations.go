@@ -53,6 +53,11 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 		return
 	}
 	group := r.URL.Query().Get("group")
+	renewalStatus := r.URL.Query().Get("renewal_status")
+	if renewalStatus != "" && (!admin || (renewalStatus != "safe" && renewalStatus != "soon" && renewalStatus != "overdue")) {
+		reply(w, map[string]string{"error": "续费时间状态无效"}, 400)
+		return
+	}
 	if !admin {
 		group = ""
 	}
@@ -67,7 +72,17 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 			return
 		}
 	}
-	const filter = ` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN account_groups g ON g.id=a.group_id AND g.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL LEFT JOIN addresses b ON b.id=a.billing_address_id AND b.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) AND strpos(lower(a.label||' '||a.email),lower($3))>0 AND ($4::bigint=-1 OR COALESCE(a.group_id,0)=$4)`
+	filter := ` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN account_groups g ON g.id=a.group_id AND g.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL LEFT JOIN addresses b ON b.id=a.billing_address_id AND b.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) AND strpos(lower(a.label||' '||a.email),lower($3))>0 AND ($4::bigint=-1 OR COALESCE(a.group_id,0)=$4)`
+	// 与前端倒计时一致，按北京时间自然日筛选，并复用于总数、分页和导出。
+	const today = `(NOW() AT TIME ZONE 'Asia/Shanghai')::date`
+	switch renewalStatus {
+	case "safe":
+		filter += ` AND a.renewal_date > ` + today + ` + 10`
+	case "soon":
+		filter += ` AND a.renewal_date BETWEEN ` + today + ` AND ` + today + ` + 10`
+	case "overdue":
+		filter += ` AND a.renewal_date < ` + today
+	}
 	args := []any{user, admin, r.URL.Query().Get("q"), gid}
 	var total int
 	if err := s.db.QueryRowContext(r.Context(), `SELECT count(*)`+filter, args...).Scan(&total); err != nil {

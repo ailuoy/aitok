@@ -6,19 +6,20 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// 独立作用域的短期只读凭证，仅交给本机进程，不注入 ChatGPT 页面。
+// 独立作用域的短期凭证，只读卡片/地址并更新绑定账号的 Session，仅交给本机进程。
 func (s *Server) assistantToken(user, account int64) string {
 	stamp, err := s.sessionStamp(context.Background(), user)
 	if err != nil {
 		return ""
 	}
-	body := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("assistant:%d:%d:%d:%s", user, account, time.Now().Add(12*time.Hour).Unix(), stamp)))
+	body := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("assistant-v2:%d:%d:%d:%s", user, account, time.Now().Add(12*time.Hour).Unix(), stamp)))
 	mac := hmac.New(sha256.New, s.secret)
 	mac.Write([]byte(body))
 	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
@@ -26,7 +27,8 @@ func (s *Server) assistantToken(user, account int64) string {
 
 func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != "GET" {
+	updateSession := r.URL.Path == "/api/browser-assistant/session" && r.Method == http.MethodPost
+	if r.Method != "GET" && !updateSession {
 		w.WriteHeader(405)
 		return
 	}
@@ -50,9 +52,28 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 	}
 	var user, account, expiry int64
 	var stamp string
-	if _, err = fmt.Sscanf(string(raw), "assistant:%d:%d:%d:%s", &user, &account, &expiry, &stamp); err != nil || time.Now().Unix() > expiry {
+	scope := "assistant"
+	if strings.HasPrefix(string(raw), "assistant-v2:") {
+		scope = "assistant-v2"
+	}
+	if _, err = fmt.Sscanf(string(raw), scope+":%d:%d:%d:%s", &user, &account, &expiry, &stamp); err != nil || time.Now().Unix() > expiry {
 		unauthorized()
 		return
+	}
+	if updateSession {
+		aw := &auditWriter{ResponseWriter: w}
+		w = aw
+		defer func() {
+			if aw.status < 400 {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 3*time.Second)
+			defer cancel()
+			_, err := s.db.ExecContext(ctx, `INSERT INTO operation_events(actor_id,entity_type,entity_id,action,request_key,after_data) VALUES($1,'account',$2,'assistant_session_update',$3,jsonb_build_object('source','browser_assistant','result','failure','status',$4::int))`, user, account, eventKey(), aw.status)
+			if err != nil {
+				log.Print("assistant session audit write failed")
+			}
+		}()
 	}
 	current, e := s.sessionStamp(r.Context(), user)
 	if e != nil || !hmac.Equal([]byte(stamp), []byte(current)) {
@@ -63,8 +84,18 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		unauthorized()
 		return
 	}
+	if updateSession {
+		if scope != "assistant-v2" {
+			reply(w, map[string]string{"error": "请从后台重新打开账号以启用 Session 更新"}, 403)
+			return
+		}
+		// 账号 ID 只取自已签名凭证，不接受页面指定其他账号。
+		s.accountSession(w, r, user, account, false)
+		return
+	}
 	var paymentCardID, billingAddressID *int64
-	if err = s.db.QueryRowContext(r.Context(), `SELECT payment_card_id,billing_address_id FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL)`, account, user).Scan(&paymentCardID, &billingAddressID); err != nil {
+	var notes string
+	if err = s.db.QueryRowContext(r.Context(), `SELECT payment_card_id,billing_address_id,COALESCE(to_jsonb(a)->>'notes','') FROM chatgpt_accounts a WHERE id=$1 AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL)`, account, user).Scan(&paymentCardID, &billingAddressID, &notes); err != nil {
 		unauthorized()
 		return
 	}
@@ -143,5 +174,5 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		addressError(w, err)
 		return
 	}
-	reply(w, map[string]any{"cards": cards, "addresses": addresses, "payment_card_id": paymentCardID, "billing_address_id": billingAddressID}, 200)
+	reply(w, map[string]any{"cards": cards, "addresses": addresses, "payment_card_id": paymentCardID, "billing_address_id": billingAddressID, "notes": notes}, 200)
 }

@@ -9,6 +9,7 @@ const invoke = async (action, value) => {
 contextBridge.exposeInMainWorld('assistant', {
   state: () => invoke('state'),
   login: () => invoke('login'),
+  retryLogin: () => invoke('retry-login'),
   cancelLogin: () => invoke('cancel-login'),
   logout: () => invoke('logout'),
   save: value => invoke('save', value),

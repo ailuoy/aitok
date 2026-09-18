@@ -23,16 +23,27 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   const demoCard = { id: 3, label: '演示 Amex（测试卡）', brand: 'Amex', last4: '0005', cardholder: 'TEST USER', exp_month: 12, exp_year: 2030 };
   const address = { id: 1, full_name: 'TEST USER', address_line1: '100 Test Road', address_line2: 'Unit 2', city: 'Portland', state: 'OR', postal_code: '97201', country: 'US' };
   let detailReads = 0;
+  const sessionWrites = [];
+  let sessionEmail = 'test@example.com', sessionStatus = 200, saveStatus = 200;
+  let accountNotes = '账号续费备注\n<img src=x onerror=alert(1)>';
   const secondAddress = { ...address, id: 2, address_line1: '200 Bound Street', city: 'Salem', postal_code: '97301' };
   let billingAddressID = null, boundAddressAvailable = true;
   let paymentCardID = null, boundCardAvailable = true;
-  const server = http.createServer((request, response) => {
+  const server = http.createServer(async (request, response) => {
     assert.equal(request.headers.authorization, 'Bearer limited-test-token');
     response.setHeader('Content-Type', 'application/json');
+    if (request.url === '/api/browser-assistant/session') {
+      assert.equal(request.method, 'POST');
+      let body = ''; for await (const chunk of request) body += chunk;
+      sessionWrites.push(JSON.parse(body));
+      response.writeHead(saveStatus);
+      response.end(JSON.stringify(saveStatus === 200 ? { message: 'Session 已更新' } : { error: '助手授权已过期' }));
+      return;
+    }
     if (request.url.endsWith('/cards/1')) { detailReads++; response.end(JSON.stringify({ card: { ...card, number: '4242424242424242' } })); }
     else if (request.url.endsWith('/cards/2')) { detailReads++; response.end(JSON.stringify({ card: { ...secondCard, number: '5555555555554444', cvc: '0042' } })); }
     else if (request.url.endsWith('/cards/3')) { detailReads++; response.end(JSON.stringify({ card: { ...demoCard, number: '378282246310005' } })); }
-    else response.end(JSON.stringify({ cards: [card, secondCard, demoCard].filter(item => boundCardAvailable || item.id !== paymentCardID), addresses: [address, secondAddress].filter(item => boundAddressAvailable || item.id !== billingAddressID), payment_card_id: paymentCardID, billing_address_id: billingAddressID }));
+    else response.end(JSON.stringify({ cards: [card, secondCard, demoCard].filter(item => boundCardAvailable || item.id !== paymentCardID), addresses: [address, secondAddress].filter(item => boundAddressAvailable || item.id !== billingAddressID), payment_card_id: paymentCardID, billing_address_id: billingAddressID, notes: accountNotes }));
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
@@ -52,7 +63,12 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   const fixture = '<html><head><meta charset="utf-8"></head><body style="font:16px system-ui;background:#f5f6fa;padding:40px 330px 40px 40px"><div id="settings-modal" role="dialog">官网设置弹框</div><script>window.outsideEvents=[]; for(const name of ["pointerdown","mousedown","click","focusin"]) document.addEventListener(name,event=>{if(window.trackOutside && !document.getElementById("settings-modal").contains(event.target)){window.outsideEvents.push(name);document.getElementById("settings-modal").hidden=true;}},true);</script><h1>收银表单测试</h1><form onsubmit="event.preventDefault();window.submitted=true">' + fields.map(name => `<label style="display:block;margin:12px">${name}<input style="display:block;padding:10px" autocomplete="${name}" id="${name}"></label>`).join('') + '<button>付款</button></form></body></html>';
   let verifying = true;
   const challengeFixture = '<html><body><form id="challenge-form">模拟验证页</form></body></html>';
-  cdp.on('message', message => { if (message.method === 'Fetch.requestPaused') void cdp.send('Fetch.fulfillRequest', { requestId: message.params.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'text/html' }], body: Buffer.from(verifying ? challengeFixture : fixture).toString('base64') }, message.sessionId); });
+  cdp.on('message', message => {
+    if (message.method !== 'Fetch.requestPaused') return;
+    const sessionRequest = message.params.request.url === 'https://chatgpt.com/api/auth/session';
+    const body = sessionRequest ? JSON.stringify({ accessToken: 'fresh-assistant-token', user: { email: sessionEmail }, expires: '2099-01-01T00:00:00Z', unrelated: 'not-exported' }) : verifying ? challengeFixture : fixture;
+    void cdp.send('Fetch.fulfillRequest', { requestId: message.params.requestId, responseCode: sessionRequest ? sessionStatus : 200, responseHeaders: [{ name: 'Content-Type', value: sessionRequest ? 'application/json' : 'text/html' }], body: Buffer.from(body).toString('base64') }, message.sessionId);
+  });
   await cdp.send('Page.navigate', { url: 'https://chatgpt.com/' }, sessionId);
   const evaluate = async expression => (await cdp.send('Runtime.evaluate', { expression, returnByValue: true }, sessionId)).result.value;
   const wait = async check => { for (let i = 0; i < 100; i++) { if (await check()) return; await delay(80); } assert.fail('助手页面等待超时'); };
@@ -76,7 +92,10 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   assert.ok(Math.abs((await bounds()).right - 1188) <= 1, '助手默认靠右');
   assert.equal(detailReads, 1);
   assert.ok((await nodes()).some(node => text(node) === '4242424242424242'));
-  assert.ok((await nodes()).some(node => text(node) === '0.0.4'));
+  assert.ok((await nodes()).some(node => text(node) === '0.0.5'));
+  const notesNode = (await nodes()).find(node => node.attributes?.includes('account-notes'));
+  assert.equal(text(notesNode), accountNotes);
+  assert.ok(notesNode.children.every(node => node.nodeName === '#text'), '账号备注按纯文本展示');
   assert.ok((await nodes()).some(node => text(node) === '完整卡号'));
   assert.ok((await nodes()).some(node => text(node) === '账单姓名'));
   assert.ok(!(await nodes()).some(node => /删除登录状态|登录其他新账号|待充值队列/.test(node.nodeValue || '')));
@@ -132,6 +151,42 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   async function pickerHidden(index) {
     return (await nodes()).filter(node => node.nodeName === 'DETAILS')[index]?.attributes.includes('hidden');
   }
+  accountNotes = '';
+  await reloadPanel();
+  assert.equal(text((await nodes()).find(node => node.attributes?.includes('account-notes'))), '未填写');
+  accountNotes = '新的账号备注';
+  await reloadPanel();
+  assert.equal(text((await nodes()).find(node => node.attributes?.includes('account-notes'))), accountNotes);
+  await cdp.send('Storage.setCookies', { cookies: [
+    { name: '__Secure-next-auth.session-token', value: 'fresh-login-cookie', domain: '.chatgpt.com', path: '/', secure: true, httpOnly: true },
+    { name: 'unrelated-cookie', value: 'not-exported', domain: '.chatgpt.com', path: '/', secure: true },
+    { name: '__Secure-next-auth.session-token', value: 'other-site-cookie', domain: '.example.com', path: '/', secure: true, httpOnly: true },
+  ] });
+  await click('更新 Session');
+  await wait(async () => (await nodes()).some(node => text(node) === 'Session 已更新并保存到后台'));
+  assert.equal(sessionWrites.length, 1);
+  const savedSession = JSON.parse(sessionWrites[0].session_json);
+  assert.equal(savedSession.accessToken, 'fresh-assistant-token');
+  assert.equal(savedSession.user.email, 'test@example.com');
+  assert.equal(savedSession.cookies.length, 1);
+  assert.equal(savedSession.cookies[0].value, 'fresh-login-cookie');
+  assert.equal(savedSession.unrelated, undefined);
+  assert.deepEqual(env.session, savedSession);
+  assert.ok(!(await nodes()).some(node => /fresh-assistant-token|fresh-login-cookie/.test(node.nodeValue || '')), '面板不接收或显示 Session 凭据');
+  sessionEmail = 'wrong@example.com';
+  await click('更新 Session');
+  await wait(async () => (await nodes()).some(node => text(node).includes('当前登录邮箱与此账号不一致')));
+  assert.equal(sessionWrites.length, 1, '账号不匹配时不上传凭据');
+  sessionEmail = 'test@example.com'; sessionStatus = 401;
+  await click('更新 Session');
+  await wait(async () => (await nodes()).some(node => text(node).includes('读取 Session 失败')));
+  assert.equal(sessionWrites.length, 1);
+  sessionStatus = 200; saveStatus = 401;
+  const previousSession = env.session;
+  await click('更新 Session');
+  await wait(async () => (await nodes()).some(node => text(node).includes('助手授权已过期')));
+  assert.equal(env.session, previousSession, '保存失败保留本机已有 Session');
+  saveStatus = 200;
   await cdp.send('Browser.grantPermissions', { origin: 'https://chatgpt.com', permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] });
   const clipboard = async () => (await cdp.send('Runtime.evaluate', { expression: 'navigator.clipboard.readText()', awaitPromise: true, returnByValue: true }, sessionId)).result.value;
   for (const [name, value] of [['完整卡号', '4242424242424242'], ['街道地址', '100 Test Road'], ['卡平台', card.platform], ['备注', card.notes]]) {
@@ -146,13 +201,14 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   assert.equal(await evaluate('document.getElementById("settings-modal").hidden'), false);
   assert.equal(await evaluate('Array.from(window.frames).some(frame => Boolean(frame.document.body.shadowRoot))'), false, '内嵌文档不能暴露敏感详情');
   await evaluate('window.trackOutside=false');
+  const readsBeforeFill = detailReads;
   await click('填充全部表单');
   await wait(() => evaluate('document.getElementById("cc-number").value === "4242424242424242"'));
   assert.equal(await evaluate('document.getElementById("cc-csc").value'), '', '缺少安全码仍能填充其他字段');
   await wait(async () => (await nodes()).some(node => text(node).includes('请在官网手动填写')));
   assert.equal(await evaluate('document.getElementById("address-level2").value'), 'Portland');
   assert.equal(await evaluate('Boolean(window.submitted)'), false);
-  assert.equal(detailReads, 2);
+  assert.equal(detailReads, readsBeforeFill + 1);
   assert.equal((await detailField('安全码')).value, '未填写', '缺少安全码时不推断或伪造');
   const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'assistant.png'), Buffer.from(screenshot.data, 'base64'));

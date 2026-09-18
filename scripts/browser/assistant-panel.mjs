@@ -1,6 +1,6 @@
 import { isVerificationPage } from './page-verification.mjs';
 
-export const ASSISTANT_VERSION = '0.0.4';
+export const ASSISTANT_VERSION = '0.0.5';
 export function assistantPanelSource() { return `(${installPanel.toString()})(${JSON.stringify(ASSISTANT_VERSION)}, ${isVerificationPage.toString()})`; }
 
 function installPanel(version, isVerificationPage) {
@@ -90,6 +90,9 @@ function installPanel(version, isVerificationPage) {
       catch { message.textContent = '无法写入剪贴板，请手动复制' + name; }
     }
     const copy = create('button', '复制邮箱', 'copy-email', info); copy.onclick = event => { if (event.isTrusted) void copyValue('邮箱', email.textContent); };
+    const notesLabel = create('small', '账号备注', '', info); notesLabel.style.cssText = 'display:block;margin-top:10px;';
+    const notes = create('div', '读取中…', 'account-notes', info);
+    notes.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow:auto;margin-top:3px;';
     create('h3', '官方套餐', '', panel); const plans = create('div', '', 'plans', panel);
     for (const [text, name] of [['Plus', 'Plus'], ['5X', 'Pro 5x'], ['20X', 'Pro 20x']]) { const button = create('button', text, '', plans); button.onclick = event => { if (event.isTrusted) run(button, () => call('plan', { plan: name })); }; }
     create('p', '在官网选择对应方案，价格及额度以官网为准。', 'hint', panel);
@@ -174,6 +177,9 @@ function installPanel(version, isVerificationPage) {
     const fill = create('button', '填充全部表单', '', actions);
     fill.disabled = true;
     fill.onclick = event => { if (!event.isTrusted) return; run(fill, () => call('fill', { card_id: cardID, address_id: addressID, cvc: selectedCard?.cvc || testCode(selectedCard) })); };
+    const updateSession = create('button', '更新 Session', '', actions);
+    updateSession.onclick = event => { if (event.isTrusted) run(updateSession, () => call('update_session')); };
+    create('p', '更新 Session 会读取当前 ChatGPT 登录会话并保存到后台。', 'hint', panel);
     create('p', '使用与你付款信息一致的账单地址。填充后请核对，付款由你手动提交。', 'hint', panel);
     const message = create('p', '', 'message', panel); message.setAttribute('role', 'status');
     function updateStatus(status) { email.textContent = status.email || '—'; login.textContent = status.state === 'authenticated' ? '当前已登录' : status.state === 'rejected' ? '登录账号不一致' : status.state === 'login_required' ? '需要登录' : '正在确认登录'; plan.textContent = '当前套餐：' + (status.plan || '官网暂未提供'); }
@@ -181,6 +187,7 @@ function installPanel(version, isVerificationPage) {
     async function run(button, action) { button.disabled = true; message.textContent = '处理中…'; try { const result = await action(); message.textContent = result.message || ''; } catch (error) { message.textContent = error.message; } finally { button.disabled = false; } }
     async function load() {
       const result = await call('load'); data = result;
+      notes.textContent = typeof data.notes === 'string' && data.notes.trim() ? data.notes : '未填写';
       const preferredCard = data.payment_card_id || cardID;
       cardID = data.cards.some(card => card.id === preferredCard) ? preferredCard : data.payment_card_id ? '' : data.cards[0]?.id || '';
       const preferredAddress = data.billing_address_id || addressID;
