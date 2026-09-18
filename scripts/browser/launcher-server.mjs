@@ -48,7 +48,7 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
     }
     try {
       if (request.method === 'GET' && request.url === '/health') {
-        send(200, { status: 'ok', version: 2, origin, fingerprint: 'native-noise-v1' }); return;
+        send(200, { status: 'ok', version: 2, origin, fingerprint: 'native-noise-v1', blank_browser: Boolean(authorize && browser.startBlank) }); return;
       }
       const authorizedUser = authorize ? await authorize() : null;
       let input;
@@ -67,6 +67,26 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
         if (!input || typeof input !== 'object' || Array.isArray(input)) { send(400, { error: 'JSON 格式错误' }); return; }
       }
       // 各站点只能操作自己的浏览器标识，旧目录可继续复用且不会跨站抢占。
+      if (request.method === 'POST' && request.url === '/blank-browsers') {
+        if (!authorizedUser) { send(403, { error: '请先在桌面助手中授权登录' }); return; }
+        if (!browser.startBlank) throw new Error('请更新并重启桌面助手以打开空白浏览器');
+        if (typeof input.proxy_id !== 'string' || !input.proxy_id) throw new Error('请选择一个已保存的代理');
+        const proxy = { ...store.get(input.proxy_id) };
+        const url = store.url(proxy.id);
+        // 标识由助手生成，不能指定其他用户、现有账号资料或注入 Session。
+        const id = `${origin}:user:${authorizedUser.id}:blank:${randomUUID()}`;
+        runningProxies.set(id, { proxy, email: '' });
+        try {
+          const status = await browser.startBlank({ environment_id: id, proxy_url: url });
+          await store.recordUsage(proxy, { action: 'open', ok: true, environment_id: id });
+          send(200, { ...status, environment_id: id });
+        } catch (error) {
+          runningProxies.delete(id);
+          await store.recordUsage(proxy, { action: 'open', ok: false, environment_id: id });
+          throw error;
+        }
+        return;
+      }
       if (enforceOriginScope && request.url?.startsWith('/browsers')) {
         const route = /^\/browsers\/([^/?]+)(?:\/(?:proxy|fingerprint))?$/.exec(request.url);
         const id = request.url === '/browsers' ? input?.environment_id : route && decodeURIComponent(route[1]);

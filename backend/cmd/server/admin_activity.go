@@ -161,6 +161,7 @@ func safeAuditResource(path string) string {
 	known["payment-card"], known["payment-cards"] = true, true
 	known["owner"] = true
 	known["desktop-auth"] = true
+	known["notes"] = true
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	for i, part := range parts {
 		if !known[part] && !auditNumericID.MatchString(part) {

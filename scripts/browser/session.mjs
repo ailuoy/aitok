@@ -95,15 +95,23 @@ export class SessionBrowser extends EventEmitter {
     } finally { this.fingerprintBusy.delete(id); }
   }
 
-  async start({ environment_id: id, session: raw, proxy_url: proxyURL = '', expected_email: expectedEmail, assistant_token: assistantToken, assistant_endpoint: assistantEndpoint }) {
+  async start({ environment_id, session, proxy_url, expected_email, assistant_token, assistant_endpoint }) {
+    return this.startEnvironment({ environment_id, session: validateSession(session), proxy_url, expected_email, assistant_token, assistant_endpoint });
+  }
+
+  async startBlank({ environment_id, proxy_url }) {
+    if (!proxy_url) throw new Error('请选择一个已保存的代理');
+    return this.startEnvironment({ environment_id, proxy_url, manual: true, session: null });
+  }
+
+  async startEnvironment({ environment_id: id, session, proxy_url: proxyURL = '', expected_email: expectedEmail, assistant_token: assistantToken, assistant_endpoint: assistantEndpoint, manual = false }) {
     if (this.closed) throw new Error('此站点的浏览器服务已停止');
     if (typeof id !== 'string' || id.length < 1 || id.length > 300) throw new Error('浏览器环境标识无效');
-    const session = validateSession(raw);
     const proxy = parseProxy(proxyURL);
     if (this.fingerprintBusy.has(id)) throw new Error('账号指纹正在更新，请稍后重试');
     if (this.environments.has(id)) throw new Error('该环境已经打开，请关闭后再更新 Session 或代理');
     if (this.environments.size >= 10) throw new Error('最多同时打开 10 个浏览器环境');
-    const environment = { id, state: 'starting', apiStatus: null, message: '正在启动浏览器', session, expectedEmail, pages: new Map(), controller: new AbortController() };
+    const environment = { id, state: 'starting', apiStatus: null, message: '正在启动浏览器', session, manual, expectedEmail, pages: new Map(), controller: new AbortController() };
     this.environments.set(id, environment);
     try {
       const profile = profileDirectory(this.directory, id);
@@ -112,7 +120,7 @@ export class SessionBrowser extends EventEmitter {
       const fingerprint = await readFingerprint(profile) || await writeFingerprint(profile);
       this.fingerprints.set(id, fingerprint);
       const fingerprintExtension = await prepareFingerprintExtension(profile, fingerprint);
-      await configureProfile(profile, expectedEmail || session.user?.email);
+      await configureProfile(profile, manual ? 'AiTok 手动登录' : expectedEmail || session.user?.email);
       if (this.closed) throw new Error('此站点的浏览器服务已停止');
       if (proxy) environment.proxy = await createProxyBridge(proxy);
       if (this.closed) throw new Error('此站点的浏览器服务已停止');
@@ -145,7 +153,7 @@ export class SessionBrowser extends EventEmitter {
       environment.fingerprintRuntime = new FingerprintRuntime(cdp, fingerprint, fingerprintExtension);
       await environment.fingerprintRuntime.start();
       if (typeof assistantToken === 'string' && assistantToken.length <= 2048 && assistantEndpoint) environment.assistant = new BrowserAssistant(environment, assistantEndpoint, assistantToken);
-      environment.hasLoginCookie = await restoreLoginCookies(cdp, session);
+      if (!manual) environment.hasLoginCookie = await restoreLoginCookies(cdp, session);
       // Cookie 在浏览器级恢复；指纹运行时只在新目标初始化时短暂暂停并保证恢复。
       // 复用 Chromium 启动时的空白标签，避免每次打开都额外留下 about:blank。
       const { targetInfos } = await cdp.send('Target.getTargets');
@@ -155,6 +163,11 @@ export class SessionBrowser extends EventEmitter {
       environment.pages.set(targetId, pageSession);
       environment.pageTimer = setInterval(() => this.syncPages(environment), 2000);
       environment.pageTimer.unref();
+      if (manual) {
+        environment.state = 'opened';
+        environment.message = '已使用所选代理打开空白浏览器，可手动访问 ChatGPT 登录。';
+        return this.status(id);
+      }
       environment.state = 'checking_ip';
       environment.message = '浏览器已打开，正在通过 ipify 核对出口 IP。';
       // 先返回窗口状态，让页面立即提供关闭按钮；IP 检查完成前不打开 ChatGPT。
@@ -170,7 +183,7 @@ export class SessionBrowser extends EventEmitter {
   }
 
   async syncPages(environment) {
-    if (!environment.session || environment.syncingPages || environment.state === 'closing') return;
+    if ((!environment.session && !environment.manual) || environment.cleaned || environment.syncingPages || environment.state === 'closing') return;
     environment.syncingPages = true;
     try {
       const { targetInfos } = await environment.cdp.send('Target.getTargets');

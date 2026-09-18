@@ -32,7 +32,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   const user = { id: 3, username: 'admin', role: 'super_admin' };
   const account = { id: 1, user_id: 1, label: '工作账号', email: 'chat@example.com', has_session: true, renewal_enabled: true, payment_card_id: null };
   const errors = [], imported = [], launches = [], requests = [];
-  const localLaunches = [], localRequests = [];
+  const localLaunches = [], localRequests = [], blankLaunches = [];
+  let notesFail = false, blankFail = false;
   let fingerprintResets = 0;
   let localFingerprint = null;
   let localState = 'closed', exportCount = 0, exportExpired = false;
@@ -82,7 +83,11 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       if (['http://127.0.0.1:15684', 'http://127.0.0.1:15685'].includes(url.origin)) {
         localRequests.push(request);
         if (url.pathname === '/activity-export') data = {device_id:'test-device',events:[],next_cursor:0};
-        else if (url.pathname === '/health') data = { status: 'ok', version: 2, fingerprint: 'native-noise-v1' };
+        else if (url.pathname === '/health') data = { status: 'ok', version: 2, fingerprint: 'native-noise-v1', blank_browser: true };
+        else if (url.pathname === '/blank-browsers' && request.method === 'POST') {
+          if (blankFail) { responseCode = 503; data = { error: '模拟空白浏览器启动失败' }; }
+          else { blankLaunches.push(JSON.parse(request.postData)); data = { state: 'opened', environment_id: 'blank-test' }; }
+        }
         else if (url.pathname.endsWith('/fingerprint')) { if (request.method === 'POST') fingerprintResets++; localFingerprint = { id: 'test-fingerprint', generation: 2, mode: 'native-noise-v1', created_at: '2026-09-17T00:30:00Z' }; data = { state: 'closed', fingerprint: localFingerprint, message: '已重新生成账号指纹，下次打开生效' }; }
         else if (url.pathname === '/proxies/parse') data = { items: [{ line: 1, proxy: { host: '203.0.113.10', port: 1080, username: 'proxy-user', password: 'proxy-secret', name: 'Imported' } }] };
         else if (url.pathname === '/proxy-history') {
@@ -174,6 +179,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         if (request.method === 'PATCH') groups[0].name = input.name;
         if (request.method === 'DELETE') { groups = []; account.group_id = null; }
         data = request.method === 'POST' ? { group: groups.at(-1) } : { groups };
+      } else if (url.pathname === '/api/accounts/1/notes' && request.method === 'PATCH') {
+        if (notesFail) { responseCode = 500; data = { error: '模拟备注保存失败' }; }
+        else { account.notes = JSON.parse(request.postData).notes; data = { id: account.id, notes: account.notes }; }
       } else if (url.pathname === '/api/accounts/1/group') {
         if (request.method === 'PATCH') account.group_id = JSON.parse(request.postData).group_id;
         groups.forEach(group => { group.account_count = group.id === account.group_id ? 1 : 0; });
@@ -352,6 +360,29 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   };
   await wait('document.body.innerText.includes("工作账号")');
   await wait('location.pathname === "/admin/accounts"');
+  const noteText = '账号使用记录\n' + '多行长文本内容'.repeat(200) + '\n<img src=x onerror="window.notesExecuted=true">';
+  await click('添加备注');
+  await fill('dialog textarea[name=notes]', noteText, 'HTMLTextAreaElement');
+  notesFail = true;
+  await click('保存备注');
+  await wait('document.querySelector("dialog").innerText.includes("模拟备注保存失败")');
+  assert.equal(await evaluate('document.querySelector("dialog textarea[name=notes]").value'), noteText);
+  notesFail = false;
+  await click('保存备注');
+  await wait('!document.querySelector("dialog")');
+  assert.equal(account.notes, noteText);
+  assert.equal(await evaluate('document.querySelector(".account-notes-preview").textContent'), noteText);
+  assert.equal(await evaluate('Boolean(window.notesExecuted)'), false);
+  await click('编辑备注');
+  assert.equal(await evaluate('document.querySelector("dialog textarea[name=notes]").value'), noteText);
+  await fill('dialog textarea[name=notes]', '', 'HTMLTextAreaElement');
+  await click('保存备注');
+  await wait('!document.querySelector("dialog")');
+  assert.equal(account.notes, '');
+  await click('打开空白浏览器');
+  await wait('document.querySelector("dialog").innerText.includes("暂无代理")');
+  assert.equal(await evaluate('document.querySelector("dialog button.primary").disabled'), true);
+  await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   const statusRequestCount = () => localRequests.filter(request => request.method === 'GET' && /^\/browsers\/[^/]+$/.test(new URL(request.url).pathname)).length;
   await delay(2200);
   assert.equal(statusRequestCount(), 0, '进入账号页不能自动逐账号查询浏览器状态');
@@ -992,6 +1023,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"),a=>a.getAttribute("href"))'),['/admin/accounts']);
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','上次登录（UTC+8）']);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-owner-bind"))'), false, '普通用户不能分配账号');
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-notes"))'), false);
+  assert.equal(await evaluate('Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="打开空白浏览器")'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-actions,.account-toolbar,.stats"))'),false);
   assert.equal(await evaluate('Boolean(document.querySelector(".user-menu a[href$=wallet]"))'),false);
   const requestMark = requests.length, localMark = localRequests.length;
@@ -1252,6 +1285,15 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector(".proxy-row")?.innerText.includes("美国代理已编辑")');
   await navigateAdmin('accounts');
   await wait('Boolean(document.querySelector(".account-proxy button:not(:disabled)"))');
+  await click('打开空白浏览器');
+  await select('空白浏览器代理', '美国代理已编辑 · 203.0.113.10:1080');
+  blankFail = true;
+  await click('打开浏览器');
+  await wait('document.querySelector("dialog").innerText.includes("模拟空白浏览器启动失败")');
+  blankFail = false;
+  await click('打开浏览器');
+  await wait('!document.querySelector("dialog")');
+  assert.deepEqual(blankLaunches, [{ proxy_id: 'proxy-1' }]);
   await select('账号 chat@example.com 的 SOCKS5', '美国代理已编辑 · 203.0.113.10', '美国');
   await wait('document.body.innerText.includes("代理选择已保存")');
   assert.equal(Object.values(bindings)[0], 'proxy-1');
