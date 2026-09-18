@@ -132,7 +132,7 @@ func TestAdminRequestAuditDeniedSensitiveAndBusiness(t *testing.T) {
 	if count != 2 {
 		t.Fatal("background GET generated noise")
 	}
-	call("GET", "/api/bank-cards/1", "/admin/bank-cards", "", 404)
+	call("GET", "/api/bank-cards/1", "/admin/bank-cards", "", 403)
 	db.QueryRow(`SELECT count(*) FROM operation_events`).Scan(&count)
 	if count != 3 {
 		t.Fatal("sensitive read denial missing")

@@ -1,0 +1,24 @@
+root = "."
+tmp_dir = "/tmp/aitok-air"
+
+[build]
+  cmd = "go build -p 2 -o /tmp/aitok-air/server ./cmd/server"
+  bin = "/tmp/aitok-air/server"
+  delay = 500
+  include_ext = ["go"]
+  include_file = ["go.mod", "go.sum"]
+  exclude_dir = ["tmp", "data", "migrations"]
+  exclude_regex = ["_test.go"]
+  # Docker Desktop 的挂载目录使用轮询，避免漏掉宿主机文件变更。
+  poll = true
+  poll_interval = 500
+  send_interrupt = true
+  kill_delay = "6s"
+  stop_on_error = true
+
+[log]
+  time = true
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true

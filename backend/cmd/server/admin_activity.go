@@ -16,7 +16,7 @@ import (
 var adminPagePattern = regexp.MustCompile(`^/admin/(accounts|proxies|addresses|bank-cards|users|wallet|orders|packages|notices|audit|proxy-activity|payment-exceptions)(/[0-9]+)?$`)
 var auditControls = map[string]string{
 	"browser_fingerprint": "重新生成浏览器指纹",
-	"button": "点击按钮", "link": "打开链接", "form": "提交表单", "select": "选择选项", "toggle": "切换选项",
+	"button":              "点击按钮", "link": "打开链接", "form": "提交表单", "select": "选择选项", "toggle": "切换选项",
 	"add": "新增", "edit": "编辑", "delete": "删除", "confirm": "确认操作", "cancel": "取消操作", "save": "保存",
 	"search": "搜索", "refresh": "刷新", "export": "导出", "import": "导入", "open_browser": "打开浏览器", "close_browser": "关闭浏览器",
 	"view": "查看详情", "copy": "复制", "theme": "切换主题", "paginate": "翻页", "test": "测试代理", "get_ip": "获取出口 IP",
@@ -157,6 +157,7 @@ func (s *Server) auditFilter(next http.Handler) http.Handler {
 // 未知路径可能夹带凭据，只保留已知资源、数字 ID 和固定动作段。
 func safeAuditResource(path string) string {
 	known := map[string]bool{"api": true, "accounts": true, "account-groups": true, "addresses": true, "bank-cards": true, "card-operations": true, "orders": true, "packages": true, "users": true, "wallet": true, "topups": true, "audit": true, "proxy-activity": true, "payment-exceptions": true, "notices": true, "order-operators": true, "me": true, "logout": true, "export": true, "import": true, "ledger": true, "access": true, "role": true, "group": true, "login": true, "subscription": true, "browser": true, "browser-session": true, "session": true, "renewal-date": true, "renew": true, "sync": true, "refund": true, "collection-quote": true, "record": true}
+	known["billing-address"] = true
 	known["payment-card"], known["payment-cards"] = true, true
 	known["owner"] = true
 	parts := strings.Split(strings.Trim(path, "/"), "/")

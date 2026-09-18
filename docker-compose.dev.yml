@@ -1,16 +1,54 @@
-# 与 docker-compose.yml 合并使用；复用现有前后端镜像与健康检查。
+# 与 docker-compose.yml 合并使用；继承业务配置，使用独立的热更新开发镜像。
 services:
   backend:
     extends:
       file: docker-compose.deploy.yml
       service: backend
     image: aitok-backend:dev
+    build:
+      dockerfile: backend/Dockerfile.dev
+    init: true
+    stop_grace_period: 10s
+    volumes:
+      - ./backend:/workspace/backend:ro
+      - backend_go_modules:/go/pkg/mod
+      - backend_go_cache:/root/.cache/go-build
+    healthcheck:
+      interval: 3s
+      start_period: 180s
+      retries: 20
 
   frontend:
     extends:
       file: docker-compose.deploy.yml
       service: frontend
     image: aitok-frontend:dev
+    build:
+      dockerfile: frontend/Dockerfile.dev
+    init: true
+    environment:
+      VITE_API_URL: /api
+      DEV_API_PROXY_TARGET: http://backend:15681
+      DEV_WATCH_POLL: "true"
+    volumes:
+      - ./frontend:/workspace/frontend
+      - ./shared:/workspace/shared:ro
+      - frontend_node_modules:/workspace/frontend/node_modules
+      - frontend_npm_cache:/root/.npm
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 3s
+      start_period: 120s
+      retries: 20
+
+# 迁移后可切换到新卷，旧卷保留供回退。
+volumes:
+  backend_go_modules:
+  backend_go_cache:
+  frontend_node_modules:
+  frontend_npm_cache:
+  getgpt_pgdata:
+    name: ${DEV_DB_VOLUME_NAME:-${COMPOSE_PROJECT_NAME}_getgpt_pgdata}
 
 # 显式指定子网，避免宿主机默认地址池耗尽时无法创建开发网络。
 networks:

@@ -18,6 +18,8 @@ type cardPosting struct {
 	OrderID, AccountID, ReferenceID                                                     *int64
 	AccountEmail, AccountLabel, PeriodStart, PeriodEnd, Currency, Reference, Notes, Key string
 	OriginalAmount                                                                      int64
+	PricingSnapshot                                                                     *cardLedgerPricing
+	AllowHistoricalOverdraft                                                            bool
 }
 
 // 所有新增资金操作共用记账入口；调用方事务保证订单、余额、流水和审计一起提交。
@@ -37,7 +39,7 @@ func postCardEntry(r *http.Request, tx *sql.Tx, actor, cardID int64, p cardPosti
 		if status != "active" || year < now.Year() || (year == now.Year() && month < int(now.Month())) {
 			return operationConflict("付款卡已停用或过期，请检查银行卡状态和有效期")
 		}
-		if balance+p.Amount < reserved {
+		if balance+p.Amount < reserved && !(p.AllowHistoricalOverdraft && p.Kind == "subscription" && p.OrderID == nil) {
 			return operationConflict("付款卡可用 USD 余额不足，请核对卡片余额及预授权占用金额")
 		}
 		if limit > 0 {
@@ -51,7 +53,7 @@ func postCardEntry(r *http.Request, tx *sql.Tx, actor, cardID int64, p cardPosti
 			}
 		}
 	}
-	if balance+p.Amount < 0 || balance+p.Amount > maxCardMoneyMinor {
+	if balance+p.Amount < -maxCardMoneyMinor || balance+p.Amount > maxCardMoneyMinor {
 		return fmt.Errorf("balance range")
 	}
 	if p.ReferenceID != nil {
@@ -103,7 +105,14 @@ func postCardEntry(r *http.Request, tx *sql.Tx, actor, cardID int64, p cardPosti
 	if p.Currency == "" {
 		p.Currency = "USD"
 	}
-	_, err = tx.ExecContext(r.Context(), `INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,balance_after_usd_minor,account_id,account_label,account_email,notes,order_id,reference_id,external_reference,period_start,period_end,currency,original_amount_minor) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, cardID, actor, p.Key, p.Kind, p.Amount, balance+p.Amount, p.AccountID, p.AccountLabel, p.AccountEmail, p.Notes, p.OrderID, p.ReferenceID, p.Reference, start, end, p.Currency, original)
+	var pricing any
+	if p.PricingSnapshot != nil {
+		pricing, err = json.Marshal(p.PricingSnapshot)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(r.Context(), `INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,balance_after_usd_minor,account_id,account_label,account_email,notes,order_id,reference_id,external_reference,period_start,period_end,currency,original_amount_minor,pricing_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`, cardID, actor, p.Key, p.Kind, p.Amount, balance+p.Amount, p.AccountID, p.AccountLabel, p.AccountEmail, p.Notes, p.OrderID, p.ReferenceID, p.Reference, start, end, p.Currency, original, pricing)
 	if err != nil {
 		return err
 	}

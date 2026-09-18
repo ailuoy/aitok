@@ -171,7 +171,13 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodDelete && id > 0 {
-		result, err := s.db.ExecContext(r.Context(), `UPDATE addresses SET updated_at=NOW(),deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
+		tx, err := s.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			addressError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		result, err := tx.ExecContext(r.Context(), `UPDATE addresses SET updated_at=NOW(),deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin)
 		if err != nil {
 			addressError(w, err)
 			return
@@ -183,6 +189,40 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 		}
 		if count == 0 {
 			addressError(w, sql.ErrNoRows)
+			return
+		}
+		rows, err := tx.QueryContext(r.Context(), `UPDATE chatgpt_accounts SET billing_address_id=NULL,updated_at=NOW() WHERE billing_address_id=$1 AND deleted_at IS NULL RETURNING id`, id)
+		if err != nil {
+			addressError(w, err)
+			return
+		}
+		var accounts []int64
+		for rows.Next() {
+			var account int64
+			if err = rows.Scan(&account); err != nil {
+				rows.Close()
+				addressError(w, err)
+				return
+			}
+			accounts = append(accounts, account)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			addressError(w, err)
+			return
+		}
+		for _, account := range accounts {
+			if err = recordEvent(r.Context(), tx, user, account, "account", "billing_address", eventKey(), map[string]any{"billing_address_id": id}, map[string]any{"billing_address_id": nil, "reason": "address_deleted"}); err != nil {
+				addressError(w, err)
+				return
+			}
+		}
+		if err = recordEvent(r.Context(), tx, user, id, "address", "delete", eventKey(), map[string]any{}, map[string]any{"unbound_accounts": len(accounts)}); err == nil {
+			err = tx.Commit()
+		}
+		if err != nil {
+			addressError(w, err)
 			return
 		}
 		w.WriteHeader(204)

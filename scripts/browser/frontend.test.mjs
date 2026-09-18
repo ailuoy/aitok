@@ -48,7 +48,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let bankCards = [];
   let bankUploadTooLarge = false;
   let accountSettingsFail = false;
-  const bankWrites = [];
+  const bankWrites = [], bankPayloads = [];
+  let bankDetailReads = 0;
   const cardLedger = [], ledgerWrites = [];
   let ledgerResponseLost = false;
   const userRows = [{ id: 3, username: 'admin', email: '', role: 'super_admin', created_at: '2026-09-01T00:00:00Z' }, { id: 1, email: 'member@example.com', role: '', created_at: '2026-09-02T00:00:00Z' }];
@@ -197,11 +198,16 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         if (request.method === 'POST') { loginWrites++; account.last_login_at = JSON.parse(request.postData).logged_in_at; }
         data = { last_login_at: account.last_login_at };
       } else if (/^\/api\/bank-cards\/\d+\/ledger$/.test(url.pathname)) {
-        if (request.method === 'POST') {
+        if (request.method === 'GET' && url.searchParams.get('quote') === '1') {
+          const pkg = rechargePackages.find(item => item.id === Number(url.searchParams.get('package_id')));
+          const mode = url.searchParams.get('charge_mode');
+          const minor = mode === 'package' ? pkg.sale_usd_minor : Math.round(Number(url.searchParams.get('charge_amount')) * 100);
+          data = { package: pkg, mode, charge_currency: mode === 'CNY' ? 'CNY' : 'USD', charge_amount_minor: minor, amount_usd_minor: mode === 'CNY' ? Math.round(minor / 7) : minor, exchange_rate: mode === 'CNY' ? { usd_per_unit: '1/7', batch: { id: 1, synced_at: '2026-09-18T01:00:00Z' } } : null };
+        } else if (request.method === 'POST') {
           const input = JSON.parse(request.postData); ledgerWrites.push(input);
           const existing = cardLedger.find(entry => entry.request_key === input.request_key);
           if (!existing) {
-            const amount = Math.round(Number(input.amount_usd) * 100) * (input.kind === 'deposit' ? 1 : -1);
+            const amount = (input.expected_amount_usd_minor || Math.round(Number(input.amount_usd) * 100)) * (input.kind === 'deposit' ? 1 : -1);
             bankCards[0].balance_usd_minor += amount;
             cardLedger.unshift({ id: cardLedger.length + 1, ...input, kind: input.kind === 'deposit' && !cardLedger.length ? 'opening' : input.kind, amount_usd_minor: amount, balance_after_usd_minor: bankCards[0].balance_usd_minor, account_label: input.account_id ? account.label : '', account_email: input.account_id ? account.email : '', original_php_minor: input.account_id ? 891964 : 0, created_at: '2026-09-15T01:00:00Z' });
           }
@@ -217,9 +223,23 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const input = request.postData ? JSON.parse(request.postData) : {};
         if (['POST', 'PATCH', 'DELETE'].includes(request.method)) bankWrites.push(request.method);
         if (request.method === 'POST') bankCards.push({ balance_usd_minor: 0, ...input, id: 1, last4: '4242', brand: 'Visa' });
-        if (request.method === 'PATCH') bankCards[0] = { ...bankCards[0], ...input };
+        if (request.method === 'PATCH') {
+          assert.equal(input.edit_token, 'verified-card-edit');
+          bankPayloads.push(input);
+          bankCards[0] = { ...bankCards[0], ...input };
+        }
         if (request.method === 'DELETE') bankCards = [];
-        data = url.pathname === '/api/bank-cards/1' ? { card: bankCards[0] } : { cards: bankCards.map(({ number, cvc, ...card }) => ({...card, has_cvc:Boolean(cvc), ...(url.searchParams.get('include_numbers')==='1' ? {number} : {})})), platforms: [...new Set(bankCards.map(card => card.platform).filter(Boolean))], total: bankCards.length, page: 1, page_size: 20 };
+        if (request.method === 'GET' && url.pathname === '/api/bank-cards/1') {
+          bankDetailReads++;
+          const code = Object.entries(request.headers).find(([key]) => key.toLowerCase() === 'x-aitok-totp')?.[1];
+          if (code !== '123456') {
+            responseCode = 403;
+            data = { error: '验证码无效或已使用' };
+          } else {
+            const {number, cvc, ...card} = bankCards[0];
+            data = {card: {...card, number: '*'.repeat(number.length - 4) + card.last4, has_cvc:Boolean(cvc)}, edit_token:'verified-card-edit'};
+          }
+        } else data = url.pathname === '/api/bank-cards/1' ? { card: bankCards[0] } : { cards: bankCards.map(({ number, cvc, ...card }) => ({...card, has_cvc:Boolean(cvc)})), platforms: [...new Set(bankCards.map(card => card.platform).filter(Boolean))], total: bankCards.length, page: 1, page_size: 20 };
       } else if (url.pathname.startsWith('/api/addresses')) {
         const input = request.postData ? JSON.parse(request.postData) : {};
         const id = Number(url.pathname.split('/')[3]);
@@ -231,6 +251,14 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const page = Number(url.searchParams.get('page') || 1);
         const pageSize = Number(url.searchParams.get('page_size') || 20);
         data = { addresses: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, page, page_size: pageSize };
+      } else if (url.pathname === '/api/accounts/1/billing-address' && request.method === 'PATCH') {
+        if (accountSettingsFail) { responseCode = 409; data = { error: '模拟地址绑定失败' }; }
+        else {
+          const input = JSON.parse(request.postData);
+          const address = addressRows.find(row => row.id === (input.random ? 2 : input.billing_address_id));
+          data = { billing_address: address ? { ...address, full_name: 'Test User' } : null, billing_address_id: address?.id || null, billing_address_label: address ? [address.address_line1, address.city, address.state, address.postal_code].join(', ') : '' };
+          Object.assign(account, data);
+        }
       } else if (url.pathname === '/api/accounts/payment-cards') {
         data = { cards: bankCards.map(({ id, label, last4, brand }) => ({ id, label, last4, brand })) };
       } else if (request.method === 'PATCH' && (url.pathname === '/api/accounts/1/subscription' || url.pathname === '/api/accounts/1/payment-card')) {
@@ -416,6 +444,35 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await select('账号 chat@example.com 的付款卡', '运营测试卡 · •••• 4242');
   await wait('document.querySelector(".account-payment-card button").innerText.includes("运营测试卡") && !document.querySelector(".account-payment-card button").disabled');
   await evaluate('document.querySelector(".data-table-wrap").scrollLeft = document.querySelector(".data-table-wrap").scrollWidth');
+  await evaluate('document.querySelector(".account-address-button").click()');
+  await wait('document.querySelectorAll(".address-binding-row").length === 10');
+  await fill('input[aria-label="搜索绑定地址"]', 'Gateway');
+  await wait('document.querySelectorAll(".address-binding-row").length === 1');
+  await writeFile(join(directory, 'account-address-binding.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  await click('绑定此地址');
+  await wait('!document.querySelector("dialog") && document.querySelector(".account-address-button").innerText.includes("Gateway")');
+  assert.equal(account.billing_address_id, 1);
+  assert.equal(await evaluate('document.querySelector(".account-address-summary strong").innerText'), '4111 Gateway [Road]');
+  assert.equal(await evaluate('document.querySelector(".account-address-summary>span").innerText'), 'Portland, OR, 97201, US');
+  assert.equal(await evaluate('document.querySelector(".account-address-summary small").innerText'), 'Test User');
+  await evaluate('document.querySelector(".account-address-button").scrollIntoView({block:"center",inline:"center"})');
+  await writeFile(join(directory, 'account-address-summary.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-address-button")?.innerText.includes("Gateway")');
+  await evaluate('document.querySelector(".account-address-button").click()');
+  accountSettingsFail = true;
+  await click('随机绑定');
+  await wait('document.querySelector("dialog .error")?.innerText.includes("模拟地址绑定失败")');
+  assert.equal(account.billing_address_id, 1);
+  accountSettingsFail = false;
+  await click('随机绑定');
+  await wait('!document.querySelector("dialog") && document.querySelector(".account-address-button").innerText.includes("2 Test Street")');
+  assert.equal(account.billing_address_id, 2);
+  await evaluate('document.querySelector(".account-address-button").click()');
+  await click('解除绑定');
+  await wait('!document.querySelector("dialog") && document.querySelector(".account-address-button").innerText === "绑定地址"');
+  assert.equal(account.billing_address_id, null);
   await writeFile(join(directory, 'account-settings.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
   await navigateAdmin('orders');
   await click('录入充值订单');
@@ -921,7 +978,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await writeFile(join(directory,'two-factor-setup.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
   await fill('.two-factor input[inputmode=numeric]', '123456');
   await click('确认绑定');
-  await wait('document.querySelector(".two-factor")?.innerText.includes("两步验证已启用")');
+  await wait('document.querySelector(".two-factor")?.innerText.includes("验证器已绑定")');
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   assert.ok(!requests.some(url => url.includes('/browser-session')));
   assert.equal(localLaunches.length, 0);
@@ -992,7 +1049,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   bankUploadTooLarge = false;
   await click('保存银行卡');
   await wait('!document.querySelector("dialog") && Boolean(document.querySelector(".bank-card-row"))');
-  assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("4242424242424242")'), true);
+  assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("4242424242424242")'), false);
+  assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("**** **** **** 4242")'), true);
+  assert.equal(requests.some(url => url.includes('include_numbers')), false, '列表不得请求完整卡号');
   assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("***")'), true);
   assert.equal(await evaluate('document.querySelector(".bank-card-row").innerText.includes("0042")'), false);
   assert.equal(await evaluate('document.querySelector(".bank-card-row").tagName'), 'TR');
@@ -1012,13 +1071,38 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await evaluate('window.scrollTo(0,0)');
   await writeFile(join(directory, 'bank-cards-table.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
+  twoFactorEnabled = true;
   await click('编辑');
+  await wait('Boolean(document.querySelector("dialog input[aria-label=验证器验证码]"))');
+  assert.equal(bankDetailReads, 0, '验证前不得请求卡详情');
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog input[name=number]"))'), false);
+  await fill('dialog input[aria-label=验证器验证码]', '000000');
+  await click('验证并编辑银行卡');
+  await wait('document.querySelector("dialog .error")?.textContent.includes("验证码无效")');
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog input[name=number]"))'), false);
+  await fill('dialog input[aria-label=验证器验证码]', '123456');
+  await click('验证并编辑银行卡');
   await wait('Boolean(document.querySelector("dialog input[name=number]"))');
-  assert.equal(await evaluate('document.querySelector("dialog input[name=number]").value'), '4242424242424242');
+  assert.equal(await evaluate('document.querySelector("dialog input[name=number]").value'), '************4242');
+  assert.equal(await evaluate('document.querySelector("dialog input[name=cvc]").value'), '');
+  assert.equal(await evaluate('document.querySelector("dialog input[name=cvc]").type'), 'password');
+  await fill('dialog input[name=label]', '工作卡仅改名称');
+  await click('保存银行卡');
+  await wait('!document.querySelector("dialog")');
+  assert.equal(bankPayloads[0].number, undefined, '未修改卡号不得提交掩码');
+  assert.equal(bankPayloads[0].cvc, undefined, '留空安全码不得覆盖原值');
+  assert.equal(bankCards[0].number, '4242424242424242');
+  assert.equal(bankCards[0].cvc, '0042');
+  await click('编辑');
+  await wait('Boolean(document.querySelector("dialog input[aria-label=验证器验证码]"))');
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog input[name=number]"))'), false, '重新编辑需重新验证');
+  await fill('dialog input[aria-label=验证器验证码]', '123456');
+  await click('验证并编辑银行卡');
+  await wait('Boolean(document.querySelector("dialog input[name=number]"))');
   assert.equal(await evaluate('document.querySelector("dialog textarea[name=notes]").value'), '月度订阅\n仅工作用途');
   await select('卡平台', '未设置');
   await select('卡平台', '自定义卡平台', '自定义', true);
-  assert.equal(await evaluate('document.querySelector("dialog input[name=cvc]").value'),'0042');
+  assert.equal(await evaluate('document.querySelector("dialog input[name=cvc]").value'),'');
   assert.equal(await evaluate('document.querySelector(".image-upload img").src'),bankCards[0].wallet_qr_image);
   await click('移除截图'); await click('取消');
   assert.ok(await evaluate('Boolean(document.querySelector(".image-upload img"))'));
@@ -1038,7 +1122,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(bankWrites.filter(method => method === 'DELETE').length, 0);
   await click('删除'); await click('确认删除');
   await wait('!document.querySelector("dialog") && !document.querySelector(".bank-card-row")');
-  assert.deepEqual(bankWrites, ['POST', 'PATCH', 'DELETE']);
+  assert.deepEqual(bankWrites, ['POST', 'PATCH', 'PATCH', 'DELETE']);
   bankCards = [{ id: 2, label: '对账测试卡', last4: '4242', brand: 'Visa', cardholder: 'Test User', exp_month: 12, exp_year: 2030, balance_usd_minor: 0 }];
   await click('刷新');
   await wait('document.querySelector(".bank-card-row")?.innerText.includes("对账测试卡")');
@@ -1058,27 +1142,56 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector(".card-ledger-table")?.innerText.includes("初始余额")');
   assert.equal(ledgerWrites[0].request_key, ledgerWrites[1].request_key);
   assert.equal(cardLedger.length, 1);
+  rechargePackages = [{ id: 1, name: '历史补录套餐', enabled: true, months: 1, currency: 'PHP', original_amount_minor: 891964, sale_usd_minor: 14219 }];
   await click('记录开通扣款');
   await fill('input[name=reference]', 'smoke-subscription');
   await fill('input[name=period_start]', '2030-01-01');
   await fill('input[name=period_end]', '2030-02-01');
-  await fill('input[name=currency]', 'PHP');
-  await fill('input[name=original_amount]', '8919.64');
+  await wait('!document.querySelector("button[aria-label=补录套餐]")?.disabled');
+  await select('补录套餐', '历史补录套餐 · PHP 8919.64 / 1个月');
+  assert.equal(await evaluate('document.querySelector("input[name=original_amount]")'), null);
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="套餐扣款 USD"]').value`), '142.19');
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="套餐扣款 USD"]').readOnly`), true);
   await select('扣款关联账号', `${account.label} · ${account.email}`);
-  await fill('input[aria-label="记账金额 USD"]', '150.25');
-  await fill('input[aria-label="记账备注"]', 'official receipt');
   await click('核对并记账');
+  await wait('Boolean(document.querySelector(".card-ledger-confirm"))');
+  assert.ok(await evaluate('document.querySelector(".card-ledger-confirm").innerText.includes("142.19")'));
+  await click('返回修改');
+  await select('实际扣款方式', '输入人民币金额');
+  await fill('input[aria-label="记账金额 CNY"]', '1051.75');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=记账备注]").required'), false);
+  await click('核对并记账');
+  await wait('Boolean(document.querySelector(".card-ledger-confirm"))');
   assert.ok(await evaluate('document.querySelector(".card-ledger-confirm").innerText.includes("8919.64")'));
+  assert.ok(await evaluate('document.querySelector(".card-ledger-confirm").innerText.includes("1051.75")'));
   await click('确认记账');
   await wait('document.querySelector(".card-ledger-table")?.innerText.includes("349.75")');
   assert.equal(bankCards[0].balance_usd_minor, 34975);
   assert.equal(ledgerWrites.at(-1).account_id, 1);
+  assert.equal(ledgerWrites.at(-1).package_id, 1);
+  assert.equal(ledgerWrites.at(-1).charge_mode, 'CNY');
+  assert.equal(ledgerWrites.at(-1).notes, '');
+  assert.equal(ledgerWrites.at(-1).expected_amount_usd_minor, 15025);
+  rechargePackages[0].sale_usd_minor = 40000;
+  await click('记录开通扣款');
+  await wait('!document.querySelector("button[aria-label=补录套餐]")?.disabled');
+  await select('补录套餐', '历史补录套餐 · PHP 8919.64 / 1个月');
+  await select('扣款关联账号', `${account.label} · ${account.email}`);
+  await fill('input[name=reference]', 'smoke-overdraft');
+  await fill('input[name=period_start]', '2030-02-01');
+  await fill('input[name=period_end]', '2030-03-01');
+  await click('核对并记账');
+  await wait('Boolean(document.querySelector(".card-ledger-confirm"))');
+  assert.ok(await evaluate('document.querySelector(".card-ledger-confirm").innerText.includes("-$50.25")'));
+  assert.ok(await evaluate('document.querySelector(".card-ledger-confirm").innerText.includes("历史补录允许负余额")'));
+  await click('确认记账');
+  await wait('document.querySelector(".card-ledger-table")?.innerText.includes("-$50.25")');
   assert.equal(await evaluate('document.querySelector("dialog").scrollWidth <= document.querySelector("dialog").clientWidth'), true);
   await writeFile(join(directory, 'card-ledger-mobile.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
   await writeFile(join(directory, 'card-ledger.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
-  await wait('!document.querySelector("dialog") && document.querySelector(".bank-card-row").innerText.includes("349.75")');
+  await wait('!document.querySelector("dialog") && document.querySelector(".bank-card-row").innerText.includes("-$50.25")');
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
   await navigateAdmin('proxies');
   await wait('Boolean(document.querySelector(".proxy-manager"))');
@@ -1165,6 +1278,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
   assert.equal(await evaluate('document.querySelector(".browser-assistant-option input").checked'), true);
   assert.equal(await evaluate('document.querySelector(".browser-assistant-option input").disabled'), false);
+  assert.equal(await evaluate('document.querySelector(".browser-fingerprint").open'), false);
+  await writeFile(join(directory, 'local-compact-mobile.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
+  await writeFile(join(directory, 'local-compact-desktop.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  assert.ok(await evaluate('document.querySelector("dialog").getBoundingClientRect().height < 600'));
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
+
   await evaluate('document.querySelector(".launcher-settings").open = true');
   assert.equal(await evaluate('document.querySelector("input[aria-label=本机连接端口]").value'), '15684');
   await fill('input[aria-label=本机连接端口]', '15685');
@@ -1173,6 +1293,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('保存端口');
   await wait('localStorage.getItem("aitok.launcher.port") === "15685"');
   await evaluate('window.__originalConfirm = window.confirm; window.confirm = () => false');
+  assert.equal(await evaluate('document.querySelector(".browser-fingerprint").open'), false);
+  await evaluate('document.querySelector(".browser-fingerprint summary").click()');
   await click('重新随机生成指纹');
   assert.equal(fingerprintResets, 0);
   await evaluate('window.confirm = () => true');

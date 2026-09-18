@@ -171,12 +171,8 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			cardError(w, err)
 			return
 		}
-		includeNumbers := r.URL.Query().Get("include_numbers") == "1" && r.URL.Query().Get("archived") != "1" && s.permitted(r.Context(), user, "card_numbers")
-		columns := bankCardColumns
-		if includeNumbers {
-			columns += ",number_ciphertext"
-		}
-		rows, err := s.db.QueryContext(r.Context(), `SELECT `+columns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $4`, user, query, admin, (page-1)*size, size)
+		// 列表仅返回尾号；旧客户端的 include_numbers 参数也不能读取完整卡号。
+		rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $4`, user, query, admin, (page-1)*size, size)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -184,16 +180,7 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		cards := []BankCard{}
 		for rows.Next() {
-			var c BankCard
-			var encrypted string
-			dest := c.scanDest()
-			if includeNumbers {
-				dest = c.scanDest(&encrypted)
-			}
-			err := rows.Scan(dest...)
-			if err == nil && includeNumbers {
-				c.Number, err = decryptSession(encrypted)
-			}
+			c, err := scanBankCard(rows)
 			if err != nil {
 				cardError(w, err)
 				return
@@ -229,18 +216,33 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "GET" && id > 0 {
-		c, err := s.readCard(r, user, id, admin)
+		if !s.consumeTOTP(w, r, user, r.Header.Get("X-Aitok-TOTP"), false) {
+			return
+		}
+		var c BankCard
+		var encrypted string
+		err := s.db.QueryRowContext(r.Context(), `SELECT `+bankCardColumns+`,number_ciphertext FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $3) AND id=$2`, user, id, admin).Scan(c.scanDest(&encrypted)...)
+		if err == nil {
+			c.Number, err = decryptSession(encrypted)
+		}
 		if err != nil {
 			cardError(w, err)
 			return
 		}
-		reply(w, map[string]any{"card": c}, 200)
+		c.Number = strings.Repeat("*", max(0, len(c.Number)-4)) + c.Last4
+		editToken, err := s.bankCardEditToken(r, user, id, time.Now().Add(15*time.Minute))
+		if err != nil {
+			cardError(w, err)
+			return
+		}
+		reply(w, map[string]any{"card": c, "edit_token": editToken}, 200)
 		return
 	}
 	if (r.Method == "POST" && id == 0) || (r.Method == "PATCH" && id > 0) {
 		r.Body = http.MaxBytesReader(w, r.Body, 3<<20)
 		var in struct {
 			BankCard
+			EditToken     string  `json:"edit_token"`
 			CVC           *string `json:"cvc"`
 			WalletQR      *string `json:"wallet_qr_image"`
 			WalletAddress *string `json:"wallet_address"`
@@ -249,7 +251,32 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "银行卡数据格式无效或图片超过限制"}, 400)
 			return
 		}
+		if id > 0 && !s.validBankCardEditToken(r, user, id, in.EditToken) {
+			reply(w, map[string]string{"error": "编辑验证已失效，请关闭弹窗并重新通过两步验证"}, 403)
+			return
+		}
+		owner := user
+		tx, err := s.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			cardError(w, err)
+			return
+		}
+		defer tx.Rollback()
+		var originalEncrypted, originalFingerprint string
+		if id > 0 {
+			if err = tx.QueryRowContext(r.Context(), `SELECT user_id,number_ciphertext,number_fingerprint FROM bank_cards WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3) FOR UPDATE`, id, user, admin).Scan(&owner, &originalEncrypted, &originalFingerprint); err != nil {
+				cardError(w, err)
+				return
+			}
+		}
 		c := in.BankCard
+		if id > 0 && strings.TrimSpace(c.Number) == "" {
+			c.Number, err = decryptSession(originalEncrypted)
+			if err != nil {
+				cardError(w, err)
+				return
+			}
+		}
 		if in.WalletAddress != nil {
 			c.WalletAddress = *in.WalletAddress
 		}
@@ -267,7 +294,6 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 				reply(w, map[string]string{"error": "CVC 安全码须为 3 或 4 位数字"}, 400)
 				return
 			}
-			encryptedCVC = ""
 			if value != "" {
 				secret, e := encryptSession(value)
 				if e != nil {
@@ -286,27 +312,17 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			}
 			walletQR = *in.WalletQR
 		}
-		encrypted, err := encryptSession(c.Number)
-		if err != nil {
-			reply(w, map[string]string{"error": "银行卡加密未配置"}, 503)
-			return
-		}
-		owner := user
-		tx, err := s.db.BeginTx(r.Context(), nil)
-		if err != nil {
-			cardError(w, err)
-			return
-		}
-		defer tx.Rollback()
-		if id > 0 {
-			if err = tx.QueryRowContext(r.Context(), `SELECT user_id FROM bank_cards WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3) FOR UPDATE`, id, user, admin).Scan(&owner); err != nil {
-				cardError(w, err)
-				return
-			}
-		}
 		mac := hmac.New(sha256.New, s.secret)
 		mac.Write([]byte("bank-card:" + strconv.FormatInt(owner, 10) + ":" + c.Number))
 		fingerprint := hex.EncodeToString(mac.Sum(nil))
+		encrypted := originalEncrypted
+		if id == 0 || fingerprint != originalFingerprint {
+			encrypted, err = encryptSession(c.Number)
+			if err != nil {
+				reply(w, map[string]string{"error": "银行卡加密未配置"}, 503)
+				return
+			}
+		}
 		args := []any{c.Label, c.Cardholder, encrypted, fingerprint, c.Last4, c.Brand, c.ExpMonth, c.ExpYear, owner, c.Platform, c.Notes, walletAddress, encryptedCVC, walletQR}
 		query := `INSERT INTO bank_cards(label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,user_id,platform,notes,wallet_address,cvc_ciphertext,wallet_qr_image) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($12,''),COALESCE($13,''),COALESCE($14,'')) RETURNING ` + bankCardColumns
 		status := 201

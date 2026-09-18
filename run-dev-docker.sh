@@ -35,7 +35,8 @@ usage() {
   help               显示帮助
 
 配置依次读取 .env、backend/.env、.env.docker、backend/.env.<环境>。
-Docker 使用独立的 aitok-dev 项目和数据库卷；代码修改后执行 up 重新构建。
+Docker 使用独立的 aitok-dev 项目和数据库卷；前端 Vite 热更新，后端 Air 自动重编译。
+修改依赖或环境配置后执行 app-restart；修改 Dockerfile 后执行 up。
 启动或重启时自动停止占用目标端口的其他容器或本机进程。
 EOF
 }
@@ -94,8 +95,9 @@ configure_environment() {
   export DB_PORT="${DB_PORT:-15682}"
   export APP_BASE_URL="${APP_BASE_URL:-http://localhost:$FRONTEND_PORT}"
   PROJECT_NAME="${DEV_PROJECT_NAME:-aitok-dev}"
+  export DEV_DB_VOLUME_NAME="${DEV_DB_VOLUME_NAME:-${PROJECT_NAME}_getgpt_pgdata}"
   export DB_CONTAINER_NAME="${DB_CONTAINER_NAME:-${PROJECT_NAME}-postgres}"
-  WAIT_TIMEOUT="${DEV_WAIT_TIMEOUT:-120}"
+  WAIT_TIMEOUT="${DEV_WAIT_TIMEOUT:-300}"
   [[ "$WAIT_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail "DEV_WAIT_TIMEOUT 必须是正整数。"
 
   # 环境文件已经按原值导出，禁用 Compose 再次读取 .env 和变量插值。
@@ -225,6 +227,13 @@ esac
 
 require_docker
 configure_environment
+
+# 在构建镜像、释放端口及修改本地表结构之前发现旧版数据卷。
+case "$command_name" in
+  up|restart|db-start|db|db-restart)
+    bash "$PROJECT_DIR/scripts/check-postgres-volume.sh" "$DEV_DB_VOLUME_NAME"
+    ;;
+esac
 
 case "$command_name" in
   up)

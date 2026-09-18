@@ -23,6 +23,8 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   const demoCard = { id: 3, label: '演示 Amex（测试卡）', brand: 'Amex', last4: '0005', cardholder: 'TEST USER', exp_month: 12, exp_year: 2030 };
   const address = { id: 1, full_name: 'TEST USER', address_line1: '100 Test Road', address_line2: 'Unit 2', city: 'Portland', state: 'OR', postal_code: '97201', country: 'US' };
   let detailReads = 0;
+  const secondAddress = { ...address, id: 2, address_line1: '200 Bound Street', city: 'Salem', postal_code: '97301' };
+  let billingAddressID = null, boundAddressAvailable = true;
   let paymentCardID = null, boundCardAvailable = true;
   const server = http.createServer((request, response) => {
     assert.equal(request.headers.authorization, 'Bearer limited-test-token');
@@ -30,7 +32,7 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
     if (request.url.endsWith('/cards/1')) { detailReads++; response.end(JSON.stringify({ card: { ...card, number: '4242424242424242' } })); }
     else if (request.url.endsWith('/cards/2')) { detailReads++; response.end(JSON.stringify({ card: { ...secondCard, number: '5555555555554444', cvc: '0042' } })); }
     else if (request.url.endsWith('/cards/3')) { detailReads++; response.end(JSON.stringify({ card: { ...demoCard, number: '378282246310005' } })); }
-    else response.end(JSON.stringify({ cards: [card, secondCard, demoCard].filter(item => boundCardAvailable || item.id !== paymentCardID), addresses: [address], payment_card_id: paymentCardID }));
+    else response.end(JSON.stringify({ cards: [card, secondCard, demoCard].filter(item => boundCardAvailable || item.id !== paymentCardID), addresses: [address, secondAddress].filter(item => boundAddressAvailable || item.id !== billingAddressID), payment_card_id: paymentCardID, billing_address_id: billingAddressID }));
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
@@ -74,14 +76,15 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   assert.ok(Math.abs((await bounds()).right - 1188) <= 1, '助手默认靠右');
   assert.equal(detailReads, 1);
   assert.ok((await nodes()).some(node => text(node) === '4242424242424242'));
-  assert.ok((await nodes()).some(node => text(node) === '0.0.1'));
+  assert.ok((await nodes()).some(node => text(node) === '0.0.3'));
   assert.ok((await nodes()).some(node => text(node) === '完整卡号'));
   assert.ok((await nodes()).some(node => text(node) === '账单姓名'));
   assert.ok(!(await nodes()).some(node => /删除登录状态|登录其他新账号|待充值队列/.test(node.nodeValue || '')));
   const detailField = async name => {
-    const title = (await nodes()).find(node => node.nodeName === 'DT' && text(node) === name);
+    const snapshot = await nodes();
+    const title = snapshot.find(node => node.nodeName === 'DT' && text(node) === name);
     assert.ok(title, name);
-    const row = (await nodes()).find(node => node.children?.some(child => child.backendNodeId === title.backendNodeId));
+    const row = snapshot.find(node => node.children?.some(child => child.backendNodeId === title.backendNodeId));
     const dd = row.children.find(node => node.nodeName === 'DD');
     return { value: text(dd.children.find(node => node.nodeName === 'SPAN')), button: dd.children.find(node => node.nodeName === 'BUTTON') };
   };
@@ -96,6 +99,7 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   await cdp.send('Input.insertText', { text: '123' }, sessionId);
   assert.equal((await detailField('安全码')).value, '123');
   async function buttonPoint(label) {
+    await wait(async () => { const button = (await nodes()).find(node => node.nodeName === 'BUTTON' && (text(node) === label || node.attributes?.includes(label))); return button && !button.attributes?.includes('disabled'); });
     const node = (await nodes()).find(node => node.nodeName === 'BUTTON' && (text(node) === label || node.attributes?.includes(label)));
     assert.ok(node, label);
     await cdp.send('DOM.scrollIntoViewIfNeeded', { nodeId: node.nodeId }, sessionId);
@@ -115,6 +119,9 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
     await wait(async () => (await nodes()).some(node => text(node) === name + '已复制'));
     assert.equal(await clipboard(), value, name + '单独复制');
   }
+  await click('复制卡号和地址');
+  await wait(async () => (await nodes()).some(node => text(node) === '卡号和地址已复制'));
+  assert.equal(await clipboard(), '银行卡\n持卡人：TEST USER\n卡号：4242424242424242\n有效期：12/2035\n安全码：123\n\n账单地址\n账单姓名：TEST USER\n街道地址：100 Test Road\n公寓 / 房间：Unit 2\n城市：Portland\n州 / 省：OR\n邮编：97201\n国家：US');
   await click('填充全部表单');
   await wait(() => evaluate('document.getElementById("cc-number").value === "4242424242424242"'));
   assert.equal(await evaluate('document.getElementById("cc-csc").value'), '123');
@@ -150,6 +157,25 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   await click('复制测试安全码');
   await wait(async () => (await nodes()).some(node => text(node) === '测试安全码已复制'));
   assert.equal(await clipboard(), '1234');
+  billingAddressID = secondAddress.id;
+  await click('刷新银行卡和地址');
+  await wait(async () => (await nodes()).some(node => node.attributes?.includes('field-value') && text(node) === '200 Bound Street'));
+  await wait(async () => !(await nodes()).find(node => node.nodeName === 'BUTTON' && text(node) === '刷新银行卡和地址').attributes.includes('disabled'));
+  await click('切换账单地址');
+  assert.equal((await detailField('街道地址')).value, '100 Test Road');
+  await click('刷新银行卡和地址');
+  await wait(async () => (await nodes()).some(node => node.attributes?.includes('field-value') && text(node) === '200 Bound Street'));
+  await wait(async () => !(await nodes()).find(node => node.nodeName === 'BUTTON' && text(node) === '刷新银行卡和地址').attributes.includes('disabled'));
+  await click('复制卡号和地址');
+  await wait(async () => (await clipboard()).includes('街道地址：200 Bound Street'));
+  assert.ok((await clipboard()).includes('卡号：378282246310005'));
+  boundAddressAvailable = false;
+  await click('刷新银行卡和地址');
+  await wait(async () => (await nodes()).some(node => text(node).includes('账号绑定的地址不可用')));
+  assert.ok((await nodes()).find(node => node.nodeName === 'BUTTON' && text(node) === '复制卡号和地址').attributes.includes('disabled'));
+  billingAddressID = null;
+  await click('刷新银行卡和地址');
+  await wait(async () => (await nodes()).some(node => text(node) === '100 Test Road'));
   paymentCardID = secondCard.id;
   await click('刷新银行卡和地址');
   await wait(() => hasCardDetails('5555555555554444'));

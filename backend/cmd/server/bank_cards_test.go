@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -57,6 +58,20 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 		body, _ := json.Marshal(input)
 		r := httptest.NewRequest(method, path, strings.NewReader(string(body)))
 		r.Header.Set("Authorization", "Bearer "+token)
+		if auditCardDetails.MatchString(path) {
+			user, err := s.auth(r)
+			if err == nil && status != 403 {
+				if method == "GET" {
+					r.Header.Set("X-Aitok-TOTP", prepareCardEditTOTP(t, s, user))
+				} else if method == "PATCH" {
+					var cardID int64
+					fmt.Sscanf(path, "/api/bank-cards/%d", &cardID)
+					input.(map[string]any)["edit_token"] = cardEditTestToken(t, s, user, cardID, time.Now().Add(time.Minute))
+					body, _ = json.Marshal(input)
+					r.Body = io.NopCloser(strings.NewReader(string(body)))
+				}
+			}
+		}
 		w := httptest.NewRecorder()
 		s.routes().ServeHTTP(w, r)
 		if w.Code != status {
@@ -97,12 +112,16 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 		t.Fatal("安全码未加密保存")
 	}
 	detailed := call("GET", path, token, nil, 200)["card"].(map[string]any)
-	if detailed["cvc"] != "123" {
-		t.Fatal("详情未返回安全码")
+	if detailed["cvc"] != nil || detailed["number"] != "************4242" {
+		t.Fatal("编辑详情泄露卡片敏感信息")
 	}
-	visible := call("GET", "/api/bank-cards?include_numbers=1", token, nil, 200)["cards"].([]any)[0].(map[string]any)
-	if visible["number"] != "4242424242424242" || visible["cvc"] != nil || visible["has_cvc"] != true {
-		t.Fatal("列表应返回明文卡号，但不得返回安全码")
+	for _, viewer := range []string{token, s.token(3)} {
+		for _, query := range []string{"", "?include_numbers=1"} {
+			visible := call("GET", "/api/bank-cards"+query, viewer, nil, 200)["cards"].([]any)[0].(map[string]any)
+			if visible["number"] != nil || visible["last4"] != "4242" || visible["cvc"] != nil || visible["has_cvc"] != true {
+				t.Fatal("管理员和超管列表只允许返回尾号及安全码存在状态")
+			}
+		}
 	}
 	for _, invalid := range []string{"12", "12345", "1a3", "１２３"} {
 		input["cvc"] = invalid
@@ -126,7 +145,7 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 	input["wallet_qr_image"] = qr
 	call("PATCH", path, token, input, 200)
 	detailed = call("GET", path, token, nil, 200)["card"].(map[string]any)
-	if detailed["cvc"] != "0042" || detailed["wallet_qr_image"] != qr {
+	if detailed["cvc"] != nil || detailed["has_cvc"] != true || detailed["wallet_qr_image"] != qr {
 		t.Fatal("CVC 或二维码未保存")
 	}
 	for _, invalid := range []string{"data:image/svg+xml;base64,PHN2Zz4=", "data:image/png;base64,YmFk", strings.Repeat("x", 2800001)} {
@@ -137,7 +156,7 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 	delete(input, "cvc")
 	call("PATCH", path, token, input, 200)
 	detailed = call("GET", path, token, nil, 200)["card"].(map[string]any)
-	if detailed["cvc"] != "0042" || detailed["wallet_qr_image"] != qr {
+	if detailed["cvc"] != nil || detailed["has_cvc"] != true || detailed["wallet_qr_image"] != qr {
 		t.Fatal("旧客户端省略字段不能清空已有值")
 	}
 	for _, method := range []string{"GET", "PATCH", "DELETE"} {
@@ -177,7 +196,7 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 	input["platform"], input["notes"] = "新平台", "已修改备注"
 	call("PATCH", path, token, input, 200)
 	full := call("GET", path, token, nil, 200)["card"].(map[string]any)
-	if full["number"] != "4242424242424242" || full["label"] != "Updated" || full["platform"] != "新平台" || full["notes"] != "已修改备注" || full["wallet_address"] != input["wallet_address"] {
+	if full["number"] != "************4242" || full["label"] != "Updated" || full["platform"] != "新平台" || full["notes"] != "已修改备注" || full["wallet_address"] != input["wallet_address"] {
 		t.Fatal("卡片编辑失败")
 	}
 	limited := s.assistantToken(1, 1)
@@ -191,6 +210,16 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 	}
 	if snapshot["cards"].([]any)[1].(map[string]any)["platform"] != "新平台" {
 		t.Fatal("助手缺少卡平台")
+	}
+	if _, err := db.Exec(`UPDATE chatgpt_accounts SET billing_address_id=1,updated_at=NOW() WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	boundAddress := call("GET", "/api/browser-assistant", limited, nil, 200)
+	if boundAddress["billing_address_id"] != float64(1) || boundAddress["addresses"].([]any)[0].(map[string]any)["id"] != float64(1) {
+		t.Fatal("助手未优先展示当前账号绑定地址")
+	}
+	if call("GET", "/api/browser-assistant?account_id=1", s.assistantToken(2, 2), nil, 200)["billing_address_id"] != nil {
+		t.Fatal("助手串用其他账号地址")
 	}
 	if snapshot["payment_card_id"] != nil {
 		t.Fatal("未绑定付款卡时应返回空值")
@@ -226,9 +255,13 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 	input["wallet_address"] = ""
 	input["cvc"], input["wallet_qr_image"] = "", ""
 	cleared := call("PATCH", path, token, input, 200)["card"].(map[string]any)
-	if cleared["has_cvc"] != false || cleared["wallet_qr_image"] != "" || cleared["platform"] != "" || cleared["notes"] != "" || cleared["wallet_address"] != "" || len(call("GET", "/api/bank-cards", token, nil, 200)["platforms"].([]any)) != 1 {
+	if cleared["has_cvc"] != true || cleared["wallet_qr_image"] != "" || cleared["platform"] != "" || cleared["notes"] != "" || cleared["wallet_address"] != "" || len(call("GET", "/api/bank-cards", token, nil, 200)["platforms"].([]any)) != 1 {
 		t.Fatal("卡平台或备注清空失败")
 	}
 	call("DELETE", path, token, nil, 204)
+	archived := call("GET", "/api/bank-cards?archived=1&include_numbers=1", token, nil, 200)["cards"].([]any)[0].(map[string]any)
+	if archived["number"] != nil || archived["cvc"] != nil || archived["last4"] != "4242" {
+		t.Fatal("归档列表泄露完整卡号或安全码")
+	}
 	call("GET", path, token, nil, 404)
 }

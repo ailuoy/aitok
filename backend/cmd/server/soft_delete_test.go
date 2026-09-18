@@ -115,7 +115,7 @@ func TestSoftDeleteLifecycle(t *testing.T) {
 	call("DELETE", cp, 1, nil, 204)
 	checkCard()
 	assertDeleted("bank_cards", cid)
-	call("GET", cp, 1, nil, 404)
+	call("GET", cp, 1, nil, 403)
 	if call("GET", cp+"/ledger", 1, nil, 200)["balance_usd_minor"] != float64(10000) {
 		t.Fatal("删除卡片丢失历史账本")
 	}

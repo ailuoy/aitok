@@ -13,7 +13,7 @@ const nativeNoiseSettings = [
   ['屏幕 / 分辨率', '浏览器原生值'],
 ];
 
-export default function BrowserFingerprint({ status }) {
+export default function BrowserFingerprint({ status, collapsed = false, children }) {
   const fingerprint = status?.fingerprint;
   const nativeNoise = fingerprint?.mode === 'native-noise-v1';
   const saved = status?.state === 'closed';
@@ -25,11 +25,12 @@ export default function BrowserFingerprint({ status }) {
     ...(nativeNoise ? nativeNoiseSettings : []),
   ] : [];
 
-  return <details className="browser-fingerprint" open>
+  return <details className="browser-fingerprint" open={!collapsed}>
     <summary>浏览器指纹配置{fingerprint && <span>{saved ? '已保存 · 下次打开生效' : '当前账号'}</span>}</summary>
     {fingerprint ? <>
       <dl className="browser-fingerprint-grid">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
       <p className="muted">{nativeNoise ? '原生值沿用账号浏览器自身配置，未作改写；此处展示配置策略，不是实时检测值。' : '当前服务未提供可识别的配置策略，请更新并重启浏览器服务后重试。'}</p>
     </> : <p className="muted">{!status ? '打开浏览器或刷新状态后显示指纹配置。' : saved ? '此账号尚无指纹配置，首次打开浏览器时自动生成。' : '当前服务未返回指纹配置，请刷新状态；仍未显示时，请更新并重启浏览器服务。'}</p>}
+    {children}
   </details>;
 }

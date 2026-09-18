@@ -63,8 +63,8 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		unauthorized()
 		return
 	}
-	var paymentCardID *int64
-	if err = s.db.QueryRowContext(r.Context(), `SELECT payment_card_id FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL)`, account, user).Scan(&paymentCardID); err != nil {
+	var paymentCardID, billingAddressID *int64
+	if err = s.db.QueryRowContext(r.Context(), `SELECT payment_card_id,billing_address_id FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL)`, account, user).Scan(&paymentCardID, &billingAddressID); err != nil {
 		unauthorized()
 		return
 	}
@@ -119,7 +119,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addresses := []Address{}
-	rows, err = s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE deleted_at IS NULL ORDER BY id DESC LIMIT 1000`)
+	rows, err = s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE deleted_at IS NULL ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END,id DESC LIMIT 1000`, billingAddressID)
 	if err != nil {
 		addressError(w, err)
 		return
@@ -139,5 +139,5 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		addressError(w, err)
 		return
 	}
-	reply(w, map[string]any{"cards": cards, "addresses": addresses, "payment_card_id": paymentCardID}, 200)
+	reply(w, map[string]any{"cards": cards, "addresses": addresses, "payment_card_id": paymentCardID, "billing_address_id": billingAddressID}, 200)
 }

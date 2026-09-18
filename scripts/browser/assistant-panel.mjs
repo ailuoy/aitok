@@ -1,6 +1,6 @@
 import { isVerificationPage } from './page-verification.mjs';
 
-export const ASSISTANT_VERSION = '0.0.1';
+export const ASSISTANT_VERSION = '0.0.3';
 export function assistantPanelSource() { return `(${installPanel.toString()})(${JSON.stringify(ASSISTANT_VERSION)}, ${isVerificationPage.toString()})`; }
 
 function installPanel(version, isVerificationPage) {
@@ -124,7 +124,7 @@ function installPanel(version, isVerificationPage) {
     }
     async function showCard() {
       const request = ++cardRequest, selected = cardID;
-      selectedCard = null; codeField = null; cvc.value = ''; label.hidden = true;
+      selectedCard = null; codeField = null; cvc.value = ''; label.hidden = true; updateCopy();
       cardDetails.replaceChildren();
       if (!selected) { create('p', data.payment_card_id ? '账号绑定的付款卡不可用，请在后台检查绑定，或手动选择其他卡片。' : '暂无银行卡，请先在后台添加。', 'hint', cardDetails); return; }
       create('p', '正在读取银行卡…', 'hint', cardDetails);
@@ -133,16 +133,36 @@ function installPanel(version, isVerificationPage) {
         if (request !== cardRequest || selected !== cardID) return;
         selectedCard = card; label.hidden = Boolean(card.cvc);
         showFields(cardDetails, [['名称', card.label], ['卡平台', card.platform], ['卡类型', card.brand], ['持卡人', card.cardholder], ['完整卡号', card.number], ['有效期', String(card.exp_month).padStart(2, '0') + '/' + card.exp_year], ['备注', card.notes]]);
-        codeField = addField(cardDetails, '安全码', ''); updateCode();
+        codeField = addField(cardDetails, '安全码', ''); updateCode(); updateCopy();
       } catch (error) { if (request === cardRequest) { cardDetails.replaceChildren(); create('p', error.message, 'hint', cardDetails); } }
+    }
+    function addressFields(address) {
+      return [['账单姓名', address.full_name], ['街道地址', address.address_line1], ['公寓 / 房间', address.address_line2], ['城市', address.city], ['州 / 省', address.source_data?.State_Full ? address.source_data.State_Full + ' (' + address.state + ')' : address.state], ['邮编', address.postal_code], ['国家', address.country], ...(address.source_data?.Telephone ? [['电话', address.source_data.Telephone]] : [])];
     }
     function showAddress() {
       const address = data.addresses.find(item => item.id === addressID);
-      if (!address) { addressDetails.replaceChildren(); return; }
-      showFields(addressDetails, [['账单姓名', address.full_name], ['街道地址', address.address_line1], ['公寓 / 房间', address.address_line2], ['城市', address.city], ['州 / 省', address.source_data?.State_Full ? address.source_data.State_Full + ' (' + address.state + ')' : address.state], ['邮编', address.postal_code], ['国家', address.country], ...(address.source_data?.Telephone ? [['电话', address.source_data.Telephone]] : [])]);
+      updateCopy();
+      if (!address) { addressDetails.replaceChildren(); if (data.billing_address_id) create('p', '账号绑定的地址不可用，请在后台检查绑定，或手动选择其他地址。', 'hint', addressDetails); return; }
+      showFields(addressDetails, addressFields(address));
     }
     const actions = create('div', '', 'stack', panel); actions.style.marginTop = '12px';
-    const fill = create('button', '填充全部表单', 'primary', actions);
+    const copyPayment = create('button', '复制卡号和地址', 'primary', actions);
+    copyPayment.disabled = true;
+    function updateCopy() { copyPayment.disabled = !selectedCard || !data.addresses.some(item => item.id === addressID); }
+    copyPayment.onclick = event => {
+      if (!event.isTrusted || !selectedCard) return;
+      const address = data.addresses.find(item => item.id === addressID);
+      if (!address) return;
+      const fields = [
+        ['持卡人', selectedCard.cardholder], ['卡号', selectedCard.number],
+        ['有效期', String(selectedCard.exp_month).padStart(2, '0') + '/' + selectedCard.exp_year],
+        ['安全码', cvc.value || selectedCard.cvc || testCode(selectedCard)],
+      ];
+
+      const format = values => values.filter(([, value]) => value != null && String(value).trim()).map(([name, value]) => name + '：' + value).join('\n');
+      void copyValue('卡号和地址', '银行卡\n' + format(fields) + '\n\n账单地址\n' + format(addressFields(address)));
+    };
+    const fill = create('button', '填充全部表单', '', actions);
     fill.onclick = event => { if (!event.isTrusted) return; const value = cvc.value || selectedCard?.cvc || testCode(selectedCard); cvc.value = ''; updateCode(); run(fill, () => call('fill', { card_id: cardID, address_id: addressID, cvc: value })); };
     const nextAddress = create('button', '切换账单地址', '', actions); nextAddress.onclick = () => { const index = data.addresses.findIndex(item => item.id === addressID); addressID = data.addresses[(index + 1) % data.addresses.length]?.id || ''; updatePickers(); showAddress(); };
     const nextCard = create('button', '切换下一张卡', '', actions); nextCard.onclick = () => { const index = data.cards.findIndex(item => item.id === cardID); cardID = data.cards[(index + 1) % data.cards.length]?.id || ''; cvc.value = ''; updatePickers(); void showCard(); };
@@ -157,7 +177,8 @@ function installPanel(version, isVerificationPage) {
       const preferredCard = data.payment_card_id || cardID;
       cardID = data.cards.some(card => card.id === preferredCard) ? preferredCard : data.payment_card_id ? '' : data.cards[0]?.id || '';
       cvc.value = '';
-      addressID = data.addresses.some(address => address.id === addressID) ? addressID : data.addresses[0]?.id || '';
+      const preferredAddress = data.billing_address_id || addressID;
+      addressID = data.addresses.some(address => address.id === preferredAddress) ? preferredAddress : data.billing_address_id ? '' : data.addresses[0]?.id || '';
       updatePickers(); showAddress(); updateStatus(result.status); await showCard();
       return { message: '已读取 ' + data.cards.length + ' 张银行卡、' + data.addresses.length + ' 条地址' };
     }

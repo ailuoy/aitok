@@ -4,9 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseCardUSD(t *testing.T) {
@@ -41,6 +43,9 @@ func TestBankCardLedgerIntegration(t *testing.T) {
 		r := httptest.NewRequest(method, path, strings.NewReader(string(encoded)))
 		if user > 0 {
 			r.Header.Set("Authorization", "Bearer "+s.token(user))
+			if method == "GET" && auditCardDetails.MatchString(path) {
+				r.Header.Set("X-Aitok-TOTP", prepareCardEditTOTP(t, s, user))
+			}
 		}
 		w := httptest.NewRecorder()
 		routes.ServeHTTP(w, r)
@@ -76,8 +81,6 @@ func TestBankCardLedgerIntegration(t *testing.T) {
 	charge := map[string]any{"kind": "subscription", "amount_usd": "150.25", "account_id": 999, "request_key": "account-charge-0001", "notes": "卡平台实际扣款", "period_start": "2030-01-01", "period_end": "2030-02-01", "currency": "PHP", "original_amount_minor": 891964, "reference": "external-ledger-test-1"}
 	call("POST", path, 1, charge, 404)
 	charge["account_id"] = 1
-	charge["amount_usd"] = "501.00"
-	call("POST", path, 1, charge, 409)
 	charge["amount_usd"] = "150.25"
 	entry := call("POST", path, 1, charge, 201)["entry"].(map[string]any)
 	if entry["amount_usd_minor"] != float64(-15025) || entry["balance_after_usd_minor"] != float64(34975) || entry["original_amount_minor"] != float64(891964) || entry["account_email"] != "one@test.local" {
@@ -103,6 +106,7 @@ func TestBankCardLedgerIntegration(t *testing.T) {
 	call("GET", path, 3, nil, 200)
 	call("GET", path+"?page=0", 1, nil, 400)
 	call("DELETE", path, 1, nil, 405)
+	cardInput["edit_token"] = cardEditTestToken(t, s, 1, cardID, time.Now().Add(time.Minute))
 	cardInput["number"] = "5555555555554444"
 	call("PATCH", cardPath, 1, cardInput, 409)
 	cardInput["number"] = "4242424242424242"
@@ -130,5 +134,130 @@ func TestBankCardLedgerIntegration(t *testing.T) {
 	var sum, balance int64
 	if err := db.QueryRow(`SELECT sum(amount_usd_minor),max(c.balance_usd_minor) FROM bank_card_ledger l JOIN bank_cards c ON c.id=l.card_id WHERE c.id=$1`, cardID).Scan(&sum, &balance); err != nil || sum != balance {
 		t.Fatal("余额与流水合计不一致", err)
+	}
+}
+
+func TestHistoricalCardCharges(t *testing.T) {
+	t.Setenv("SESSION_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	db := walletTestDB(t)
+	if _, err := db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES(1,'history@test.local','','admin'),(2,'member@test.local','','user');
+INSERT INTO chatgpt_accounts(id,user_id,label,email) VALUES(1,1,'One','history-one@test.local'),(2,1,'Two','history-two@test.local');
+INSERT INTO recharge_packages(id,name,plan,region,currency,original_amount_minor,sale_usd_minor,months,enabled) VALUES(1,'历史套餐','pro_5x','PH','PHP',891964,14219,1,true),(2,'人民币测试','plus','US','USD',20000,20000,1,true);
+INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at,created_at) VALUES('PHP','USD',0.016,'test',NOW(),NOW()),('PHP','CNY',0.112,'test',NOW(),NOW());`); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db, secret: []byte("history-test")}
+	call := func(method, path string, user int64, body any, status int) map[string]any {
+		t.Helper()
+		encoded, _ := json.Marshal(body)
+		r := httptest.NewRequest(method, path, strings.NewReader(string(encoded)))
+		r.Header.Set("Authorization", "Bearer "+s.token(user))
+		w := httptest.NewRecorder()
+		s.routes().ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("%s %s: got %d want %d: %s", method, path, w.Code, status, w.Body.String())
+		}
+		var out map[string]any
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	card := call("POST", "/api/bank-cards", 1, map[string]any{"label": "History", "cardholder": "Test User", "number": "4242424242424242", "exp_month": 12, "exp_year": 2035}, 201)["card"].(map[string]any)
+	cardID := int64(card["id"].(float64))
+	path := fmt.Sprintf("/api/bank-cards/%d/ledger", cardID)
+	quotePath := path + "?quote=1&package_id=1&charge_mode=package"
+	call("GET", quotePath, 2, nil, 403)
+	quote := call("GET", quotePath, 1, nil, 200)
+	if quote["amount_usd_minor"] != float64(14219) {
+		t.Fatal("套餐自动定价错误", quote)
+	}
+	input := map[string]any{"kind": "subscription", "account_id": 1, "package_id": 1, "charge_mode": "package", "expected_amount_usd_minor": 14219, "period_start": "2030-01-01", "period_end": "2030-02-01", "reference": "history-package-1", "request_key": "history-package-0001"}
+	entry := call("POST", path, 1, input, 201)["entry"].(map[string]any)
+	if entry["balance_after_usd_minor"] != float64(-14219) || entry["notes"] != "" || entry["original_amount_minor"] != float64(891964) {
+		t.Fatal("零余额补录或选填备注失败", entry)
+	}
+	pricing := entry["pricing_snapshot"].(map[string]any)
+	if pricing["package"].(map[string]any)["name"] != "历史套餐" || pricing["confirmed_at"] == nil {
+		t.Fatal("缺少套餐快照", pricing)
+	}
+	if _, err := db.Exec(`UPDATE recharge_packages SET sale_usd_minor=99999,enabled=false,deleted_at=NOW(),updated_at=NOW() WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if call("POST", path, 1, input, 200)["replayed"] != true {
+		t.Fatal("套餐删除后应重放原结果")
+	}
+	input["expected_amount_usd_minor"] = 99999
+	call("POST", path, 1, input, 409)
+	input["expected_amount_usd_minor"] = 14219
+	input["account_id"] = 2
+	call("POST", path, 1, input, 409)
+	input["account_id"] = 1
+	input["amount_usd"] = "0.01"
+	call("POST", path, 1, input, 400)
+	delete(input, "amount_usd")
+	input["currency"] = "USD"
+	call("POST", path, 1, input, 400)
+	delete(input, "currency")
+	quote = call("GET", path+"?quote=1&package_id=2&charge_mode=CNY&charge_amount=700.04", 1, nil, 200)
+	if quote["amount_usd_minor"] != float64(10001) {
+		t.Fatal("人民币折算应只在最终美分舍入", quote)
+	}
+	rateID := quote["exchange_rate"].(map[string]any)["batch"].(map[string]any)["id"]
+	cny := map[string]any{"kind": "subscription", "account_id": 2, "package_id": 2, "charge_mode": "CNY", "charge_amount": "700.04", "expected_amount_usd_minor": 10001, "rate_id": rateID, "period_start": "2030-01-01", "period_end": "2030-02-01", "reference": "history-cny-1", "request_key": "history-cny-000001"}
+	cny["expected_amount_usd_minor"] = 10000
+	call("POST", path, 1, cny, 409)
+	cny["expected_amount_usd_minor"] = 10001
+	cny["rate_id"] = 999
+	call("POST", path, 1, cny, 409)
+	cny["rate_id"] = rateID
+	entry = call("POST", path, 1, cny, 201)["entry"].(map[string]any)
+	if entry["balance_after_usd_minor"] != float64(-24220) {
+		t.Fatal("负余额继续补录失败", entry)
+	}
+	pricing = entry["pricing_snapshot"].(map[string]any)
+	if pricing["charge_currency"] != "CNY" || pricing["charge_amount_minor"] != float64(70004) || pricing["exchange_rate"].(map[string]any)["usd_per_unit"] != "1/7" {
+		t.Fatal("人民币扣款快照错误", pricing)
+	}
+	cny["charge_amount"] = "700.03"
+	call("POST", path, 1, cny, 409)
+	cny["charge_amount"] = "700.04"
+	cny["request_key"] = "history-cny-000002"
+	cny["reference"] = "history-cny-2"
+	call("POST", path, 1, cny, 409)
+	cny["request_key"] = "history-cny-000001"
+	cny["reference"] = "history-cny-1"
+	if _, err := db.Exec(`UPDATE exchange_rates SET created_at=NOW()-INTERVAL '3 days',updated_at=NOW(); UPDATE recharge_packages SET enabled=false,updated_at=NOW() WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", path, 1, cny, 200)
+	if _, err := db.Exec(`UPDATE recharge_packages SET enabled=true,updated_at=NOW() WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	cny["request_key"] = "history-cny-stale-1"
+	cny["reference"] = "history-cny-stale"
+	cny["period_start"] = "2030-02-01"
+	cny["period_end"] = "2030-03-01"
+	call("POST", path, 1, cny, 409)
+	// 普通支出仍受余额校验，不能借历史补录选项绕过订单或手续费限制。
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = postCardEntry(httptest.NewRequest(http.MethodPost, path, nil), tx, 1, cardID, cardPosting{Kind: "fee", Amount: -1, Key: "fee-no-overdraft-1", AllowHistoricalOverdraft: true}, true)
+	tx.Rollback()
+	if err == nil {
+		t.Fatal("普通支出不应允许负余额")
+	}
+	deposit := map[string]any{"kind": "deposit", "amount_usd": "100.00", "request_key": "history-deposit-0001"}
+	entry = call("POST", path, 1, deposit, 201)["entry"].(map[string]any)
+	if entry["balance_after_usd_minor"] != float64(-14220) {
+		t.Fatal("存入应允许逐步补足负余额")
+	}
+	statement := call("GET", path, 1, nil, 200)
+	if statement["total"] != float64(3) || statement["balance_usd_minor"] != float64(-14220) {
+		t.Fatal("幂等请求重复入账", statement)
+	}
+	var balance, sum int64
+	if err := db.QueryRow(`SELECT balance_usd_minor,(SELECT sum(amount_usd_minor) FROM bank_card_ledger WHERE card_id=$1) FROM bank_cards WHERE id=$1`, cardID).Scan(&balance, &sum); err != nil || balance != sum {
+		t.Fatal("余额与流水不一致", err)
 	}
 }

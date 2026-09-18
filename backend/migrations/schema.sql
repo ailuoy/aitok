@@ -55,12 +55,14 @@ CREATE TABLE IF NOT EXISTS chatgpt_accounts (
   subscription_ends_at DATE,
   renewal_enabled BOOLEAN NOT NULL DEFAULT FALSE,
   payment_card_id BIGINT,
+  billing_address_id BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
 );
+CREATE INDEX IF NOT EXISTS chatgpt_accounts_billing_address_idx ON chatgpt_accounts(billing_address_id) WHERE deleted_at IS NULL AND billing_address_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS chatgpt_accounts_payment_card_idx ON chatgpt_accounts(payment_card_id) WHERE deleted_at IS NULL AND payment_card_id IS NOT NULL;
-COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、上次登录、续订意愿及提醒、人工续订日期、默认付款卡及有订单凭据的订阅核验状态；默认付款卡不代表官网绑卡或自动扣款。';
+COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、上次登录、续订意愿及提醒、人工续订日期、默认付款卡、账单地址及有订单凭据的订阅核验状态；绑定仅供助手默认选择，不代表官网绑卡或自动扣款。';
 
 -- 邮箱验证码：按邮箱及用途保存验证码哈希和过期时间。
 CREATE TABLE IF NOT EXISTS email_codes (
@@ -194,7 +196,7 @@ CREATE TABLE IF NOT EXISTS bank_cards (
   exp_year INTEGER NOT NULL CHECK (exp_year BETWEEN 2000 AND 9999),
   platform TEXT NOT NULL DEFAULT '' CHECK (length(platform) <= 80),
   notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 1000),
-  balance_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (balance_usd_minor BETWEEN 0 AND 1000000000000),
+  balance_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (balance_usd_minor BETWEEN -1000000000000 AND 1000000000000),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','invalid')),
   daily_limit_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (daily_limit_usd_minor>=0),
   low_balance_usd_minor BIGINT NOT NULL DEFAULT 0 CHECK (low_balance_usd_minor>=0),
@@ -216,7 +218,7 @@ CREATE TABLE IF NOT EXISTS bank_card_ledger (
   request_key TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (kind IN ('opening','deposit','subscription','refund','reversal','fee','adjustment')),
   amount_usd_minor BIGINT NOT NULL CHECK (amount_usd_minor <> 0 AND abs(amount_usd_minor) <= 1000000000000),
-  balance_after_usd_minor BIGINT NOT NULL CHECK (balance_after_usd_minor BETWEEN 0 AND 1000000000000),
+  balance_after_usd_minor BIGINT NOT NULL CHECK (balance_after_usd_minor BETWEEN -1000000000000 AND 1000000000000),
   account_id BIGINT,
   account_label TEXT NOT NULL DEFAULT '',
   account_email TEXT NOT NULL DEFAULT '',
@@ -230,13 +232,14 @@ CREATE TABLE IF NOT EXISTS bank_card_ledger (
   period_end DATE,
   currency TEXT NOT NULL DEFAULT 'USD',
   original_amount_minor BIGINT,
+  pricing_snapshot JSONB CONSTRAINT bank_card_ledger_pricing_snapshot_check CHECK (pricing_snapshot IS NULL OR jsonb_typeof(pricing_snapshot)='object'),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ,
   UNIQUE (card_id, request_key),
   CONSTRAINT bank_card_ledger_sign_check CHECK ((kind IN ('opening','deposit','refund') AND amount_usd_minor>0) OR (kind IN ('subscription','fee') AND amount_usd_minor<0) OR kind IN ('reversal','adjustment'))
 );
-COMMENT ON TABLE bank_card_ledger IS '银行卡 USD 资金流水：初始余额、存入、周期购买、退款、冲正及费用，记录实际原币价格和历史交易号，冲正不覆盖原流水。';
+COMMENT ON TABLE bank_card_ledger IS '银行卡 USD 资金流水：初始余额、存入、周期购买、退款、冲正及费用，记录原币价格、交易号及历史补录的套餐与扣款汇率快照；补录允许负余额，冲正不覆盖原流水。';
 
 -- 主键和 UNIQUE 约束自动建立索引；以下为额外业务索引。
 CREATE UNIQUE INDEX IF NOT EXISTS addresses_location_active_unique ON addresses(lower(address_line1),lower(address_line2),lower(city),lower(state),lower(postal_code),country) WHERE deleted_at IS NULL;

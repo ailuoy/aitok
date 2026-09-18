@@ -45,6 +45,9 @@ SELECT setval(pg_get_serial_sequence('users','id'),100);`)
 				tokens[user] = s.token(user)
 			}
 			r.Header.Set("Authorization", "Bearer "+tokens[user])
+			if method == "GET" && auditCardDetails.MatchString(path) && status == 200 {
+				r.Header.Set("X-Aitok-TOTP", prepareCardEditTOTP(t, s, user))
+			}
 		}
 		w := httptest.NewRecorder()
 		s.routes().ServeHTTP(w, r)
@@ -123,7 +126,7 @@ SELECT setval(pg_get_serial_sequence('users','id'),100);`)
 	var before string
 	db.QueryRow(`SELECT number_fingerprint FROM bank_cards WHERE id=$1`, id).Scan(&before)
 	call("GET", path, 4, nil, 403)
-	call("GET", path, 2, nil, 200)
+	card["edit_token"] = call("GET", path, 2, nil, 200)["edit_token"]
 	card["notes"] = "管理员编辑"
 	call("PATCH", path, 2, card, 200)
 	var owner int64
