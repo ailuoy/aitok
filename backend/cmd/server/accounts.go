@@ -179,7 +179,7 @@ func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path == "/api/accounts/payment-cards" {
-		s.accountPaymentCards(w, r)
+		s.accountPaymentCards(w, r, id)
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/accounts/"), "/")

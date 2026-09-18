@@ -41,22 +41,15 @@ func (s *Server) insertAccount(ctx context.Context, user int64, label, email, en
 	return a, err
 }
 
-func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64, admin bool) {
-	p, size, valid := pageParameters(r)
-	if !valid {
-		w.WriteHeader(400)
-		return
-	}
-	order, err := accountOrder(r.URL.Query().Get("sort"), r.URL.Query().Get("direction"), admin)
-	if err != nil {
-		reply(w, map[string]string{"error": err.Error()}, 400)
-		return
+// accountFilter 统一列表与付款卡预算的筛选范围，预算不受分页影响。
+func accountFilter(r *http.Request, user int64, admin bool) (string, []any, error) {
+	if len([]rune(r.URL.Query().Get("q"))) > 200 {
+		return "", nil, fmt.Errorf("搜索关键词过长")
 	}
 	group := r.URL.Query().Get("group")
 	renewalStatus := r.URL.Query().Get("renewal_status")
 	if renewalStatus != "" && (!admin || (renewalStatus != "safe" && renewalStatus != "soon" && renewalStatus != "overdue")) {
-		reply(w, map[string]string{"error": "续费时间状态无效"}, 400)
-		return
+		return "", nil, fmt.Errorf("续费时间状态无效")
 	}
 	if !admin {
 		group = ""
@@ -68,12 +61,11 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 		var err error
 		gid, err = strconv.ParseInt(group, 10, 64)
 		if err != nil || gid < 1 {
-			w.WriteHeader(400)
-			return
+			return "", nil, fmt.Errorf("账号分组无效")
 		}
 	}
 	filter := ` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN account_groups g ON g.id=a.group_id AND g.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL LEFT JOIN addresses b ON b.id=a.billing_address_id AND b.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) AND strpos(lower(a.label||' '||a.email),lower($3))>0 AND ($4::bigint=-1 OR COALESCE(a.group_id,0)=$4)`
-	// 与前端倒计时一致，按北京时间自然日筛选，并复用于总数、分页和导出。
+	// 与前端倒计时一致，按北京时间自然日筛选，并复用于总数、分页、导出和付款卡续费预算。
 	const today = `(NOW() AT TIME ZONE 'Asia/Shanghai')::date`
 	switch renewalStatus {
 	case "safe":
@@ -84,6 +76,25 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 		filter += ` AND a.renewal_date < ` + today
 	}
 	args := []any{user, admin, r.URL.Query().Get("q"), gid}
+	return filter, args, nil
+}
+
+func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64, admin bool) {
+	p, size, valid := pageParameters(r)
+	if !valid {
+		w.WriteHeader(400)
+		return
+	}
+	order, err := accountOrder(r.URL.Query().Get("sort"), r.URL.Query().Get("direction"), admin)
+	if err != nil {
+		reply(w, map[string]string{"error": err.Error()}, 400)
+		return
+	}
+	filter, args, err := accountFilter(r, user, admin)
+	if err != nil {
+		reply(w, map[string]string{"error": err.Error()}, 400)
+		return
+	}
 	var total int
 	if err := s.db.QueryRowContext(r.Context(), `SELECT count(*)`+filter, args...).Scan(&total); err != nil {
 		operationError(w, err)

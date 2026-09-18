@@ -87,17 +87,20 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   const [groups, setGroups] = useState([]);
   const [groupFilter, setGroupFilter] = useState('all');
   const [renewalStatus, setRenewalStatus] = useState('');
+  const cardQuery = new URLSearchParams({ q: accountQuery, group: groupFilter === 'all' ? '' : groupFilter === '' ? 'none' : groupFilter, renewal_status: renewalStatus }).toString();
+  const [cardSnapshot, setCardSnapshot] = useState(null);
+  const fundingLoading = cardsLoading || cardSnapshot?.query !== cardQuery || cardSnapshot?.accounts !== accounts || cardSnapshot?.revision !== cardRevision;
   useEffect(()=>{if(tab!=='accounts'||accountSort.key==='proxy')return;const c=new AbortController();request('/accounts?'+new URLSearchParams({paged:'1',page:accountPageIndex,page_size:pageSize,q:accountQuery,group:groupFilter==='all'?'':groupFilter===''?'none':groupFilter,renewal_status:admin?renewalStatus:'',sort:accountSort.key,direction:accountSort.direction}),token,{signal:c.signal}).then(v=>{if(!c.signal.aborted)setAccountPage(v)}).catch(e=>{if(!c.signal.aborted)setError(e.message)});return()=>c.abort()},[tab,pageSize,accountPageIndex,accountQuery,groupFilter,renewalStatus,admin,token,accounts,accountSort]);
   useEffect(()=>{setAccountPageIndex(1)},[accountQuery,groupFilter,renewalStatus,pageSize]);
   useEffect(() => {
     if (!admin || tab !== 'accounts') return;
     const controller = new AbortController(); setCardsLoading(true);
-    request('/accounts/payment-cards', token, { signal: controller.signal })
-      .then(data => { if (!controller.signal.aborted) setPaymentCards(data.cards); })
+    request('/accounts/payment-cards?' + cardQuery, token, { signal: controller.signal })
+      .then(data => { if (!controller.signal.aborted) { setPaymentCards(data.cards); setCardSnapshot({ query: cardQuery, accounts, revision: cardRevision }); } })
       .catch(error => { if (!controller.signal.aborted) { setPaymentCards([]); setError(error.message); } })
       .finally(() => { if (!controller.signal.aborted) setCardsLoading(false); });
     return () => controller.abort();
-  }, [admin, tab, token, cardRevision]);
+  }, [admin, tab, token, cardRevision, cardQuery, accounts]);
   useEffect(() => {
     if (!admin || tab !== 'accounts') return;
     const controller = new AbortController(); setPackagesLoading(true);
@@ -247,7 +250,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
           <td className="table-selector">{admin && <div className="account-proxy"><AccountProxySelect account={account} userID={user.id} config={proxyConfig} disabled={bindingAccount !== null} onChange={value => bindProxy(account, value)} /></div>}</td>
           <td><strong>{account.renewal_date || '未设置'}</strong><RenewalCountdown date={account.renewal_date} today={today} /></td>
           <td><AccountRenewal account={account} token={token} onChange={updateAccount} onError={setError} /></td>
-          <td className="table-selector account-payment-card"><AccountPaymentCard account={account} cards={paymentCards} loading={cardsLoading} token={token} onChange={updateAccount} onError={setError} /></td><td><AccountBillingAddress account={account} token={token} onChange={updateAccount} /></td></>}
+          <td className="table-selector account-payment-card"><AccountPaymentCard account={account} cards={paymentCards} loading={cardsLoading} fundingLoading={fundingLoading} token={token} onChange={updateAccount} onError={setError} /></td><td><AccountBillingAddress account={account} token={token} onChange={updateAccount} /></td></>}
           <td className="last-login">{formatUTC8(account.last_login_at)}</td>
           {admin && <td className="table-actions"><div className="account-actions">{admin && <button className="outline small" onClick={() => toggleBrowser(account)} disabled={localBrowsers.closing[account.id] || localBrowsers.states[account.id]?.state === 'closing' || (!browserRunning(localBrowsers.states[account.id]) && !account.has_session)}><Monitor size={15} />{localBrowsers.closing[account.id] || localBrowsers.states[account.id]?.state === 'closing' ? '正在关闭…' : browserRunning(localBrowsers.states[account.id]) ? '关闭浏览器' : '打开账号'}</button>}{admin && <button className="outline small" onClick={() => open('browser', account)} disabled={!account.has_session}><Monitor size={15} />浏览器管理</button>}{(admin || account.user_id === user?.id) && <button className="outline small" onClick={() => open('session', account)}>更新 Session</button>}{admin && <button className="outline small" onClick={() => open('date', account)}><CalendarDays size={15} />设置日期</button>}{(admin || account.user_id === user?.id) && <><button className="icon-btn" aria-label={`删除 ${account.label}`} onClick={() => open('delete', account)}><Trash2 size={17} /></button></>}<button className="outline small quick-month-order" onClick={() => setQuickOrderAccount(account)}><Plus size={15} />快速创建月订单</button></div></td>}
         </tr>)}

@@ -48,6 +48,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let addressRows = Array.from({ length: 21 }, (_, index) => ({ id: index + 1, address_line1: index === 0 ? '4111 Gateway [Road]' : `${index + 1} Test Street`, address_line2: '', city: 'Portland', state: 'OR', postal_code: '97201', country: 'US', source_url: 'https://www.meiguodizhi.com/usa-address/oregon', source_data: { Full_Name: 'Test User', Occupation: 'Engineer', Extra_Field: 'Preserved value', CVV2: '123' }, can_edit: true }));
   const addressWrites = [];
   let bankCards = [];
+  let cardFunding = { reserved_usd_minor: 0, required_usd_minor: 4000, renewal_count: 2, unknown_count: 0, funding_status: 'sufficient' };
+  let cardFundingDelay = 0, cardFundingFail = false;
   let bankUploadTooLarge = false;
   let accountSettingsFail = false;
   const bankWrites = [], bankPayloads = [];
@@ -273,7 +275,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
           Object.assign(account, data);
         }
       } else if (url.pathname === '/api/accounts/payment-cards') {
-        data = { cards: bankCards.map(({ id, label, last4, brand }) => ({ id, label, last4, brand })) };
+        data = { cards: bankCards.map(({ id, label, last4, brand, balance_usd_minor }) => ({ id, label, last4, brand, balance_usd_minor, ...cardFunding })) };
+        if (cardFundingFail) { responseCode = 503; data = { error: '模拟余额核算失败' }; }
+        if (cardFundingDelay) await delay(cardFundingDelay);
       } else if (request.method === 'PATCH' && (url.pathname === '/api/accounts/1/subscription' || url.pathname === '/api/accounts/1/subscription-package' || url.pathname === '/api/accounts/1/payment-card')) {
         if (accountSettingsFail) { responseCode = 409; data = { error: '模拟账号设置保存失败' }; }
         else {
@@ -500,6 +504,35 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await select('账号 chat@example.com 的付款卡', '运营测试卡 · •••• 4242');
   await wait('document.querySelector(".account-payment-card button").innerText.includes("运营测试卡") && !document.querySelector(".account-payment-card button").disabled');
   assert.equal(account.payment_card_id, 9);
+  await wait('document.querySelector(".account-card-balance")?.dataset.status === "sufficient"');
+  assert.ok(await evaluate('document.querySelector(".account-card-balance").textContent.includes("$1,000.00")'));
+  assert.ok(await evaluate('document.querySelector(".account-card-funding").textContent.includes("2 个续订 · 需 $40.00")'));
+  const fundingGreen = await evaluate('getComputedStyle(document.querySelector(".account-card-balance")).color');
+  account.renewal_date = renewalToday;
+  cardFunding = { ...cardFunding, required_usd_minor: 100001, funding_status: 'insufficient' };
+  cardFundingDelay = 300;
+  await evaluate('document.querySelector(".account-renewal-filters [data-status=soon]").click()');
+  await wait('document.querySelector(".account-card-balance")?.textContent === "余额核算中…"');
+  assert.notEqual(await evaluate('document.querySelector(".account-card-balance").dataset.status'), 'sufficient');
+  await wait('document.querySelector(".account-card-balance")?.dataset.status === "insufficient"');
+  assert.notEqual(await evaluate('getComputedStyle(document.querySelector(".account-card-balance")).color'), fundingGreen);
+  assert.ok(requests.some(value => { const url = new URL(value); return url.pathname === '/api/accounts/payment-cards' && url.searchParams.get('renewal_status') === 'soon'; }));
+  cardFunding = { ...cardFunding, required_usd_minor: 2000, unknown_count: 1, funding_status: 'unknown' };
+  // 修改产品选型会刷新所有卡的预算。
+  await select('账号 chat@example.com 的产品选型', productLabel);
+  await wait('document.querySelector(".account-card-funding")?.textContent.includes("1 个账号待核算")');
+  assert.equal(await evaluate('document.querySelector(".account-card-balance").dataset.status'), 'unknown');
+  cardFundingFail = true;
+  await evaluate('document.querySelector(".account-renewal-switch").click()');
+  await wait('document.querySelector(".account-card-balance")?.textContent === "余额暂不可用"');
+  assert.equal(await evaluate('document.querySelector(".account-card-balance").dataset.status'), 'unknown');
+  cardFundingFail = false; cardFundingDelay = 0;
+  cardFunding = { ...cardFunding, required_usd_minor: 4000, unknown_count: 0, funding_status: 'sufficient' };
+  await evaluate('document.querySelector(".account-renewal-switch").click()');
+  await wait('document.querySelector(".account-card-balance")?.dataset.status === "sufficient"');
+  account.renewal_date = originalRenewalDate;
+  await evaluate('document.querySelector(".account-renewal-filters [data-status=soon]").click()');
+  await wait('Boolean(document.querySelector(".account-row")) && !document.querySelector(".account-renewal-filters [aria-pressed=true]")');
   await cdp.send('Page.reload', {}, sessionId);
   await wait('document.querySelector(".account-payment-card button")?.innerText.includes("运营测试卡") && !document.querySelector(".account-payment-card button").disabled');
   accountSettingsFail = true;

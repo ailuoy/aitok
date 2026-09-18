@@ -328,6 +328,10 @@ button,input,textarea{font-family:inherit}
 :root[data-theme=light] .data-table .renewal-countdown[data-status=soon]{color:#947000}
 .data-table .renewal-countdown[data-status=today]{color:var(--danger)}
 .data-table .renewal-countdown[data-status=overdue]{color:#858585}
+.account-card-funding{margin-top:5px;font-variant-numeric:tabular-nums}
+.data-table .account-card-balance{font-weight:600}
+.data-table .account-card-balance[data-status=sufficient]{color:var(--success)}
+.data-table .account-card-balance[data-status=insufficient]{color:var(--danger)}
 .data-table .table-mono{font-family:monospace}
 .data-table .bank-card-notes{min-width:170px;white-space:pre-wrap}
 .data-table .table-selector{min-width:180px;width:190px}
