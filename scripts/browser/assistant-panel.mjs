@@ -87,7 +87,7 @@ function installPanel(version, isVerificationPage) {
       input.oninput = render;
       return { set(entriesValue, selected) { entries = entriesValue; summary.textContent = entries.find(entry => String(entry.id) === String(selected))?.label || empty; render(); } };
     };
-    const cards = picker('银行卡', '暂无银行卡', id => { cardID = id; cvc.value = ''; void showCard(); });
+    const cards = picker('银行卡', '请选择银行卡', id => { cardID = id; cvc.value = ''; void showCard(); });
     const cardDetails = create('dl', '', 'selected-details card-details', panel);
     const label = create('label', '安全码（未保存时可临时填写）', '', panel); const cvc = create('input', '', '', label); cvc.type = 'text'; cvc.inputMode = 'numeric'; cvc.maxLength = 4; cvc.autocomplete = 'off'; cvc.placeholder = '输入所选银行卡的安全码';
     cvc.oninput = updateCode;
@@ -126,7 +126,7 @@ function installPanel(version, isVerificationPage) {
       const request = ++cardRequest, selected = cardID;
       selectedCard = null; codeField = null; cvc.value = ''; label.hidden = true;
       cardDetails.replaceChildren();
-      if (!selected) { create('p', '暂无银行卡，请先在后台添加。', 'hint', cardDetails); return; }
+      if (!selected) { create('p', data.payment_card_id ? '账号绑定的付款卡不可用，请在后台检查绑定，或手动选择其他卡片。' : '暂无银行卡，请先在后台添加。', 'hint', cardDetails); return; }
       create('p', '正在读取银行卡…', 'hint', cardDetails);
       try {
         const { card } = await call('card', { card_id: selected });
@@ -152,7 +152,15 @@ function installPanel(version, isVerificationPage) {
     function updateStatus(status) { email.textContent = status.email || '—'; login.textContent = status.state === 'authenticated' ? '当前已登录' : status.state === 'rejected' ? '登录账号不一致' : status.state === 'login_required' ? '需要登录' : '正在确认登录'; plan.textContent = '当前套餐：' + (status.plan || '官网暂未提供'); }
     function updatePickers() { cards.set(data.cards.map(card => ({ id: card.id, label: card.label + ' · ' + card.brand + ' •••• ' + card.last4 })), cardID); addresses.set(data.addresses.map(address => ({ id: address.id, label: address.address_line1 + ', ' + address.city + ', ' + address.state + ' ' + address.postal_code })), addressID); }
     async function run(button, action) { button.disabled = true; message.textContent = '处理中…'; try { const result = await action(); message.textContent = result.message || ''; } catch (error) { message.textContent = error.message; } finally { button.disabled = false; } }
-    async function load() { const result = await call('load'); data = result; const previousCard = cardID; cardID = data.cards.some(card => card.id === cardID) ? cardID : data.cards[0]?.id || ''; if (previousCard !== cardID) cvc.value = ''; addressID = data.addresses.some(address => address.id === addressID) ? addressID : data.addresses[0]?.id || ''; updatePickers(); showAddress(); updateStatus(result.status); await showCard(); return { message: '已读取 ' + data.cards.length + ' 张银行卡、' + data.addresses.length + ' 条地址' }; }
+    async function load() {
+      const result = await call('load'); data = result;
+      const preferredCard = data.payment_card_id || cardID;
+      cardID = data.cards.some(card => card.id === preferredCard) ? preferredCard : data.payment_card_id ? '' : data.cards[0]?.id || '';
+      cvc.value = '';
+      addressID = data.addresses.some(address => address.id === addressID) ? addressID : data.addresses[0]?.id || '';
+      updatePickers(); showAddress(); updateStatus(result.status); await showCard();
+      return { message: '已读取 ' + data.cards.length + ' 张银行卡、' + data.addresses.length + ' 条地址' };
+    }
     refresh.onclick = event => { if (event.isTrusted) run(refresh, load); };
     document.body.append(host);
     position();

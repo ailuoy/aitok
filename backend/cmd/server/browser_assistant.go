@@ -63,8 +63,8 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		unauthorized()
 		return
 	}
-	var exists bool
-	if err = s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL))`, account, user).Scan(&exists); err != nil || !exists {
+	var paymentCardID *int64
+	if err = s.db.QueryRowContext(r.Context(), `SELECT payment_card_id FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM users WHERE id=$2 AND deleted_at IS NULL)`, account, user).Scan(&paymentCardID); err != nil {
 		unauthorized()
 		return
 	}
@@ -98,7 +98,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cards := []BankCard{}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards WHERE deleted_at IS NULL AND status='active' AND (exp_year,exp_month)>=(EXTRACT(YEAR FROM NOW())::int,EXTRACT(MONTH FROM NOW())::int) ORDER BY id DESC LIMIT 500`)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards WHERE deleted_at IS NULL AND status='active' AND (exp_year,exp_month)>=(EXTRACT(YEAR FROM NOW())::int,EXTRACT(MONTH FROM NOW())::int) ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END, id DESC LIMIT 500`, paymentCardID)
 	if err != nil {
 		cardError(w, err)
 		return
@@ -139,5 +139,5 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		addressError(w, err)
 		return
 	}
-	reply(w, map[string]any{"cards": cards, "addresses": addresses}, 200)
+	reply(w, map[string]any{"cards": cards, "addresses": addresses, "payment_card_id": paymentCardID}, 200)
 }

@@ -192,6 +192,29 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 	if snapshot["cards"].([]any)[1].(map[string]any)["platform"] != "新平台" {
 		t.Fatal("助手缺少卡平台")
 	}
+	if snapshot["payment_card_id"] != nil {
+		t.Fatal("未绑定付款卡时应返回空值")
+	}
+	if _, err := db.Exec(`UPDATE chatgpt_accounts SET payment_card_id=$1,updated_at=NOW() WHERE id=1`, id); err != nil {
+		t.Fatal(err)
+	}
+	bound := call("GET", "/api/browser-assistant", limited, nil, 200)
+	if bound["payment_card_id"] != float64(id) || bound["cards"].([]any)[0].(map[string]any)["id"] != float64(id) {
+		t.Fatal("助手应返回当前账号绑定的付款卡并优先列出")
+	}
+	if call("GET", "/api/browser-assistant", s.assistantToken(2, 2), nil, 200)["payment_card_id"] != nil {
+		t.Fatal("助手不能读取其他账号的付款卡绑定")
+	}
+	if _, err := db.Exec(`UPDATE bank_cards SET status='frozen',updated_at=NOW() WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	unavailable := call("GET", "/api/browser-assistant", limited, nil, 200)
+	if unavailable["payment_card_id"] != float64(id) || len(unavailable["cards"].([]any)) != 1 {
+		t.Fatal("绑定卡不可用时应保留绑定编号，但不能进入可用卡列表")
+	}
+	if _, err := db.Exec(`UPDATE bank_cards SET status='active',updated_at=NOW() WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
 	call("GET", fmt.Sprintf("/api/browser-assistant/cards/%d", id), s.assistantToken(2, 2), nil, 200)
 	if assistantCard := call("GET", fmt.Sprintf("/api/browser-assistant/cards/%d", id), limited, nil, 200)["card"].(map[string]any); assistantCard["cvc"] != "0042" {
 		t.Fatal("助手详情未返回已保存安全码")

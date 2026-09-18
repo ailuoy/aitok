@@ -23,13 +23,14 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   const demoCard = { id: 3, label: '演示 Amex（测试卡）', brand: 'Amex', last4: '0005', cardholder: 'TEST USER', exp_month: 12, exp_year: 2030 };
   const address = { id: 1, full_name: 'TEST USER', address_line1: '100 Test Road', address_line2: 'Unit 2', city: 'Portland', state: 'OR', postal_code: '97201', country: 'US' };
   let detailReads = 0;
+  let paymentCardID = null, boundCardAvailable = true;
   const server = http.createServer((request, response) => {
     assert.equal(request.headers.authorization, 'Bearer limited-test-token');
     response.setHeader('Content-Type', 'application/json');
     if (request.url.endsWith('/cards/1')) { detailReads++; response.end(JSON.stringify({ card: { ...card, number: '4242424242424242' } })); }
     else if (request.url.endsWith('/cards/2')) { detailReads++; response.end(JSON.stringify({ card: { ...secondCard, number: '5555555555554444', cvc: '0042' } })); }
     else if (request.url.endsWith('/cards/3')) { detailReads++; response.end(JSON.stringify({ card: { ...demoCard, number: '378282246310005' } })); }
-    else response.end(JSON.stringify({ cards: [card, secondCard, demoCard], addresses: [address] }));
+    else response.end(JSON.stringify({ cards: [card, secondCard, demoCard].filter(item => boundCardAvailable || item.id !== paymentCardID), addresses: [address], payment_card_id: paymentCardID }));
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => { server.closeAllConnections(); server.close(); });
@@ -67,6 +68,7 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
     const result = []; const walk = node => { result.push(node); for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) walk(child); }; walk(root); return result;
   }
   const text = node => (node.children || []).map(child => child.nodeValue || '').join('');
+  const hasCardDetails = async number => (await nodes()).some(node => node.nodeName === 'SPAN' && node.attributes?.includes('field-value') && text(node) === number);
   await wait(async () => (await nodes()).some(node => text(node).includes('已读取 3 张银行卡')));
   const bounds = () => evaluate('document.querySelector("#aitok-assistant").getBoundingClientRect().toJSON()');
   assert.ok(Math.abs((await bounds()).right - 1188) <= 1, '助手默认靠右');
@@ -148,6 +150,25 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   await click('复制测试安全码');
   await wait(async () => (await nodes()).some(node => text(node) === '测试安全码已复制'));
   assert.equal(await clipboard(), '1234');
+  paymentCardID = secondCard.id;
+  await click('刷新银行卡和地址');
+  await wait(() => hasCardDetails('5555555555554444'));
+  assert.equal((await detailField('名称')).value, '备用卡', '刷新后优先展示绑定卡，不选列表第一张或上次手动选择的卡');
+  await click('切换下一张卡');
+  await wait(() => hasCardDetails('378282246310005'));
+  await click('刷新银行卡和地址');
+  await wait(() => hasCardDetails('5555555555554444'));
+  boundCardAvailable = false;
+  const readsBeforeUnavailable = detailReads;
+  await click('刷新银行卡和地址');
+  await wait(async () => (await nodes()).some(node => text(node).includes('账号绑定的付款卡不可用')));
+  assert.equal(detailReads, readsBeforeUnavailable, '绑定卡不可用时不自动读取其他卡片');
+  assert.equal(await hasCardDetails('5555555555554444'), false, '清除旧卡详情');
+  paymentCardID = null;
+  await click('刷新银行卡和地址');
+  await wait(() => hasCardDetails('4242424242424242'));
+  boundCardAvailable = true;
+  paymentCardID = secondCard.id;
   await click('收起'); assert.equal(await evaluate('document.querySelector("#aitok-assistant").classList.contains("compact")'), true);
   const beforeDrag = await bounds(), point = await buttonPoint('账号助手');
   await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', buttons: 1, clickCount: 1 }, sessionId);
@@ -166,6 +187,8 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1200, height: 1100, deviceScaleFactor: 1, mobile: false }, sessionId);
   await cdp.send('Page.reload', {}, sessionId);
   await wait(() => evaluate('Boolean(document.getElementById("aitok-assistant"))'));
+  await wait(() => hasCardDetails('5555555555554444'));
+  assert.equal((await detailField('名称')).value, '备用卡', '重新打开页面时默认展示账号绑定卡');
   await evaluate('document.body.insertAdjacentHTML("beforeend", \'<form id="challenge-form">模拟验证页</form>\')');
   await wait(() => evaluate('!document.getElementById("aitok-assistant")'));
   await evaluate('document.getElementById("challenge-form").remove()');
