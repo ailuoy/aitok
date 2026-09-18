@@ -14,6 +14,7 @@ func TestAccountNotesListBeforeMigration(t *testing.T) {
 	db := walletTestDB(t)
 	// 仅在隔离临时表中模拟尚未新增 notes 字段的旧库。
 	_, err := db.Exec(`ALTER TABLE chatgpt_accounts RENAME COLUMN notes TO pending_notes;
+ALTER TABLE chatgpt_accounts RENAME COLUMN subscription_package_id TO pending_package_id;
 INSERT INTO users(id,email,password_hash,role) VALUES(1,'admin@notes.test','','admin');
 INSERT INTO chatgpt_accounts(id,user_id,label,email) VALUES(1,1,'旧库账号','account@notes.test');`)
 	if err != nil {

@@ -142,7 +142,7 @@ func TestDisputeLossRecoveryAndLateCreated(t *testing.T) {
 func TestPurchaseReversalAndReplacementOrder(t *testing.T) {
 	db := walletTestDB(t)
 	_, err := db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES(1,'operator@test.local','','admin');
- INSERT INTO chatgpt_accounts(id,user_id,label,email,verified_plan,verified_at,subscription_ends_at) VALUES(1,1,'Account','chat@test.local','plus',NOW(),'2030-02-01');
+ INSERT INTO chatgpt_accounts(id,user_id,label,email,verified_plan,verified_at,subscription_ends_at,subscription_package_id) VALUES(1,1,'Account','chat@test.local','plus',NOW(),'2030-02-01',1);
  INSERT INTO bank_cards(id,user_id,label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,balance_usd_minor) VALUES(1,1,'Card','User','encrypted','fingerprint','4242','Visa',12,2035,8500);
  INSERT INTO recharge_orders(id,order_no,user_id,account_id,account_email,package_id,package_snapshot,period_start,period_end,sale_usd_minor,request_key,payment_status,fulfillment_status,card_id,cost_usd_minor,purchase_reference,verified_at) VALUES(1,'order-1',1,1,'chat@test.local',1,'{"plan":"plus","months":1}','2030-01-01','2030-02-01',2000,'order-key-1','paid','completed',1,1500,'original-purchase',NOW()),(2,'order-2',1,1,'chat@test.local',1,'{"plan":"plus","months":1}','2030-02-01','2030-03-01',2000,'order-key-2','paid','pending',NULL,0,'',NULL);
  INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,balance_after_usd_minor) VALUES(1,1,'opening-test-key','opening',10000,10000);
@@ -167,7 +167,7 @@ func TestPurchaseReversalAndReplacementOrder(t *testing.T) {
 	var cost int64
 	var verified bool
 	db.QueryRow(`SELECT cost_usd_minor FROM recharge_orders WHERE id=1`).Scan(&cost)
-	db.QueryRow(`SELECT verified_at IS NOT NULL FROM chatgpt_accounts WHERE id=1`).Scan(&verified)
+	db.QueryRow(`SELECT verified_at IS NOT NULL OR subscription_package_id IS NOT NULL FROM chatgpt_accounts WHERE id=1`).Scan(&verified)
 	if cost != 0 || verified {
 		t.Fatal("reversal did not clear order verification", cost, verified)
 	}

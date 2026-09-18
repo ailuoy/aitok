@@ -234,6 +234,9 @@ func (s *Server) packages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, err = tx.ExecContext(r.Context(), `UPDATE recharge_packages SET deleted_at=NOW(),updated_at=NOW() WHERE id=$1`, id)
+		if err == nil {
+			_, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET subscription_package_id=NULL,updated_at=NOW() WHERE subscription_package_id=$1 AND deleted_at IS NULL`, id)
+		}
 	} else if id == 0 && r.Method == "POST" {
 		err = tx.QueryRowContext(r.Context(), `INSERT INTO recharge_packages(name,plan,region,currency,original_amount_minor,sale_usd_minor,wallet_tokens,months,enabled,notes,auto_usd) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`, in.Name, in.Plan, in.Region, in.Currency, in.OriginalAmountMinor, in.SaleUSDMinor, in.WalletTokens, in.Months, in.Enabled, in.Notes, in.AutoUSD).Scan(&id)
 	} else if id > 0 && r.Method == "PATCH" {

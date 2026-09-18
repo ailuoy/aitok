@@ -315,6 +315,11 @@ button,input,textarea{font-family:inherit}
 .data-table strong{font-weight:600}
 .data-table .table-text{min-width:120px;max-width:240px;white-space:normal;overflow-wrap:anywhere;line-height:1.55}
 .data-table .cell-secondary{display:block;font-size:11px;color:var(--muted);margin-top:3px;white-space:normal;overflow-wrap:anywhere}
+.data-table .renewal-countdown[data-status=safe]{color:var(--success)}
+.data-table .renewal-countdown[data-status=soon]{color:#e5b82e}
+:root[data-theme=light] .data-table .renewal-countdown[data-status=soon]{color:#947000}
+.data-table .renewal-countdown[data-status=today]{color:var(--danger)}
+.data-table .renewal-countdown[data-status=overdue]{color:#858585}
 .data-table .table-mono{font-family:monospace}
 .data-table .bank-card-notes{min-width:170px;white-space:pre-wrap}
 .data-table .table-selector{min-width:180px;width:190px}
@@ -327,7 +332,8 @@ button,input,textarea{font-family:inherit}
 .data-table .text-btn{font-size:11px;padding:5px 3px}
 .data-table .icon-btn{padding:5px;display:inline-flex}
 .data-table .proxy-result{font-size:11px;min-width:160px;gap:3px}
-.accounts-table{min-width:1530px}.proxy-table{min-width:1120px}.address-table{min-width:1050px}
+.data-table .account-product{min-width:240px;width:260px}
+.accounts-table{min-width:1790px}.proxy-table{min-width:1120px}.address-table{min-width:1050px}
 .table-sort{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;white-space:nowrap;cursor:pointer}
 .table-sort:hover,.table-sort:focus-visible{color:var(--accent)}
 .table-sort:focus-visible{outline:2px solid currentColor;outline-offset:4px;border-radius:2px}
@@ -380,3 +386,6 @@ button,input,textarea{font-family:inherit}
 .account-notes .text-btn{font-size:12px}
 .account-notes-dialog{width:min(680px,calc(100vw - 32px))}
 .account-notes-dialog textarea{min-height:260px;resize:vertical;white-space:pre-wrap}
+
+.account-actions .quick-month-order{flex-basis:100%;width:max-content;max-width:max-content}
+.quick-order-period{grid-column:1 / -1;margin:0}

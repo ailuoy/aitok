@@ -13,7 +13,7 @@ import (
 func TestUnifiedOrderRecording(t *testing.T) {
 	db := walletTestDB(t)
 	_, err := db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES(1,'record@test.local','','admin'),(2,'user@test.local','','user');
-INSERT INTO chatgpt_accounts(id,user_id,label,email) VALUES(1,1,'Account','account@test.local'),(2,1,'Second','second@test.local'),(3,1,'Third','third@test.local');
+INSERT INTO chatgpt_accounts(id,user_id,label,email,payment_card_id) VALUES(1,1,'Account','account@test.local',1),(2,1,'Second','second@test.local',1),(3,1,'Third','third@test.local',1);
 INSERT INTO recharge_packages(id,name,plan,region,currency,original_amount_minor,sale_usd_minor,months,enabled) VALUES(1,'Plus','plus','PH','PHP',100000,20000,1,true);
 INSERT INTO bank_cards(id,user_id,label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,balance_usd_minor) VALUES(1,1,'Card','Tester','encrypted','fingerprint','4242','Visa',12,2035,10000);
 INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at,created_at,updated_at) VALUES('PHP','USD',0.02,'test',NOW(),NOW(),NOW()),('PHP','CNY',0.14,'test',NOW(),NOW(),NOW());`)
@@ -49,6 +49,28 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 	input["received_currency"] = "PHP"
 	call("POST", "/api/orders/record", 1, input, 400)
 	input["received_currency"] = "USD"
+	// 绑定缺失、卡片不可用或客户端指定其他卡时，录入必须整笔回滚。
+	for _, cardState := range []struct{ query, message string }{
+		{`UPDATE chatgpt_accounts SET payment_card_id=NULL,updated_at=NOW() WHERE id=1`, "未绑定付款卡"},
+		{`UPDATE chatgpt_accounts SET payment_card_id=1,updated_at=NOW() WHERE id=1; UPDATE bank_cards SET status='frozen',updated_at=NOW() WHERE id=1`, "已停用"},
+		{`UPDATE bank_cards SET status='active',exp_year=2020,updated_at=NOW() WHERE id=1`, "过期"},
+		{`UPDATE bank_cards SET exp_year=2035,deleted_at=NOW(),updated_at=NOW() WHERE id=1`, "删除"},
+	} {
+		if _, err = db.Exec(cardState.query); err != nil {
+			t.Fatal(err)
+		}
+		if failed := call("POST", "/api/orders/record", 1, input, 409); !strings.Contains(failed["error"].(string), cardState.message) {
+			t.Fatal("应提示绑定卡问题", failed)
+		}
+	}
+	if _, err = db.Exec(`UPDATE bank_cards SET deleted_at=NULL,updated_at=NOW() WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	input["card_id"] = 999
+	if failed := call("POST", "/api/orders/record", 1, input, 409); !strings.Contains(failed["error"].(string), "已变更") {
+		t.Fatal("不能指定非绑定卡", failed)
+	}
+	input["card_id"] = 1
 	if failed := call("POST", "/api/orders/record", 1, input, 409); !strings.Contains(failed["error"].(string), "余额不足") {
 		t.Fatal("应提示余额不足", failed)
 	}
@@ -74,7 +96,14 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 	}
 	first := call("POST", "/api/orders/record", 1, input, 201)
 	op := fmt.Sprintf("/api/orders/%.0f", first["id"])
+	// 已完成请求重放不受后续解绑影响，仍返回原结果且不再次扣款。
+	if _, err = db.Exec(`UPDATE chatgpt_accounts SET payment_card_id=NULL,updated_at=NOW() WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	call("POST", "/api/orders/record", 1, input, 200)
+	if _, err = db.Exec(`UPDATE chatgpt_accounts SET payment_card_id=1,updated_at=NOW() WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	// 不同账号使用同一真实交易号必须拒绝，整笔订单和扣款回滚。
 	input["account_id"], input["request_key"] = 2, "duplicate-transaction-record"
 	if failed := call("POST", "/api/orders/record", 1, input, 409); !strings.Contains(failed["error"].(string), "同一笔交易不能重复录入") {
@@ -125,10 +154,11 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 	input["collection_rate_id"] = 0
 	call("POST", "/api/orders/record", 1, input, 409)
 	input["collection_rate_id"] = quote["exchange_rate"].(map[string]any)["batch"].(map[string]any)["id"]
+	delete(input, "card_id") // 不传卡片也必须由后端使用账号绑定卡。
 	second := call("POST", "/api/orders/record", 1, input, 201)
 	secondPath := fmt.Sprintf("/api/orders/%.0f", second["id"])
 	order = call("GET", secondPath, 1, nil, 200)["order"].(map[string]any)
-	if order["received_usd_minor"] != float64(24000) || order["profit"].(map[string]any)["usd_minor"] != float64(4000) || order["profit"].(map[string]any)["estimated"] != false {
+	if order["card_id"] != float64(1) || order["received_usd_minor"] != float64(24000) || order["profit"].(map[string]any)["usd_minor"] != float64(4000) || order["profit"].(map[string]any)["estimated"] != false {
 		t.Fatal("合并录入实收及毛利错误", order)
 	}
 	// 旧已收款未扣款订单只补录卡片支出，保留旧实收。
@@ -143,6 +173,11 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 	call("POST", thirdPath, 1, record, 409)
 	delete(record, "received_currency")
 	delete(record, "received_amount")
+	record["card_id"] = 999
+	if failed := call("POST", thirdPath, 1, record, 409); !strings.Contains(failed["error"].(string), "已变更") {
+		t.Fatal("补录不能指定非绑定卡", failed)
+	}
+	delete(record, "card_id")
 	// 旧订单补录改为今日生效时，也必须重新检查订单周期，不能覆盖未扣款的有效订单。
 	blocker := call("POST", "/api/orders", 1, map[string]any{"account_id": 3, "package_id": 1, "period_start": order["period_start"], "request_key": "legacy-current-blocker"}, 201)
 	call("POST", thirdPath, 1, record, 409)
@@ -158,7 +193,7 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 		t.Fatal("订单和扣款重复或缺失", orders, ledger, balance, err)
 	}
 	var consistent int
-	err = db.QueryRow(`SELECT count(*) FROM recharge_orders o JOIN bank_card_ledger l ON l.order_id=o.id JOIN chatgpt_accounts a ON a.id=o.account_id WHERE o.fulfillment_status='completed' AND o.period_start=(l.created_at AT TIME ZONE 'Asia/Shanghai')::date AND o.period_end=(o.period_start+INTERVAL '1 month')::date AND l.period_start=o.period_start AND l.period_end=o.period_end AND o.verified_at=l.created_at AND a.verified_at=o.verified_at AND a.verified_plan='plus' AND a.subscription_ends_at=o.period_end AND a.renewal_date=o.period_end`).Scan(&consistent)
+	err = db.QueryRow(`SELECT count(*) FROM recharge_orders o JOIN bank_card_ledger l ON l.order_id=o.id JOIN chatgpt_accounts a ON a.id=o.account_id WHERE o.fulfillment_status='completed' AND o.period_start=(l.created_at AT TIME ZONE 'Asia/Shanghai')::date AND o.period_end=(o.period_start+INTERVAL '1 month')::date AND l.period_start=o.period_start AND l.period_end=o.period_end AND o.verified_at=l.created_at AND a.verified_at=o.verified_at AND a.verified_plan='plus' AND a.subscription_package_id=o.package_id AND a.subscription_ends_at=o.period_end AND a.renewal_date=o.period_end`).Scan(&consistent)
 	if err != nil || consistent != 3 {
 		t.Fatal("订单、流水和账号须按实际扣款时间同步开通", consistent, err)
 	}

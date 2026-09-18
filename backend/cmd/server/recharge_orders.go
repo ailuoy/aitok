@@ -211,6 +211,10 @@ func (s *Server) createRechargeOrder(w http.ResponseWriter, r *http.Request, use
 		reply(w, map[string]string{"error": "请选择账号、套餐并填写有效的订单信息"}, 400)
 		return
 	}
+	if in.QuickMonth && !recording {
+		reply(w, map[string]string{"error": "快速月订单请使用录入订单入口"}, 400)
+		return
+	}
 	in.OrderSource = strings.Join(strings.Fields(in.OrderSource), " ")
 	if utf8.RuneCountInString(in.OrderSource) > 80 {
 		reply(w, map[string]string{"error": "订单来源不能超过 80 字"}, 400)
@@ -238,7 +242,9 @@ func (s *Server) createRechargeOrder(w http.ResponseWriter, r *http.Request, use
 	// 账号锁覆盖并发下单；用户锁确保禁用后不能继续创建业务对象。
 	var owner int64
 	var email string
-	err = tx.QueryRowContext(r.Context(), `SELECT a.user_id,lower(trim(a.email)) FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id WHERE a.id=$1 AND a.deleted_at IS NULL AND u.deleted_at IS NULL AND NOT u.disabled AND (a.user_id=$2 OR $3) FOR UPDATE OF a FOR SHARE OF u`, in.AccountID, user, admin).Scan(&owner, &email)
+	var renewalDate *time.Time
+	var subscriptionPackageID *int64
+	err = tx.QueryRowContext(r.Context(), `SELECT a.user_id,lower(trim(a.email)),a.renewal_date,(to_jsonb(a)->>'subscription_package_id')::bigint FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id WHERE a.id=$1 AND a.deleted_at IS NULL AND u.deleted_at IS NULL AND NOT u.disabled AND (a.user_id=$2 OR $3) FOR UPDATE OF a FOR SHARE OF u`, in.AccountID, user, admin).Scan(&owner, &email, &renewalDate, &subscriptionPackageID)
 	if err != nil {
 		operationError(w, err)
 		return
@@ -268,6 +274,16 @@ func (s *Server) createRechargeOrder(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 	if recording {
+		if in.QuickMonth {
+			date := ""
+			if renewalDate != nil {
+				date = renewalDate.Format("2006-01-02")
+			}
+			if date != *in.ExpectedRenewalDate || subscriptionPackageID == nil || *subscriptionPackageID != in.PackageID {
+				reply(w, map[string]string{"error": "账号的产品选型或续订日期已变更，请重新打开月订单确认"}, 409)
+				return
+			}
+		}
 		var postedAt time.Time
 		if err = tx.QueryRowContext(r.Context(), `SELECT NOW()`).Scan(&postedAt); err != nil {
 			operationError(w, err)
@@ -275,12 +291,19 @@ func (s *Server) createRechargeOrder(w http.ResponseWriter, r *http.Request, use
 		}
 		day, _ := chargedOrderPeriod(postedAt, 1)
 		start, _ = time.Parse("2006-01-02", day)
+		if in.QuickMonth && renewalDate != nil {
+			start = *renewalDate
+		}
 	}
 	var pkg RechargePackage
 	var raw json.RawMessage
 	err = tx.QueryRowContext(r.Context(), `SELECT to_jsonb(p) FROM recharge_packages p WHERE id=$1 AND deleted_at IS NULL AND enabled FOR SHARE`, in.PackageID).Scan(&raw)
 	if err != nil || json.Unmarshal(raw, &pkg) != nil {
 		operationError(w, sql.ErrNoRows)
+		return
+	}
+	if in.QuickMonth && (pkg.Months != 1 || start.Year() < 2000 || start.Year() > 9996) {
+		reply(w, map[string]string{"error": "快速月订单需要一个月套餐及有效续订日期，请先在账号管理中设置"}, 400)
 		return
 	}
 	var rate *ExchangeRate
@@ -340,7 +363,11 @@ func (s *Server) createRechargeOrder(w http.ResponseWriter, r *http.Request, use
 	}
 	if err == nil && recording {
 		o := RechargeOrder{OrderSource: in.OrderSource, ID: id, OrderNo: no, UserID: owner, AccountID: in.AccountID, AccountEmail: email, PackageID: in.PackageID, Package: pkg, PeriodStart: start.Format("2006-01-02"), PeriodEnd: end.Format("2006-01-02"), SaleUSDMinor: pkg.SaleUSDMinor, WalletTokens: pkg.WalletTokens, OrderStatus: "active", PaymentStatus: "unpaid", FulfillmentStatus: "pending"}
-		err = recordOrderPosting(r, tx, user, &o, in.orderRecording, in.RequestKey)
+		recordingInput := in.orderRecording
+		recordingInput.CardID, err = boundOrderPaymentCard(r, tx, o.AccountID, in.CardID)
+		if err == nil {
+			err = recordOrderPosting(r, tx, user, &o, recordingInput, in.RequestKey)
+		}
 		if err == nil {
 			err = saveRecordedOrder(r, tx, o)
 		}
@@ -465,7 +492,11 @@ func (s *Server) orderAction(w http.ResponseWriter, r *http.Request, user, id in
 	}
 	switch in.Action {
 	case "record":
-		err = recordOrderPosting(r, tx, user, &o, orderRecording{OrderSource: in.OrderSource, CardID: in.CardID, Reference: in.Reference, Evidence: in.Evidence, ReceivedCurrency: in.ReceivedCurrency, ReceivedAmount: in.ReceivedAmount, CollectionRateID: in.CollectionRateID}, in.RequestKey)
+		var cardID int64
+		cardID, err = boundOrderPaymentCard(r, tx, o.AccountID, in.CardID)
+		if err == nil {
+			err = recordOrderPosting(r, tx, user, &o, orderRecording{OrderSource: in.OrderSource, CardID: cardID, Reference: in.Reference, Evidence: in.Evidence, ReceivedCurrency: in.ReceivedCurrency, ReceivedAmount: in.ReceivedAmount, CollectionRateID: in.CollectionRateID}, in.RequestKey)
+		}
 	case "collect":
 		if o.PaymentStatus != "unpaid" || o.FulfillmentStatus == "cancelled" {
 			fail("订单已收款或已取消")

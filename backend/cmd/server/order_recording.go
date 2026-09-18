@@ -13,21 +13,26 @@ import (
 
 // 一次录入：未收款订单必须填写实收，订单、卡片扣款和审计共用调用方事务。
 type orderRecording struct {
-	OrderSource      string `json:"order_source,omitempty"`
-	CardID           int64  `json:"card_id"`
-	Reference        string `json:"reference"`
-	Evidence         string `json:"evidence"`
-	ReceivedCurrency string `json:"received_currency"`
-	ReceivedAmount   string `json:"received_amount"`
-	CollectionRateID int64  `json:"collection_rate_id"`
+	QuickMonth          bool    `json:"quick_month,omitempty"`
+	ExpectedRenewalDate *string `json:"expected_renewal_date,omitempty"`
+	OrderSource         string  `json:"order_source,omitempty"`
+	CardID              int64   `json:"card_id"`
+	Reference           string  `json:"reference"`
+	Evidence            string  `json:"evidence"`
+	ReceivedCurrency    string  `json:"received_currency"`
+	ReceivedAmount      string  `json:"received_amount"`
+	CollectionRateID    int64   `json:"collection_rate_id"`
 }
 
 func (in orderRecording) validate() error {
+	if in.QuickMonth && (in.ExpectedRenewalDate == nil || in.ReceivedCurrency != "CNY") {
+		return errors.New("快速月订单须确认当前续订日期并填写 CNY 实收金额")
+	}
 	if utf8.RuneCountInString(in.OrderSource) > 80 {
 		return errors.New("订单来源不能超过 80 字")
 	}
-	if in.CardID < 1 || strings.TrimSpace(in.Reference) == "" || len(in.Reference) > 200 || strings.TrimSpace(in.Evidence) == "" {
-		return errors.New("请选择付款卡，填写交易号及凭据")
+	if in.CardID < 0 || strings.TrimSpace(in.Reference) == "" || len(in.Reference) > 200 || strings.TrimSpace(in.Evidence) == "" {
+		return errors.New("请填写有效的交易号及凭据")
 	}
 	if err := validateEvidence(in.Evidence); err != nil {
 		return err
@@ -42,6 +47,30 @@ func (in orderRecording) validate() error {
 		}
 	}
 	return nil
+}
+
+// 录入和补录从账号读取付款卡；前端卡号仅用于发现表单打开后发生的换绑。
+func boundOrderPaymentCard(r *http.Request, tx *sql.Tx, accountID, expectedCardID int64) (int64, error) {
+	var cardID *int64
+	err := tx.QueryRowContext(r.Context(), `SELECT a.payment_card_id FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL AND NOT u.disabled WHERE a.id=$1 AND a.deleted_at IS NULL FOR UPDATE OF a`, accountID).Scan(&cardID)
+	if err != nil {
+		return 0, err
+	}
+	if cardID == nil {
+		return 0, operationConflict("账号未绑定付款卡，请先在账号管理中绑定")
+	}
+	if expectedCardID != 0 && expectedCardID != *cardID {
+		return 0, operationConflict("账号绑定的付款卡已变更，请重新打开录入窗口确认")
+	}
+	var available bool
+	err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM bank_cards c WHERE c.id=$1 AND `+usablePaymentCard+`)`, *cardID).Scan(&available)
+	if err != nil {
+		return 0, err
+	}
+	if !available {
+		return 0, operationConflict("账号绑定的付款卡已停用、过期或删除，请先在账号管理中处理")
+	}
+	return *cardID, nil
 }
 
 func applyReceipt(r *http.Request, tx *sql.Tx, o *RechargeOrder, currency, amount string, rateID int64) error {
@@ -89,13 +118,19 @@ func recordOrderPosting(r *http.Request, tx *sql.Tx, user int64, o *RechargeOrde
 			return err
 		}
 	}
+	// 旧订单可按历史快照记账；已删除的套餐不建立当前选型关联。
+	var subscriptionPackageID *int64
+	err := tx.QueryRowContext(r.Context(), `SELECT id FROM recharge_packages WHERE id=$1 AND deleted_at IS NULL FOR SHARE`, o.PackageID).Scan(&subscriptionPackageID)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
 	// 与流水使用同一事务时间；旧订单补录也从实际扣款日开始。
 	var postedAt time.Time
 	var previous *time.Time
 	if err := tx.QueryRowContext(r.Context(), `SELECT renewal_date,NOW() FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, o.AccountID).Scan(&previous, &postedAt); err != nil {
 		return err
 	}
-	start, end := chargedOrderPeriod(postedAt, o.Package.Months)
+	start, end := recordedOrderPeriod(postedAt, o.Package.Months, previous, in.QuickMonth)
 	if _, err := tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('recharge-cycle'),hashtext($1))`, strconv.FormatInt(o.UserID, 10)+":"+o.AccountEmail); err != nil {
 		return err
 	}
@@ -119,7 +154,7 @@ func recordOrderPosting(r *http.Request, tx *sql.Tx, user int64, o *RechargeOrde
 		o.OrderSource = in.OrderSource
 	}
 	// 复用历史订阅字段保存开通结果，账号有效期与扣款同事务提交。
-	if _, err := tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET verified_plan=$2,verified_at=$3,subscription_ends_at=$4,renewal_date=$4,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, o.AccountID, o.Package.Plan, postedAt, end); err != nil {
+	if _, err := tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET verified_plan=$2,verified_at=$3,subscription_ends_at=$4,renewal_date=$4,subscription_package_id=$5,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, o.AccountID, o.Package.Plan, postedAt, end, subscriptionPackageID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(r.Context(), `INSERT INTO renewal_date_audit(account_id,admin_id,previous_date,renewal_date) VALUES($1,$2,$3,$4)`, o.AccountID, user, previous, end); err != nil {
@@ -149,4 +184,12 @@ func chargedOrderPeriod(postedAt time.Time, months int) (string, string) {
 	local := postedAt.In(time.FixedZone("UTC+8", 8*60*60))
 	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
 	return start.Format("2006-01-02"), addMonthsClamped(start, months).Format("2006-01-02")
+}
+
+// 快速月订单从当前续订日期续一个月；未设置时使用扣款当天，月末截断。
+func recordedOrderPeriod(postedAt time.Time, months int, previous *time.Time, quickMonth bool) (string, string) {
+	if quickMonth && previous != nil {
+		return previous.Format("2006-01-02"), addMonthsClamped(*previous, 1).Format("2006-01-02")
+	}
+	return chargedOrderPeriod(postedAt, months)
 }

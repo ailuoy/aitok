@@ -17,33 +17,34 @@ import (
 )
 
 type Account struct {
-	BillingAddress       json.RawMessage `json:"billing_address"`
-	BillingAddressID     *int64          `json:"billing_address_id"`
-	BillingAddressLabel  string          `json:"billing_address_label"`
-	ID                   int64           `json:"id"`
-	UserID               int64           `json:"user_id"`
-	Label                string          `json:"label"`
-	Notes                string          `json:"notes"`
-	Email                string          `json:"email"`
-	OwnerEmail           string          `json:"owner_email"`
-	CreatedAt            time.Time       `json:"created_at"`
-	RenewalDate          *string         `json:"renewal_date"`
-	HasSession           bool            `json:"has_session"`
-	GroupID              *int64          `json:"group_id"`
-	VerifiedPlan         string          `json:"verified_plan"`
-	VerifiedAt           *time.Time      `json:"verified_at"`
-	SubscriptionEndsAt   *string         `json:"subscription_ends_at"`
-	RenewalEnabled       bool            `json:"renewal_enabled"`
-	PaymentCardID        *int64          `json:"payment_card_id"`
-	PaymentCardLabel     string          `json:"payment_card_label"`
-	PaymentCardLast4     string          `json:"payment_card_last4"`
-	PaymentCardAvailable bool            `json:"payment_card_available"`
-	LastLoginAt          *time.Time      `json:"last_login_at"`
+	BillingAddress        json.RawMessage `json:"billing_address"`
+	BillingAddressID      *int64          `json:"billing_address_id"`
+	BillingAddressLabel   string          `json:"billing_address_label"`
+	ID                    int64           `json:"id"`
+	UserID                int64           `json:"user_id"`
+	Label                 string          `json:"label"`
+	Notes                 string          `json:"notes"`
+	Email                 string          `json:"email"`
+	OwnerEmail            string          `json:"owner_email"`
+	CreatedAt             time.Time       `json:"created_at"`
+	RenewalDate           *string         `json:"renewal_date"`
+	HasSession            bool            `json:"has_session"`
+	GroupID               *int64          `json:"group_id"`
+	SubscriptionPackageID *int64          `json:"subscription_package_id"`
+	VerifiedPlan          string          `json:"verified_plan"`
+	VerifiedAt            *time.Time      `json:"verified_at"`
+	SubscriptionEndsAt    *string         `json:"subscription_ends_at"`
+	RenewalEnabled        bool            `json:"renewal_enabled"`
+	PaymentCardID         *int64          `json:"payment_card_id"`
+	PaymentCardLabel      string          `json:"payment_card_label"`
+	PaymentCardLast4      string          `json:"payment_card_last4"`
+	PaymentCardAvailable  bool            `json:"payment_card_available"`
+	LastLoginAt           *time.Time      `json:"last_login_at"`
 }
 
 func (s *Server) listAccounts(ctx context.Context, id int64, admin bool) ([]Account, error) {
 	// 增量迁移执行前仍可读取原账号列表；备注保存要求已完成 030 迁移。
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.user_id,a.label,COALESCE(to_jsonb(a)->>'notes',''),a.email,u.email,a.created_at,a.renewal_date::text,COALESCE(a.session_ciphertext,'')<>'',a.group_id,a.last_login_at,a.verified_plan,a.verified_at,a.subscription_ends_at::text,a.renewal_enabled,c.id,COALESCE(c.label,''),COALESCE(c.last4,''),COALESCE(`+usablePaymentCard+`,false),a.billing_address_id,COALESCE(concat_ws(', ',NULLIF(b.address_line1,''),NULLIF(b.city,''),NULLIF(b.state,''),NULLIF(b.postal_code,'')),''),`+accountBillingAddressValue+` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL LEFT JOIN addresses b ON b.id=a.billing_address_id AND b.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) ORDER BY a.id DESC`, id, admin)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.user_id,a.label,COALESCE(to_jsonb(a)->>'notes',''),(to_jsonb(a)->>'subscription_package_id')::bigint,a.email,u.email,a.created_at,a.renewal_date::text,COALESCE(a.session_ciphertext,'')<>'',a.group_id,a.last_login_at,a.verified_plan,a.verified_at,a.subscription_ends_at::text,a.renewal_enabled,c.id,COALESCE(c.label,''),COALESCE(c.last4,''),COALESCE(`+usablePaymentCard+`,false),a.billing_address_id,COALESCE(concat_ws(', ',NULLIF(b.address_line1,''),NULLIF(b.city,''),NULLIF(b.state,''),NULLIF(b.postal_code,'')),''),`+accountBillingAddressValue+` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL LEFT JOIN addresses b ON b.id=a.billing_address_id AND b.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) ORDER BY a.id DESC`, id, admin)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +53,7 @@ func (s *Server) listAccounts(ctx context.Context, id int64, admin bool) ([]Acco
 	for rows.Next() {
 		var a Account
 		var billingAddress []byte
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Label, &a.Notes, &a.Email, &a.OwnerEmail, &a.CreatedAt, &a.RenewalDate, &a.HasSession, &a.GroupID, &a.LastLoginAt, &a.VerifiedPlan, &a.VerifiedAt, &a.SubscriptionEndsAt, &a.RenewalEnabled, &a.PaymentCardID, &a.PaymentCardLabel, &a.PaymentCardLast4, &a.PaymentCardAvailable, &a.BillingAddressID, &a.BillingAddressLabel, &billingAddress); err != nil {
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Label, &a.Notes, &a.SubscriptionPackageID, &a.Email, &a.OwnerEmail, &a.CreatedAt, &a.RenewalDate, &a.HasSession, &a.GroupID, &a.LastLoginAt, &a.VerifiedPlan, &a.VerifiedAt, &a.SubscriptionEndsAt, &a.RenewalEnabled, &a.PaymentCardID, &a.PaymentCardLabel, &a.PaymentCardLast4, &a.PaymentCardAvailable, &a.BillingAddressID, &a.BillingAddressLabel, &billingAddress); err != nil {
 			return nil, err
 		}
 		a.BillingAddress = billingAddress
@@ -189,6 +190,10 @@ func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(parts) == 2 && parts[1] == "subscription" {
 		s.subscriptionSettings(w, r, id, aid)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "subscription-package" {
+		s.setAccountSubscriptionPackage(w, r, id, aid)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "notes" {

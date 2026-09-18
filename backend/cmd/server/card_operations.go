@@ -132,7 +132,7 @@ func postCardEntry(r *http.Request, tx *sql.Tx, actor, cardID int64, p cardPosti
 				return err
 			}
 			// 仅撤销由此订单产生的最近核验，不能抹掉后续周期已核验的订阅。
-			_, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts a SET verified_plan='',verified_at=NULL,subscription_ends_at=NULL,updated_at=NOW() FROM recharge_orders o WHERE o.id=$1 AND a.id=o.account_id AND a.verified_at=o.verified_at AND a.deleted_at IS NULL`, orderID.Int64)
+			_, err = tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts a SET verified_plan='',verified_at=NULL,subscription_ends_at=NULL,subscription_package_id=CASE WHEN a.subscription_package_id=o.package_id THEN NULL ELSE a.subscription_package_id END,updated_at=NOW() FROM recharge_orders o WHERE o.id=$1 AND a.id=o.account_id AND a.verified_at=o.verified_at AND a.deleted_at IS NULL`, orderID.Int64)
 			if err != nil {
 				return err
 			}

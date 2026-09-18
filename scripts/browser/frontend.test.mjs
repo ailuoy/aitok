@@ -33,7 +33,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   const account = { id: 1, user_id: 1, label: '工作账号', email: 'chat@example.com', has_session: true, renewal_enabled: true, payment_card_id: null };
   const errors = [], imported = [], launches = [], requests = [];
   const localLaunches = [], localRequests = [], blankLaunches = [];
-  let notesFail = false, blankFail = false;
+  let notesFail = false, blankFail = false, quickOrderFail = false;
+  let failedQuickInput;
   let fingerprintResets = 0;
   let localFingerprint = null;
   let localState = 'closed', exportCount = 0, exportExpired = false;
@@ -143,11 +144,14 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const currency=url.searchParams.get('currency'),amountMinor=Math.round(Number(url.searchParams.get('amount'))*100);
         const usdMinor=currency==='CNY'?Math.round(amountMinor/7):amountMinor;
         data={currency,amount_minor:amountMinor,usd_minor:usdMinor,exchange_rate:{usd_per_unit:currency==='CNY'?'1/7':'1',...(currency==='CNY'?{batch:{id:99,source:'test',effective_at:new Date().toISOString(),synced_at:new Date().toISOString()}}:{})},profit:{usd_minor:usdMinor-20000,received_minor:amountMinor-(currency==='CNY'?140000:20000),cost_usd_minor:20000,rate_percent:((usdMinor-20000)/usdMinor*100).toFixed(2),estimated:true}};
+      } else if (url.pathname === '/api/orders/record' && request.method === 'POST' && quickOrderFail) {
+        failedQuickInput = JSON.parse(request.postData);
+        responseCode = 409; data = { error: '模拟月订单记账失败' };
       } else if (url.pathname.startsWith('/api/orders')) {
         const input=request.postData?JSON.parse(request.postData):{};
         if(request.method==='POST') {
           operationWrites.push(input);
-          if(url.pathname==='/api/orders/record') { input.action='record'; rechargeOrders.push({id:1,order_no:'order-smoke-1',order_status:'active',account_email:account.email,package_snapshot:rechargePackages[0],period_start:'2030-01-01',period_end:'2030-02-01',payment_status:'unpaid',fulfillment_status:'pending',sale_usd_minor:20000,wallet_tokens:100,cost_usd_minor:0,refunded_usd_minor:0,version:0}); }
+          if(url.pathname==='/api/orders/record') { input.action='record'; rechargeOrders.push({id:1,order_no:'order-smoke-1',order_status:'active',account_id:account.id,account_email:account.email,package_snapshot:rechargePackages[0],period_start:'2030-01-01',period_end:'2030-02-01',payment_status:'unpaid',fulfillment_status:'pending',sale_usd_minor:20000,wallet_tokens:100,cost_usd_minor:0,refunded_usd_minor:0,version:0}); }
           {
             const order=rechargeOrders[0];order.version++;
             if(input.action==='record' && input.received_amount) {
@@ -156,6 +160,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
               order.received_usd_minor=input.received_currency==='CNY'?Math.round(order.received_amount_minor/7):order.received_amount_minor;
               order.profit={usd_minor:order.received_usd_minor-order.sale_usd_minor,received_minor:order.received_amount_minor-(input.received_currency==='CNY'?order.sale_usd_minor*7:order.sale_usd_minor),rate_percent:((order.received_usd_minor-order.sale_usd_minor)/order.received_usd_minor*100).toFixed(2),cost_usd_minor:order.sale_usd_minor,estimated:true};
             }
+            if(input.quick_month) account.renewal_date = '2030-02-28';
             if(input.action==='record'){order.order_source=input.order_source || order.order_source || '';order.cost_usd_minor=order.sale_usd_minor;order.fulfillment_status='completed';if(order.profit)order.profit.estimated=false}
             if(input.action==='refund_note'){order.order_status='refunded';order.profit=null}
             if(input.action==='discard'){order.order_status='discarded';order.profit=null}
@@ -269,7 +274,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         }
       } else if (url.pathname === '/api/accounts/payment-cards') {
         data = { cards: bankCards.map(({ id, label, last4, brand }) => ({ id, label, last4, brand })) };
-      } else if (request.method === 'PATCH' && (url.pathname === '/api/accounts/1/subscription' || url.pathname === '/api/accounts/1/payment-card')) {
+      } else if (request.method === 'PATCH' && (url.pathname === '/api/accounts/1/subscription' || url.pathname === '/api/accounts/1/subscription-package' || url.pathname === '/api/accounts/1/payment-card')) {
         if (accountSettingsFail) { responseCode = 409; data = { error: '模拟账号设置保存失败' }; }
         else {
           const input = JSON.parse(request.postData);
@@ -457,6 +462,22 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("暂无充值订单")');
   bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000,exp_month:12,exp_year:2035,status:'active'}];
   await navigateAdmin('accounts');
+  const productLabel = `${rechargePackages[0].name} · ${rechargePackages[0].region} · ${rechargePackages[0].months}个月`;
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th")).slice(1, 4).map(th => th.textContent.trim())'), ['所属用户', '产品选型', '分组']);
+  await select('账号 chat@example.com 的产品选型', productLabel, rechargePackages[0].region);
+  await wait('document.querySelector(".account-product button").innerText.includes("测试 Plus") && !document.querySelector(".account-product button").disabled');
+  assert.equal(account.subscription_package_id, rechargePackages[0].id);
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-product button")?.innerText.includes("测试 Plus") && !document.querySelector(".account-product button").disabled');
+  accountSettingsFail = true;
+  await select('账号 chat@example.com 的产品选型', '未设置');
+  await wait('document.body.innerText.includes("模拟账号设置保存失败") && !document.querySelector(".account-product button").disabled');
+  assert.equal(account.subscription_package_id, rechargePackages[0].id);
+  assert.equal(await evaluate('document.querySelector(".account-product button").innerText'), productLabel);
+  accountSettingsFail = false;
+  await select('账号 chat@example.com 的产品选型', '未设置');
+  await wait('document.querySelector(".account-product button").innerText === "未设置" && !document.querySelector(".account-product button").disabled');
+  assert.equal(account.subscription_package_id, null);
   await wait('Boolean(document.querySelector(".account-payment-card button:not(:disabled)"))');
   await select('账号 chat@example.com 的付款卡', '运营测试卡 · •••• 4242');
   await wait('document.querySelector(".account-payment-card button").innerText.includes("运营测试卡") && !document.querySelector(".account-payment-card button").disabled');
@@ -506,10 +527,22 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(account.billing_address_id, null);
   await writeFile(join(directory, 'account-settings.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
   await navigateAdmin('orders');
+  // 未绑定及不可用的卡片不能提交，也不能在订单弹框改选其他卡。
+  const boundCard = { payment_card_id: account.payment_card_id, payment_card_available: account.payment_card_available };
+  for (const unavailable of [{ payment_card_id: null, payment_card_available: false }, { ...boundCard, payment_card_available: false }]) {
+    Object.assign(account, unavailable);
+    await click('录入充值订单');
+    await select('订单账号', account.email);
+    await wait('document.querySelector("dialog").innerText.includes("请先在账号管理中绑定可用的付款卡")');
+    assert.equal(await evaluate('Array.from(document.querySelectorAll("dialog button")).find(b => b.textContent === "确认录入并记账").disabled'), true);
+    assert.equal(await evaluate('Boolean(document.querySelector("button[aria-label=订单付款卡]"))'), false);
+    await click('取消');
+  }
+  Object.assign(account, boundCard);
   await click('录入充值订单');
-  await wait('!document.querySelector("button[aria-label=订单付款卡]").disabled');
+  await wait('!document.querySelector("button[aria-label=订单账号]").disabled');
   await select('订单账号',account.email);
-  assert.ok(await evaluate('document.querySelector("button[aria-label=订单付款卡]").innerText.includes("运营测试卡")'));
+  assert.ok(await evaluate('document.querySelector("input[aria-label=订单付款卡]").value.includes("运营测试卡")'));
   await select('订单套餐','测试 Plus · $200.00 / 1个月');
   assert.equal(await evaluate('Boolean(document.querySelector("input[name=period_start]"))'),false);
   await fill('input[aria-label="实收金额"]','1680.00');
@@ -523,7 +556,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector(".collection-preview")?.innerText.includes("16.67%")');
   await writeFile(join(directory,'collection-profit.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
   assert.equal(await evaluate('document.querySelector("dialog").innerText.includes("查找付款卡")'),false);
-  await select('订单付款卡','运营测试卡 · 4242 · $1,000.00');
+  await wait('document.querySelector("input[aria-label=订单付款卡]")?.value.includes("运营测试卡")');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=订单付款卡]").readOnly'), true);
+  assert.equal(await evaluate('Boolean(document.querySelector("button[aria-label=订单付款卡]"))'), false);
   assert.equal(await evaluate(`document.querySelector('input[aria-label="扣款 USD"]').value`),'200.00');
   assert.equal(await evaluate(`document.querySelector('input[aria-label="扣款 USD"]').readOnly`),true);
   await evaluate('document.querySelector("button[aria-label=订单来源]").click()');
@@ -651,7 +686,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('录入充值订单');
   await select('订单账号',account.email);
   await select('订单套餐','测试 Plus · $200.00 / 1个月');
-  await select('订单付款卡','运营测试卡 · 4242 · $1,000.00');
+  await wait('document.querySelector("input[aria-label=订单付款卡]")?.value.includes("运营测试卡")');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=订单付款卡]").readOnly'), true);
+  assert.equal(await evaluate('Boolean(document.querySelector("button[aria-label=订单付款卡]"))'), false);
 
   await fill('input[name=reference]','no-receipt-payment');
   await fill('.evidence-editor textarea','card payment proof','HTMLTextAreaElement');
@@ -688,7 +725,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('补录订单');
   assert.equal(await evaluate('Boolean(document.querySelector("input[aria-label=实收金额]"))'),false);
   assert.ok(await evaluate('document.querySelector("dialog").innerText.includes("250.00")'));
-  await select('订单付款卡','运营测试卡 · 4242 · $1,000.00');
+  await wait('document.querySelector("input[aria-label=订单付款卡]")?.value.includes("运营测试卡")');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=订单付款卡]").readOnly'), true);
+  assert.equal(await evaluate('Boolean(document.querySelector("button[aria-label=订单付款卡]"))'), false);
   await evaluate('document.querySelector("button[aria-label=订单来源]").click()');
   await fill('input[aria-label="过滤订单来源"]','合作渠道');
   await click('＋ 使用输入的来源');
@@ -1024,6 +1063,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','上次登录（UTC+8）']);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-owner-bind"))'), false, '普通用户不能分配账号');
   assert.equal(await evaluate('Boolean(document.querySelector(".account-notes"))'), false);
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-product"))'), false);
   assert.equal(await evaluate('Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="打开空白浏览器")'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-actions,.account-toolbar,.stats"))'),false);
   assert.equal(await evaluate('Boolean(document.querySelector(".user-menu a[href$=wallet]"))'),false);
@@ -1487,12 +1527,67 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await writeFile(join(directory, 'dark-accounts.png'), Buffer.from(darkShot.data, 'base64'));
   account.has_session = false;
   await cdp.send('Page.reload', {}, sessionId);
-  await wait('document.body.innerText.includes("未保存 Session")');
+  await wait('Boolean(document.querySelector(".account-row .account-actions"))');
   assert.equal(await evaluate('Array.from(document.querySelectorAll(".account-actions button")).find(button => button.textContent === "打开账号").disabled'), true);
   account.user_id = 2;
   await cdp.send('Page.reload', {}, sessionId);
   await wait('document.body.innerText.includes("工作账号")');
   assert.equal(await evaluate('Array.from(document.querySelectorAll(".account-actions button")).some(button => button.textContent === "打开账号")'), true);
+  // 从账号快速创建月订单，仅填写实收、来源、交易号和凭据。
+  Object.assign(account, { subscription_package_id: null, renewal_date: '2030-01-31', payment_card_id: 9, payment_card_available: true, payment_card_label: '运营测试卡', payment_card_last4: '4242' });
+  rechargePackages = [{ id: 1, name: '快捷月套餐', region: 'PH', months: 1, enabled: true, price_ready: true, sale_usd_minor: 20000 }];
+  rechargeOrders = [];
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('Boolean(document.querySelector(".quick-month-order"))');
+  const beforeQuickWrites = operationWrites.length;
+  await click('快速创建月订单');
+  await wait('document.querySelector("dialog").innerText.includes("请先在账号产品选型中选择")');
+  assert.equal(await evaluate('Array.from(document.querySelectorAll("dialog button")).find(b => b.textContent === "确认录入并记账").disabled'), true);
+  await click('取消');
+  assert.equal(operationWrites.length, beforeQuickWrites);
+  account.subscription_package_id = 1;
+  rechargePackages[0].months = 3;
+  await click('快速创建月订单');
+  await wait('document.querySelector("input[aria-label=月订单套餐]")?.value.includes("3个月")');
+  assert.equal(await evaluate('Array.from(document.querySelectorAll("dialog button")).find(b => b.textContent === "确认录入并记账").disabled'), true);
+  await click('取消');
+  rechargePackages[0].months = 1;
+  await click('快速创建月订单');
+  await wait('document.querySelector("input[aria-label=月订单套餐]")?.value.includes("1个月")');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=月订单账号]").value'), account.email);
+  assert.equal(await evaluate('document.querySelector("input[aria-label=收款币种]").value'), 'CNY 人民币');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=订单付款卡]").value'), '运营测试卡 · •••• 4242');
+  assert.equal(await evaluate(`document.querySelector('input[aria-label="扣款 USD"]').value`), '200.00');
+  assert.ok(await evaluate('document.querySelector(".quick-order-period").textContent.includes("2030-01-31 → 2030-02-28")'));
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog textarea[name=notes]"))'), false);
+  await fill('input[aria-label=实收金额]', '1680.00');
+  await wait('Boolean(document.querySelector(".collection-preview"))');
+  await evaluate('document.querySelector("dialog button[aria-label=订单来源]").click()');
+  await fill('input[aria-label=过滤订单来源]', '快捷渠道');
+  await click('＋ 使用输入的来源');
+  await fill('input[name=reference]', 'quick-month-ui-reference');
+  await fill('.evidence-editor textarea', '快捷月订单凭据', 'HTMLTextAreaElement');
+  await writeFile(join(directory, 'quick-month-order.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  quickOrderFail = true;
+  await click('确认录入并记账');
+  await wait('document.querySelector("dialog").innerText.includes("模拟月订单记账失败")');
+  assert.equal(account.renewal_date, '2030-01-31');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=实收金额]").value'), '1680.00');
+  assert.equal(await evaluate('document.querySelector("input[name=reference]").value'), 'quick-month-ui-reference');
+  quickOrderFail = false;
+  await click('确认录入并记账');
+  await wait('!document.querySelector("dialog") && document.querySelector(".account-row").innerText.includes("2030-02-28")');
+  const quickInput = operationWrites.at(-1);
+  assert.equal(quickInput.request_key, failedQuickInput.request_key);
+  assert.equal(quickInput.quick_month, true);
+  assert.equal(quickInput.expected_renewal_date, '2030-01-31');
+  assert.equal(quickInput.account_id, account.id);
+  assert.equal(quickInput.package_id, 1);
+  assert.equal(quickInput.card_id, 9);
+  assert.equal(quickInput.received_currency, 'CNY');
+  assert.equal(quickInput.received_amount, '1680.00');
+  assert.equal(quickInput.order_source, '快捷渠道');
+  assert.equal(operationWrites.length, beforeQuickWrites + 1);
   user.role = 'admin';
   const userRequestsBefore = requests.filter(url => url.includes('/api/users')).length;
   await cdp.send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port + '/admin/users' }, sessionId);
