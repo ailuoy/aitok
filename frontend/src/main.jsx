@@ -9,8 +9,9 @@ import { Link, navigate, useRoute, loginDestination, adminPages, adminPath, cano
 import './style.css';
 import UserMenu from './UserMenu';
 import AdminLayout from './AdminLayout';
+import DesktopAuthorize from './DesktopAuthorize';
 
-const titles = { '/': 'ChatGPT 账号管理', '/features': '功能', '/plans': '套餐', '/security': '安全', '/login': '登录', '/register': '注册', '/admin/accounts': '账号管理', '/admin/wallet': '钱包与充值', '/admin/proxies': 'SOCKS5 管理', '/admin/addresses': '地址管理', '/admin/bank-cards': '银行卡管理', '/admin/users': '用户列表', '/admin/orders':'充值订单','/admin/packages':'充值套餐','/admin/notices':'到期与异常','/admin/audit':'操作审计','/admin/proxy-activity':'设备使用记录','/admin/payment-exceptions':'支付退款与异常' };
+const titles = { '/': 'ChatGPT 账号管理', '/features': '功能', '/plans': '套餐', '/security': '安全', '/desktop/authorize': '授权登录助手', '/login': '登录', '/register': '注册', '/admin/accounts': '账号管理', '/admin/wallet': '钱包与充值', '/admin/proxies': 'SOCKS5 管理', '/admin/addresses': '地址管理', '/admin/bank-cards': '银行卡管理', '/admin/users': '用户列表', '/admin/orders':'充值订单','/admin/packages':'充值套餐','/admin/notices':'到期与异常','/admin/audit':'操作审计','/admin/proxy-activity':'设备使用记录','/admin/payment-exceptions':'支付退款与异常' };
 
 function App() {
   const route = useRoute();
@@ -28,7 +29,8 @@ function App() {
     setSidebarCollapsed(false);
     try { localStorage.setItem('admin-sidebar-collapsed', 'false'); } catch {}
   }
-  const protectedPage = adminPages.some(page => adminPath(page) === path);
+  const desktopAuth = path === '/desktop/authorize';
+  const protectedPage = desktopAuth || adminPages.some(page => adminPath(page) === path);
   const authPage = ['/login', '/register'].includes(path);
 
   useEffect(() => {
@@ -77,6 +79,8 @@ function App() {
   let content;
   if (token && !user && (protectedPage || authPage || path === '/')) {
     content = <main className="auth-wrap"><section className="auth-card" aria-label="恢复登录"><h2>正在恢复登录</h2><p role="status">{sessionError || '正在验证登录状态…'}</p>{sessionError && <button className="primary full" onClick={() => setRetry(value => value + 1)}>立即重试</button>}<button className="forgot-link" onClick={logout}>退出登录</button></section></main>;
+  } else if (desktopAuth && token && user) {
+    content = <DesktopAuthorize token={token} user={user} route={route} />;
   } else if (protectedPage && token && user) {
     content = !['admin','super_admin'].includes(user.role) && path !== '/admin/accounts' ? <main className="dashboard"><p>无权访问此页面。</p><Link to="/admin/accounts">返回我的账号</Link></main> : <AdminLayout key={user.id + ":" + user.role} collapsed={sidebarCollapsed} onExpandSidebar={expandSidebar} user={user} token={token} path={path}><Dashboard key={user.id + ":" + user.role} user={user} accounts={accounts} setAccounts={setAccounts} token={token} route={route} /></AdminLayout>;
   } else if (authPage || protectedPage) {

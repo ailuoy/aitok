@@ -1,15 +1,19 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, Menu, Tray, nativeImage, ipcMain, dialog, shell, safeStorage } from 'electron';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { LauncherManager } from './manager.mjs';
 import metadata from '../package.json' with { type: 'json' };
+import { profile } from './profiles.mjs';
+import { DesktopAuth } from './auth.mjs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 // 隔离桌面冒烟测试；正式安装包不接受测试目录覆盖。
 const smokeDirectory = !app.isPackaged && process.env.AITOK_DESKTOP_SMOKE_DIRECTORY;
+app.setName(profile.name);
+app.setPath('userData', join(app.getPath('appData'), profile.name));
 if (smokeDirectory) app.setPath('userData', smokeDirectory);
-let window, tray, manager, quitting = false, askingQuit = false;
+let window, tray, manager, authentication, quitting = false, askingQuit = false;
 const ownsLock = app.requestSingleInstanceLock();
 if (!ownsLock) app.quit();
 
@@ -33,6 +37,7 @@ async function quit() {
   try {
     if (activeCount() && !await confirm('退出桌面助手？', '由助手打开的账号浏览器也会关闭。')) return;
     quitting = true;
+    await authentication?.close();
     await manager?.close();
     tray?.destroy();
     app.quit();
@@ -40,7 +45,7 @@ async function quit() {
 }
 
 function snapshot() {
-  return { version: metadata.version, sites: manager.snapshot(), loginAtStartup: loginSettings().openAtLogin, packaged: app.isPackaged };
+  return { version: metadata.version, profile, auth: authentication.snapshot(), sites: manager.snapshot(), loginAtStartup: loginSettings().openAtLogin, packaged: app.isPackaged };
 }
 
 function updateTray() {
@@ -54,7 +59,16 @@ function updateTray() {
 
 async function handle(action, value) {
   switch (action) {
-    case 'state': return snapshot();
+    case 'state':
+      if (authentication.token && authentication.status !== 'pending') await authentication.check().catch(() => {});
+      return snapshot();
+    case 'login': await authentication.login(); break;
+    case 'cancel-login': authentication.cancel(); break;
+    case 'logout':
+      if (activeCount() && !await confirm('退出登录并关闭账号窗口？', '站点配置、代理及浏览器资料继续保留。')) return snapshot();
+      await authentication.logout();
+      await manager.run(async () => { for (const id of [...manager.runtimes.keys()]) await manager.stopSite(id); });
+      break;
     case 'save': {
       if (!value || typeof value !== 'object') throw new Error('站点配置无效');
       const old = value.id && manager.get(value.id);
@@ -92,14 +106,27 @@ app.on('window-all-closed', () => {});
 app.on('before-quit', event => { if (!quitting) { event.preventDefault(); void quit(); } });
 
 if (ownsLock) app.whenReady().then(async () => {
+  authentication = new DesktopAuth({ profile, path: join(app.getPath('userData'), 'login-' + profile.channel + '.json'), encryption: safeStorage, openExternal: url => shell.openExternal(url), onChange: () => {
+    if (!manager || quitting) return;
+    void manager.run(async () => {
+      if (authentication.status === 'authenticated') {
+        for (const site of manager.sites.filter(site => !site.deleted_at && site.enabled)) await manager.startSite(site);
+        showWindow();
+      } else { for (const id of [...manager.runtimes.keys()]) await manager.stopSite(id); }
+      if (tray) updateTray();
+    }).catch(() => {});
+  } });
+  await authentication.restore();
   manager = new LauncherManager({
-    configPath: join(app.getPath('userData'), 'sites.json'),
+    configPath: join(app.getPath('userData'), smokeDirectory ? 'sites.json' : 'sites-' + profile.channel + '.json'),
     directory: smokeDirectory ? join(smokeDirectory, 'browsers') : join(homedir(), '.aitok', 'browsers'),
+    profile,
+    authorize: () => authentication.check(),
   });
   await manager.load();
   window = new BrowserWindow({
     width: 920, height: 690, minWidth: 680, minHeight: 500, show: false,
-    title: 'AiTok 助手', backgroundColor: '#f6f7f9', icon: join(root, 'assets/icon.png'),
+    title: profile.name, backgroundColor: '#f6f7f9', icon: join(root, 'assets/icon.png'),
     webPreferences: { preload: join(root, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
   });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

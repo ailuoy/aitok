@@ -72,11 +72,12 @@ export class BrowserAssistant {
   }
   async fill(sessionId, input) {
     if (!Number.isSafeInteger(input.card_id) || !Number.isSafeInteger(input.address_id)) throw new Error('请先选择银行卡和账单地址');
-    if (typeof input.cvc !== 'string' || !/^\d{3,4}$/.test(input.cvc)) throw new Error('请输入 3 或 4 位安全码');
+    if (typeof input.cvc !== 'string' || !/^(?:\d{3,4})?$/.test(input.cvc)) throw new Error('安全码格式无效');
     const { cdp } = this.environment;
     const { frameTree } = await cdp.send('Page.getFrameTree', {}, sessionId);
     if (!assistantPage(frameTree.frame.url)) throw new Error('请在官方收银页面填充');
     const data = await this.request();
+    if ((data.payment_card_id && data.payment_card_id !== input.card_id) || (data.billing_address_id && data.billing_address_id !== input.address_id)) throw new Error('账号绑定已更新，请刷新页面后使用已绑定的银行卡和地址');
     const address = data.addresses.find(address => address.id === input.address_id);
     if (!address || !data.cards.some(card => card.id === input.card_id)) throw new Error('所选银行卡或地址已删除，请刷新');
     const { card } = await this.request('/cards/' + input.card_id);
@@ -98,6 +99,6 @@ export class BrowserAssistant {
       for (const child of tree.childFrames || []) await visit(child);
     };
     await visit(frameTree);
-    return { message: fields.size ? `已填充 ${fields.size} 类字段，请核对收银表单后手动付款。${inaccessible ? '部分嵌入字段无法访问，请手动补充。' : ''}` : '当前页面未找到可填充的收银字段，请先打开官方付款页面。' };
+    return { message: fields.size ? `已填充 ${fields.size} 类字段，请核对收银表单后手动付款。${!input.cvc ? '此卡未保存安全码，请在官网手动填写。' : ''}${inaccessible ? '部分嵌入字段无法访问，请手动补充。' : ''}` : '当前页面未找到可填充的收银字段，请先打开官方付款页面。' };
   }
 }

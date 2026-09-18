@@ -1,7 +1,7 @@
 {
   "name": "aitok-desktop",
   "productName": "AiTok 助手",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "AiTok 本机浏览器桌面助手",
   "author": "AiTok",
   "private": true,
@@ -13,8 +13,8 @@
     "test": "node --test test/*.test.mjs",
     "test:smoke": "npm run build && electron test/smoke.mjs",
     "pack": "npm run build && electron-builder --dir",
-    "dist:mac": "npm run build && node package.mjs --mac",
-    "dist:win": "npm run build && node package.mjs --win"
+    "dist:mac": "node package.mjs --mac",
+    "dist:win": "node package.mjs --win"
   },
   "devDependencies": {
     "electron": "44.4.1",
@@ -26,7 +26,8 @@
     "directories": { "output": ".pack", "buildResources": "assets" },
     "files": ["build/**/*", "package.json"],
     "artifactName": "AiTok-Assistant-${version}-${os}-${arch}.${ext}",
-    "mac": { "category": "public.app-category.utilities", "target": ["dmg", "zip"], "hardenedRuntime": true },
+    "mac": { "category": "public.app-category.utilities", "target": ["dmg"], "hardenedRuntime": true },
+    "dmg": { "writeUpdateInfo": false },
     "win": { "target": ["nsis"] },
     "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "createDesktopShortcut": true, "runAfterFinish": true },
     "publish": null

@@ -4,7 +4,7 @@ import { proxyURL } from './proxy-store.mjs';
 import { testProxy } from './proxy-test.mjs';
 import { parseProxy } from './proxy.mjs';
 
-export function createLauncher({ origin, browser, store, probeProxy = testProxy, enforceOriginScope = false }) {
+export function createLauncher({ origin, browser, store, probeProxy = testProxy, enforceOriginScope = false, authorize }) {
   const testing = new Set();
   const approvals = new Map();
   const runningProxies = new Map();
@@ -50,6 +50,7 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
       if (request.method === 'GET' && request.url === '/health') {
         send(200, { status: 'ok', version: 2, origin, fingerprint: 'native-noise-v1' }); return;
       }
+      const authorizedUser = authorize ? await authorize() : null;
       let input;
       if (['POST', 'PATCH'].includes(request.method)) {
         if (!request.headers['content-type']?.startsWith('application/json')) {
@@ -69,7 +70,8 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
       if (enforceOriginScope && request.url?.startsWith('/browsers')) {
         const route = /^\/browsers\/([^/?]+)(?:\/(?:proxy|fingerprint))?$/.exec(request.url);
         const id = request.url === '/browsers' ? input?.environment_id : route && decodeURIComponent(route[1]);
-        if (typeof id !== 'string' || !id.startsWith(origin + ':user:') || id.length > 300) {
+        const prefix = origin + ':user:' + (authorizedUser ? authorizedUser.id + ':' : '');
+        if (typeof id !== 'string' || !id.startsWith(prefix) || id.length > 300) {
           send(403, { error: '浏览器环境不属于当前站点' }); return;
         }
       }

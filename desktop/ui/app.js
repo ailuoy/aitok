@@ -7,6 +7,15 @@ const el = (tag, text, className) => { const node = document.createElement(tag);
 function render(next) {
   state = next;
   $('#version').textContent = next.version;
+  $('#environment-description').textContent = next.profile.label + ' · ' + next.profile.origin;
+  $('#add').hidden = next.sites.length > 0;
+  document.title = next.profile.name;
+  const auth = next.auth, loggedIn = auth.status === 'authenticated', pending = auth.status === 'pending';
+  $('#login-title').textContent = loggedIn ? '已登录 · ' + (auth.user.username || auth.user.email) : pending ? '等待后台授权' : '授权登录';
+  $('#login-description').textContent = loggedIn ? '已通过后台鉴权，打开账号仍需两步验证。' : pending ? '请在打开的后台页面登录并确认授权，然后返回助手。' : '点击登录，将在浏览器打开' + next.profile.label + '后台进行鉴权。';
+  $('#login').textContent = loggedIn ? '退出登录' : pending ? '取消登录' : '授权登录';
+  $('#login').disabled = busy;
+  showError($('#login-error'), auth.error);
   $('#summary').textContent = `${next.sites.filter(site => site.running).length} 个站点运行中`;
   $('#startup').checked = next.loginAtStartup;
   $('#startup').disabled = !next.packaged || busy;
@@ -31,6 +40,8 @@ function render(next) {
   }
 }
 
+$('#login').addEventListener('click', () => act(() => state.auth.status === 'authenticated' ? window.assistant.logout() : state.auth.status === 'pending' ? window.assistant.cancelLogin() : window.assistant.login()));
+
 async function act(action) {
   if (busy) return;
   busy = true; showError($('#error')); if (state) render(state);
@@ -43,8 +54,9 @@ function edit(site) {
   editingID = site?.id;
   form.reset();
   form.elements.name.value = site?.name || '';
-  form.elements.origin.value = site?.origin || '';
-  form.elements.port.value = site?.port || 15683;
+  form.elements.origin.value = state.profile.origin;
+  form.elements.origin.readOnly = true;
+  form.elements.port.value = site?.port || state.profile.port;
   form.elements.enabled.checked = site?.enabled !== false;
   $('#editor-title').textContent = site ? '编辑站点' : '添加站点';
   showError($('#form-error'));

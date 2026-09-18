@@ -28,12 +28,13 @@ try {
   await evaluate(`(() => { document.querySelector('#add').click();
     const form = document.querySelector('#site-form');
     form.elements.name.value = '界面验证';
-    form.elements.origin.value = 'https://example.invalid';
+    form.elements.origin.value = ${JSON.stringify('http://localhost:15680')};
     form.elements.port.value = '19883';
     form.elements.enabled.checked = false;
     form.requestSubmit(); })()`);
   for (let attempt = 0; attempt < 30 && await evaluate('document.querySelector("#editor").open'); attempt++) await delay(100);
-  assert.equal(await evaluate('document.querySelector(".site h2").textContent'), '界面验证');
+  assert.equal(await evaluate('document.querySelector("#sites .site h2").textContent'), '界面验证');
+  assert.equal(await evaluate('document.querySelector("#login").textContent'), '授权登录');
   assert.equal((await evaluate('window.assistant.state()')).sites[0].running, false);
   assert.equal(await evaluate('document.querySelector("#startup").disabled'), true);
   await evaluate(`document.querySelector('.buttons button:nth-child(2)').click(); document.querySelector('#site-form').elements.port.value='19884'; document.querySelector('#site-form').requestSubmit();`);

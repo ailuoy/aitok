@@ -6,13 +6,13 @@ import { ProxyStore } from './proxy-store.mjs';
 import { findChrome, SessionBrowser } from './session.mjs';
 import { normalizeOrigin, validateLauncherPort } from '../../shared/local-launcher.mjs';
 
-export async function startLauncher({ origin, port, directory, chrome, browserFactory }) {
+export async function startLauncher({ origin, port, directory, chrome, browserFactory, authorize }) {
   origin = normalizeOrigin(origin);
   port = validateLauncherPort(port);
   const store = await new ProxyStore(join(directory, 'settings', createHash('sha256').update(origin).digest('hex'))).load();
   // 保留现有配置和浏览器目录；标识包含站点，HTTP 层强制校验站点归属。
   const browser = browserFactory ? await browserFactory({ directory, origin }) : new SessionBrowser({ chrome: await findChrome(chrome), directory });
-  const server = createLauncher({ origin, browser, store, enforceOriginScope: true });
+  const server = createLauncher({ origin, browser, store, enforceOriginScope: true, authorize });
   server.requestTimeout = 30000;
   try { await listenLocal(server, port); }
   catch (error) { await browser.close(); throw error; }

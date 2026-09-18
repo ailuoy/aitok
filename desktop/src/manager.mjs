@@ -10,10 +10,12 @@ const defaults = () => [
 ];
 
 export class LauncherManager {
-  constructor({ configPath, directory, start = startLauncher }) {
+  constructor({ configPath, directory, start = startLauncher, profile, authorize }) {
     this.configPath = configPath;
     this.directory = directory;
     this.start = start;
+    this.profile = profile;
+    this.authorize = authorize;
     this.sites = [];
     this.runtimes = new Map();
     this.errors = new Map();
@@ -47,7 +49,7 @@ export class LauncherManager {
       }
     } catch (error) {
       if (error.code !== 'ENOENT') throw new Error('无法读取桌面助手配置，请检查配置文件；原文件未覆盖');
-      this.sites = defaults();
+      this.sites = this.profile ? [{ id: randomUUID(), name: this.profile.label, origin: this.profile.origin, port: this.profile.port, enabled: true }] : defaults();
       await this.persist();
     }
     for (const site of this.sites.filter(site => !site.deleted_at && site.enabled)) await this.startSite(site);
@@ -71,6 +73,7 @@ export class LauncherManager {
     const name = typeof input.name === 'string' ? input.name.trim() : '';
     if (!name || name.length > 60) throw new Error('站点名称为 1 至 60 个字符');
     const origin = normalizeOrigin(input.origin);
+    if (this.profile && origin !== this.profile.origin) throw new Error('此安装包只能连接' + this.profile.label + '后台');
     const port = validateLauncherPort(input.port ?? defaultLauncherPort(origin));
     if (this.sites.some(site => !site.deleted_at && site.id !== id && (site.origin === origin || site.port === port))) {
       throw new Error('站点地址或端口已使用，请为不同站点选择不同端口');
@@ -88,7 +91,8 @@ export class LauncherManager {
   async startSite(site) {
     if (this.runtimes.has(site.id)) return;
     try {
-      const runtime = await this.start({ origin: site.origin, port: site.port, directory: this.directory });
+      if (this.authorize) await this.authorize();
+      const runtime = await this.start({ origin: site.origin, port: site.port, directory: this.directory, authorize: this.authorize });
       this.runtimes.set(site.id, runtime);
       this.errors.delete(site.id);
     } catch (error) {

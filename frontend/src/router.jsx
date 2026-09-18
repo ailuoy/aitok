@@ -40,5 +40,5 @@ export function loginDestination(route) {
   if (!next || !next.startsWith('/') || next.startsWith('//')) return adminPath('accounts');
   const target = new URL(next, location.origin);
   const path = canonicalAdminPath(target.pathname);
-  return target.origin === location.origin && adminPages.some(page => adminPath(page) === path) ? path + target.search + target.hash : adminPath('accounts');
+  return target.origin === location.origin && (path === '/desktop/authorize' || adminPages.some(page => adminPath(page) === path)) ? path + target.search + target.hash : adminPath('accounts');
 }

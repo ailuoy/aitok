@@ -74,6 +74,10 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		if paymentCardID != nil && id != *paymentCardID {
+			reply(w, map[string]string{"error": "请使用账号已绑定的付款卡"}, 409)
+			return
+		}
 		c, err := s.readCard(r, user, id, true)
 		if err != nil {
 			cardError(w, err)
@@ -98,7 +102,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cards := []BankCard{}
-	rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards WHERE deleted_at IS NULL AND status='active' AND (exp_year,exp_month)>=(EXTRACT(YEAR FROM NOW())::int,EXTRACT(MONTH FROM NOW())::int) ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END, id DESC LIMIT 500`, paymentCardID)
+	rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards WHERE deleted_at IS NULL AND status='active' AND (exp_year,exp_month)>=(EXTRACT(YEAR FROM NOW())::int,EXTRACT(MONTH FROM NOW())::int) AND ($1::bigint IS NULL OR id=$1) ORDER BY id DESC LIMIT 500`, paymentCardID)
 	if err != nil {
 		cardError(w, err)
 		return
@@ -119,7 +123,7 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addresses := []Address{}
-	rows, err = s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE deleted_at IS NULL ORDER BY CASE WHEN id=$1 THEN 0 ELSE 1 END,id DESC LIMIT 1000`, billingAddressID)
+	rows, err = s.db.QueryContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE deleted_at IS NULL AND ($1::bigint IS NULL OR id=$1) AND NOT EXISTS(SELECT 1 FROM chatgpt_accounts a WHERE a.billing_address_id=addresses.id AND a.deleted_at IS NULL AND a.id<>$2) ORDER BY id DESC LIMIT 1000`, billingAddressID, account)
 	if err != nil {
 		addressError(w, err)
 		return

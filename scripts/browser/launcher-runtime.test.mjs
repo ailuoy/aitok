@@ -58,3 +58,24 @@ test('双环境隔离代理、账号和 CORS，端口冲突不会结束已有助
   t.after(() => reopened.close());
   assert.equal((await (await call(reopened, '/proxies')).json()).proxies[0].name, '仅在线上');
 });
+
+test('桌面授权失效后拒绝请求，账号环境必须属于当前登录用户', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'aitok-authorized-launcher-'));
+  let loggedIn = false, opened = 0;
+  const runtime = await startLauncher({ directory, origin: 'http://localhost:15680', port: await freePort(),
+    authorize: async () => { if (!loggedIn) throw new Error('请先授权登录'); return { id: 7 }; },
+    browserFactory: async () => Object.assign(new EventEmitter(), { environments: new Map(), start: async () => { opened++; return { state: 'opened' }; }, close: async () => {} }),
+  });
+  t.after(() => runtime.close());
+  const call = (path, body) => fetch(`http://127.0.0.1:${runtime.port}${path}`, { method: body ? 'POST' : 'GET', headers: { Origin: runtime.origin, 'X-AiTok-Client': 'browser', 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+  assert.equal((await call('/health')).status, 200);
+  assert.notEqual((await call('/proxies')).status, 200);
+  loggedIn = true;
+  assert.equal((await call('/browsers', { environment_id: runtime.origin + ':user:8:account:1', session: {} })).status, 403);
+  assert.equal(opened, 0);
+  assert.equal((await call('/browsers', { environment_id: runtime.origin + ':user:7:account:1', session: {} })).status, 200);
+  assert.equal(opened, 1);
+  loggedIn = false;
+  assert.notEqual((await call('/browsers', { environment_id: runtime.origin + ':user:7:account:1', session: {} })).status, 200);
+  assert.equal(opened, 1);
+});

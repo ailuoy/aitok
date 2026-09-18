@@ -52,6 +52,8 @@ func (s *Server) routes(options ...khttp.ServerOption) *khttp.Server {
 	server.HandleFunc("/api/forgot-password", s.forgotPassword)
 	server.HandleFunc("/api/reset-password", s.resetPassword)
 	server.HandleFunc("/api/me", s.me)
+	server.HandleFunc("/api/desktop-auth", s.desktopAuthorize)
+	server.HandleFunc("/api/desktop-auth/session", s.desktopSession)
 	server.HandleFunc("/api/two-factor", s.twoFactor)
 	server.HandleFunc("/api/users", s.users)
 	server.HandlePrefix("/api/users/", http.HandlerFunc(s.users))

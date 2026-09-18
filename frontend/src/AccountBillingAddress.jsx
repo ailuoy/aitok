@@ -18,7 +18,7 @@ function AddressBinding({ account, token, onChange, onClose }) {
     const controller = new AbortController();
     setLoading(true); setError('');
     const timer = setTimeout(() => {
-      request(`/addresses?q=${encodeURIComponent(query.trim())}&page=${page}&page_size=10`, token, { signal: controller.signal })
+      request(`/addresses?unbound=true&q=${encodeURIComponent(query.trim())}&page=${page}&page_size=10`, token, { signal: controller.signal })
         .then(data => { if (!controller.signal.aborted) setResult(data); })
         .catch(error => { if (!controller.signal.aborted) { setResult({ addresses: [], total: 0 }); setError(error.message); } })
         .finally(() => { if (!controller.signal.aborted) setLoading(false); });
@@ -38,6 +38,7 @@ function AddressBinding({ account, token, onChange, onClose }) {
     <p className="muted">{account.email}</p>
     <p>当前地址：{account.billing_address_label || (account.billing_address_id ? '原地址不可用' : '未绑定')}</p>
     <div className="browser-buttons"><button className="primary" disabled={busy} onClick={() => bind({ random: true })}>随机绑定</button><button className="outline" disabled={busy || !account.billing_address_id} onClick={() => bind({ billing_address_id: null })}>解除绑定</button></div>
+    <p className="muted">仅显示未绑定的地址，每个地址只能绑定一个账号。</p>
     <label>搜索地址<input aria-label="搜索绑定地址" autoFocus maxLength={200} value={query} disabled={busy} placeholder="输入姓名、街道、城市或邮编" onChange={event => { setQuery(event.target.value); setPage(1); }} /></label>
     {error && <p className="error" role="alert">{error}</p>}
     <div className="address-binding-results" aria-busy={loading}>

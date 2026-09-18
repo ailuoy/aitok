@@ -215,10 +215,11 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	boundAddress := call("GET", "/api/browser-assistant", limited, nil, 200)
-	if boundAddress["billing_address_id"] != float64(1) || boundAddress["addresses"].([]any)[0].(map[string]any)["id"] != float64(1) {
+	if boundAddress["billing_address_id"] != float64(1) || len(boundAddress["addresses"].([]any)) != 1 || boundAddress["addresses"].([]any)[0].(map[string]any)["id"] != float64(1) {
 		t.Fatal("助手未优先展示当前账号绑定地址")
 	}
-	if call("GET", "/api/browser-assistant?account_id=1", s.assistantToken(2, 2), nil, 200)["billing_address_id"] != nil {
+	otherAddress := call("GET", "/api/browser-assistant?account_id=1", s.assistantToken(2, 2), nil, 200)
+	if otherAddress["billing_address_id"] != nil || len(otherAddress["addresses"].([]any)) != 1 || otherAddress["addresses"].([]any)[0].(map[string]any)["id"] == float64(1) {
 		t.Fatal("助手串用其他账号地址")
 	}
 	if snapshot["payment_card_id"] != nil {
@@ -228,8 +229,14 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	bound := call("GET", "/api/browser-assistant", limited, nil, 200)
-	if bound["payment_card_id"] != float64(id) || bound["cards"].([]any)[0].(map[string]any)["id"] != float64(id) {
+	if bound["payment_card_id"] != float64(id) || len(bound["cards"].([]any)) != 1 || bound["cards"].([]any)[0].(map[string]any)["id"] != float64(id) {
 		t.Fatal("助手应返回当前账号绑定的付款卡并优先列出")
+	}
+	for _, candidate := range snapshot["cards"].([]any) {
+		otherID := int64(candidate.(map[string]any)["id"].(float64))
+		if otherID != id {
+			call("GET", fmt.Sprintf("/api/browser-assistant/cards/%d", otherID), limited, nil, 409)
+		}
 	}
 	if call("GET", "/api/browser-assistant", s.assistantToken(2, 2), nil, 200)["payment_card_id"] != nil {
 		t.Fatal("助手不能读取其他账号的付款卡绑定")
@@ -238,7 +245,7 @@ func TestBankCardsAndAssistantScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	unavailable := call("GET", "/api/browser-assistant", limited, nil, 200)
-	if unavailable["payment_card_id"] != float64(id) || len(unavailable["cards"].([]any)) != 1 {
+	if unavailable["payment_card_id"] != float64(id) || len(unavailable["cards"].([]any)) != 0 {
 		t.Fatal("绑定卡不可用时应保留绑定编号，但不能进入可用卡列表")
 	}
 	if _, err := db.Exec(`UPDATE bank_cards SET status='active',updated_at=NOW() WHERE id=$1`, id); err != nil {

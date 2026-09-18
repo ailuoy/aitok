@@ -107,7 +107,10 @@ func (s *Server) addresses(w http.ResponseWriter, r *http.Request) {
 			reply(w, map[string]string{"error": "搜索参数无效"}, 400)
 			return
 		}
-		const filter = ` WHERE deleted_at IS NULL AND (user_id=$1 OR user_id IS NULL OR $2) AND (strpos(lower(concat_ws(' ',full_name,address_line1,address_line2,city,state,postal_code,country,source_data->>'Telephone',source_data->>'Temporary_mail')),lower($3)) > 0 OR (upper(country)='US' AND upper(state)=ANY(string_to_array($4,','))))`
+		filter := ` WHERE deleted_at IS NULL AND (user_id=$1 OR user_id IS NULL OR $2) AND (strpos(lower(concat_ws(' ',full_name,address_line1,address_line2,city,state,postal_code,country,source_data->>'Telephone',source_data->>'Temporary_mail')),lower($3)) > 0 OR (upper(country)='US' AND upper(state)=ANY(string_to_array($4,','))))`
+		if r.URL.Query().Get("unbound") == "true" {
+			filter += ` AND NOT EXISTS(SELECT 1 FROM chatgpt_accounts a WHERE a.billing_address_id=addresses.id AND a.deleted_at IS NULL)`
+		}
 		var total int
 		if err = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM addresses`+filter, user, admin, query, stateCodes).Scan(&total); err != nil {
 			addressError(w, err)

@@ -51,13 +51,13 @@ func (s *Server) setAccountBillingAddress(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer tx.Rollback()
-	// 与删除地址采用相同的地址→账号锁顺序，避免绑定已删除地址。
+	// 与删除地址采用相同的地址→账号锁顺序；独占地址行锁串行化并发绑定。
 	var address *Address
 	if input.Random {
 		var chosen int64
-		err = tx.QueryRowContext(r.Context(), `SELECT id FROM addresses WHERE deleted_at IS NULL ORDER BY random() LIMIT 1 FOR SHARE`).Scan(&chosen)
+		err = tx.QueryRowContext(r.Context(), `SELECT id FROM addresses WHERE deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM chatgpt_accounts a WHERE a.billing_address_id=addresses.id AND a.deleted_at IS NULL AND a.id<>$1) ORDER BY random() LIMIT 1 FOR UPDATE SKIP LOCKED`, id).Scan(&chosen)
 		if err == sql.ErrNoRows {
-			reply(w, map[string]string{"error": "暂无可绑定地址，请先添加地址"}, 409)
+			reply(w, map[string]string{"error": "暂无可绑定地址，请添加地址或稍后重试"}, 409)
 			return
 		}
 		if err != nil {
@@ -67,7 +67,7 @@ func (s *Server) setAccountBillingAddress(w http.ResponseWriter, r *http.Request
 		addressID = &chosen
 	}
 	if addressID != nil {
-		selected, readErr := scanAddress(tx.QueryRowContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE id=$1 AND deleted_at IS NULL FOR SHARE`, *addressID))
+		selected, readErr := scanAddress(tx.QueryRowContext(r.Context(), `SELECT `+addressColumns+` FROM addresses WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`, *addressID))
 		err = readErr
 		address = &selected
 		if err == sql.ErrNoRows {
@@ -76,6 +76,16 @@ func (s *Server) setAccountBillingAddress(w http.ResponseWriter, r *http.Request
 		}
 		if err != nil {
 			operationError(w, err)
+			return
+		}
+		var occupied bool
+		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chatgpt_accounts WHERE billing_address_id=$1 AND id<>$2 AND deleted_at IS NULL)`, *addressID, id).Scan(&occupied)
+		if err != nil {
+			operationError(w, err)
+			return
+		}
+		if occupied {
+			reply(w, map[string]string{"error": "该地址已被其他账号绑定，请选择其他地址"}, 409)
 			return
 		}
 	}
