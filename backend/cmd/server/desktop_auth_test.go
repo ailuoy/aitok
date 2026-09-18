@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"strings"
@@ -39,6 +40,24 @@ func TestDesktopAuthorizationScopeAndRevocation(t *testing.T) {
 	call("GET", "/api/me", token, "", 401)
 	call("GET", "/api/desktop-auth/session", s.token(1), "", 401)
 	call("GET", "/api/desktop-auth/session", token+"x", "", 401)
+	// 数据库查询中断属于暂时不可用，不能使客户端删除有效登录凭证。
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := httptest.NewRequest("GET", "/api/desktop-auth/session", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	s.desktopSession(w, r)
+	if w.Code != 503 {
+		t.Fatalf("数据库查询中断: %d want 503", w.Code)
+	}
+	call("GET", "/api/desktop-auth/session", token, "", 200)
+	if _, err := db.Exec(`UPDATE users SET role='user',updated_at=NOW() WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	call("GET", "/api/desktop-auth/session", token, "", 401)
+	if _, err := db.Exec(`UPDATE users SET role='admin',updated_at=NOW() WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`UPDATE users SET session_version=session_version+1,updated_at=NOW() WHERE id=1`); err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,7 @@ import { dirname } from 'node:path';
 export class DesktopAuth {
   constructor({ profile, path, encryption, openExternal, onChange = () => {}, request = fetch }) {
     Object.assign(this, { profile, path, encryption, openExternal, onChange, request });
-    this.token = ''; this.user = null; this.expires = 0; this.status = 'signed_out'; this.error = ''; this.pending = null; this.generation = 0; this.lastCheck = 0; this.writes = Promise.resolve();
+    this.token = ''; this.user = null; this.expires = 0; this.status = 'signed_out'; this.error = ''; this.pending = null; this.generation = 0; this.lastCheck = 0; this.retryAfter = 0; this.writes = Promise.resolve();
   }
   snapshot() { return { status: this.status, user: this.user, expires_at: this.expires, error: this.error }; }
   async persist() {
@@ -27,7 +27,7 @@ export class DesktopAuth {
       this.token = this.encryption.decryptString(Buffer.from(saved.encrypted, 'base64'));
       await this.check(true);
     } catch (error) {
-      if (error.code !== 'ENOENT') { this.status = 'signed_out'; this.error = '无法恢复登录，请重新授权登录'; }
+      if (error.code !== 'ENOENT' && this.status !== 'reconnecting') { this.status = 'signed_out'; this.error = '无法恢复登录，请重新授权登录'; }
     }
   }
   async inspect(token) {
@@ -40,20 +40,28 @@ export class DesktopAuth {
   async check(force = false) {
     if (!this.token) throw new Error('请先在助手中授权登录');
     if (!force && this.status === 'authenticated' && Date.now() - this.lastCheck < 30000 && this.expires * 1000 > Date.now()) return this.user;
+    if (!force && this.status === 'reconnecting' && Date.now() < this.retryAfter && (!this.expires || this.expires * 1000 > Date.now())) throw new Error(this.error);
     if (this.checking) return this.checking;
     const token = this.token, generation = this.generation;
     this.checking = (async () => {
       try {
-        const data = await this.inspect(token);
+        const data = await (this.expires && this.expires * 1000 <= Date.now()
+          ? Promise.reject(Object.assign(new Error('登录已过期，请重新授权登录'), { invalid: true }))
+          : this.inspect(token));
         if (generation !== this.generation) throw new Error('登录状态已变更');
         const recovered = this.status !== 'authenticated';
-        this.user = data.user; this.expires = data.expires_at; this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now();
+        this.user = data.user; this.expires = data.expires_at; this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now(); this.retryAfter = 0;
         if (recovered) this.onChange();
         return this.user;
       } catch (error) {
         if (generation === this.generation) {
-          this.user = null; this.status = 'signed_out'; this.error = error.invalid ? error.message : '无法验证登录，请检查后台连接后重新登录';
-          if (error.invalid) { this.token = ''; await this.persist(); }
+          if (error.invalid) {
+            this.token = ''; this.user = null; this.expires = 0; this.status = 'signed_out'; this.error = error.message; this.retryAfter = 0;
+            await this.persist();
+          } else {
+            // 暂时无法校验时拒绝新操作，但保留凭证和已有浏览器，等待连接恢复。
+            this.status = 'reconnecting'; this.error = '后台连接暂时不可用，正在自动重试；已打开的浏览器会保留，暂不能打开新账号。'; this.retryAfter = Date.now() + 30000;
+          }
           this.onChange();
         }
         throw error;
@@ -72,7 +80,7 @@ export class DesktopAuth {
   }
   async login() {
     this.cancel();
-    if (this.token && this.status === 'authenticated') throw new Error('请先退出当前账号');
+    if (this.token && (this.status === 'authenticated' || this.status === 'reconnecting')) throw new Error('请先退出当前账号');
     if (this.token) { this.token = ''; await this.persist(); }
     const generation = this.generation, state = randomBytes(32).toString('base64url');
     const server = http.createServer(async (req, res) => {
@@ -94,7 +102,7 @@ export class DesktopAuth {
         this.token = token; this.user = data.user; this.expires = data.expires_at;
         try { await this.persist(); } catch (error) { this.token = ''; this.user = null; throw error; }
         if (generation !== this.generation) throw new Error('授权请求已取消');
-        this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now();
+        this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now(); this.retryAfter = 0;
         clearTimeout(this.pending.timer); this.pending = null;
         send(200, { ok: true }); server.close(); this.onChange();
       } catch {

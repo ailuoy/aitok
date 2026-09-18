@@ -3,8 +3,10 @@ package main
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -63,6 +65,13 @@ func (s *Server) desktopSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	unauthorized := func() { reply(w, map[string]string{"error": "助手登录已失效，请重新授权登录"}, 401) }
+	queryFailed := func(err error) {
+		if errors.Is(err, sql.ErrNoRows) {
+			unauthorized()
+		} else {
+			reply(w, map[string]string{"error": "后台暂时不可用，请稍后重试"}, http.StatusServiceUnavailable)
+		}
+	}
 	parts := strings.Split(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), ".")
 	if len(parts) != 2 || len(parts[0]) > 4096 {
 		unauthorized()
@@ -82,12 +91,20 @@ func (s *Server) desktopSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stamp, err := s.sessionStamp(r.Context(), claims.UserID)
-	if err != nil || !hmac.Equal([]byte(stamp), []byte(claims.Stamp)) || !s.permitted(r.Context(), claims.UserID, "accounts") {
+	if err != nil {
+		queryFailed(err)
+		return
+	}
+	if !hmac.Equal([]byte(stamp), []byte(claims.Stamp)) {
 		unauthorized()
 		return
 	}
 	var user User
 	if err = s.db.QueryRowContext(r.Context(), `SELECT id,email,COALESCE(role,'') FROM users WHERE id=$1 AND deleted_at IS NULL AND NOT disabled`, claims.UserID).Scan(&user.ID, &user.Email, &user.Role); err != nil {
+		queryFailed(err)
+		return
+	}
+	if user.Email != adminIdentity && user.Role != "admin" {
 		unauthorized()
 		return
 	}

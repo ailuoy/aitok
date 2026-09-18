@@ -107,6 +107,17 @@ export class LauncherManager {
     this.errors.delete(id);
   }
 
+  updateAuthentication(status) {
+    return this.run(async () => {
+      if (status === 'authenticated') {
+        for (const site of this.sites.filter(site => !site.deleted_at && site.enabled)) await this.startSite(site);
+      } else if (status === 'signed_out') {
+        for (const id of [...this.runtimes.keys()]) await this.stopSite(id);
+      }
+      // 连接暂时中断时保留运行实例，新的操作仍由 authorize 校验。
+    });
+  }
+
   save(input) {
     return this.run(() => this.saveSite(input));
   }

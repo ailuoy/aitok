@@ -108,11 +108,8 @@ app.on('before-quit', event => { if (!quitting) { event.preventDefault(); void q
 if (ownsLock) app.whenReady().then(async () => {
   authentication = new DesktopAuth({ profile, path: join(app.getPath('userData'), 'login-' + profile.channel + '.json'), encryption: safeStorage, openExternal: url => shell.openExternal(url), onChange: () => {
     if (!manager || quitting) return;
-    void manager.run(async () => {
-      if (authentication.status === 'authenticated') {
-        for (const site of manager.sites.filter(site => !site.deleted_at && site.enabled)) await manager.startSite(site);
-        showWindow();
-      } else { for (const id of [...manager.runtimes.keys()]) await manager.stopSite(id); }
+    void manager.updateAuthentication(authentication.status).then(() => {
+      if (authentication.status === 'authenticated') showWindow();
       if (tray) updateTray();
     }).catch(() => {});
   } });

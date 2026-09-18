@@ -35,6 +35,12 @@ try {
   for (let attempt = 0; attempt < 30 && await evaluate('document.querySelector("#editor").open'); attempt++) await delay(100);
   assert.equal(await evaluate('document.querySelector("#sites .site h2").textContent'), '界面验证');
   assert.equal(await evaluate('document.querySelector("#login").textContent'), '授权登录');
+  await evaluate(`render({ ...state, auth: { status: 'reconnecting', user: { username: '测试账号' }, error: '后台连接暂时不可用，正在自动重试' } })`);
+  assert.equal(await evaluate('document.querySelector("#login-title").textContent'), '正在重连 · 测试账号');
+  assert.equal(await evaluate('document.querySelector("#login").textContent'), '退出登录');
+  await evaluate(`render({ ...state, auth: { status: 'reconnecting', user: null, error: '后台连接暂时不可用，正在自动重试' } })`);
+  assert.equal(await evaluate('document.querySelector("#login-title").textContent'), '正在重连');
+  await evaluate('refresh()');
   assert.equal((await evaluate('window.assistant.state()')).sites[0].running, false);
   assert.equal(await evaluate('document.querySelector("#startup").disabled'), true);
   await evaluate(`document.querySelector('.buttons button:nth-child(2)').click(); document.querySelector('#site-form').elements.port.value='19884'; document.querySelector('#site-form').requestSubmit();`);
