@@ -33,6 +33,26 @@ INSERT INTO recharge_packages(id,name,plan,region,currency,original_amount_minor
 		_ = json.Unmarshal(w.Body.Bytes(), &result)
 		return result
 	}
+
+	checkMemberPlan := func(plan string) {
+		t.Helper()
+		for _, url := range []string{"/api/accounts", "/api/accounts?paged=1", "/api/me"} {
+			rows := call("GET", url, nil, 2, 200)["accounts"].([]any)
+			if len(rows) != 1 {
+				t.Fatal("用户账号范围错误", rows)
+			}
+			member := rows[0].(map[string]any)
+			if member["subscription_plan"] != plan || member["renewal_date"] != "2026-10-01" {
+				t.Fatal("用户当前套餐或续费日期错误", url, member)
+			}
+			for _, field := range []string{"subscription_package_id", "region", "notes", "payment_card_id", "billing_address", "session_ciphertext"} {
+				if _, exists := member[field]; exists {
+					t.Fatal("用户套餐展示泄露管理字段", field)
+				}
+			}
+		}
+	}
+	checkMemberPlan("")
 	path := "/api/accounts/1/subscription-package"
 	selection := func(id any) map[string]any { return map[string]any{"subscription_package_id": id} }
 	call("PATCH", path, selection(1), 0, 401)
@@ -49,6 +69,7 @@ INSERT INTO recharge_packages(id,name,plan,region,currency,original_amount_minor
 	if result := call("PATCH", path, selection(1), 1, 200); result["subscription_package_id"] != float64(1) {
 		t.Fatal("未返回保存的套餐")
 	}
+	checkMemberPlan("plus")
 	migration, err := os.ReadFile("../../migrations/031_account_subscription_package.sql")
 	if err != nil {
 		t.Fatal(err)
@@ -89,14 +110,29 @@ INSERT INTO recharge_packages(id,name,plan,region,currency,original_amount_minor
 	}
 	// 下架套餐仍允许作为当前订阅记录，清空不改变开通凭据及日期。
 	call("PATCH", path, selection(2), 1, 200)
+	checkMemberPlan("pro_5x")
 	call("PATCH", path, selection(nil), 1, 200)
+	checkMemberPlan("")
 	if err = db.QueryRow(accountSnapshot).Scan(&after); err != nil || after != before {
 		t.Fatal("人工选型修改了其他账号信息", err)
 	}
 	call("PATCH", "/api/accounts/2/subscription-package", selection(1), 1, 404)
 	call("PATCH", "/api/accounts/999/subscription-package", selection(1), 1, 404)
 	call("PATCH", path, selection(2), 1, 200)
+	// 即使历史开通仍为 Plus，用户也应展示当前选中的 20X；软删除套餐不得继续展示。
+	if _, err = db.Exec(`UPDATE recharge_packages SET plan='pro_20x',updated_at=NOW() WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	checkMemberPlan("pro_20x")
+	if _, err = db.Exec(`UPDATE recharge_packages SET deleted_at=NOW(),updated_at=NOW() WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
+	checkMemberPlan("")
+	if _, err = db.Exec(`UPDATE recharge_packages SET deleted_at=NULL,updated_at=NOW() WHERE id=2`); err != nil {
+		t.Fatal(err)
+	}
 	call("DELETE", "/api/packages/2", nil, 1, 200)
+	checkMemberPlan("")
 	var unbound, retained bool
 	if err = db.QueryRow(`SELECT subscription_package_id IS NULL FROM chatgpt_accounts WHERE id=1`).Scan(&unbound); err != nil || !unbound {
 		t.Fatal("删除套餐后未解除关联", err)

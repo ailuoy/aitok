@@ -503,7 +503,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("暂无充值订单")');
   bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000,exp_month:12,exp_year:2035,status:'active'}];
   await navigateAdmin('accounts');
-  const productLabel = `${rechargePackages[0].name} · ${rechargePackages[0].region} · ${rechargePackages[0].months}个月`;
+  const productLabel = `PLUS · ${rechargePackages[0].name} · ${rechargePackages[0].region} · ${rechargePackages[0].months}个月`;
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th")).slice(1, 4).map(th => th.textContent.trim())'), ['所属用户', '产品选型', '分组']);
   await select('账号 chat@example.com 的产品选型', productLabel, rechargePackages[0].region);
   await wait('document.querySelector(".account-product button").innerText.includes("测试 Plus") && !document.querySelector(".account-product button").disabled');
@@ -1155,16 +1155,33 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
 
   // 普通用户可使用本人钱包，其他管理列、行操作和管理路由仍不可访问。
   user.id = 1; user.role = 'user'; user.username = '';
+  account.subscription_plan = 'pro_20x'; account.verified_plan = '';
   await cdp.send('Page.reload', {}, sessionId);
   await wait('document.body.innerText.includes("工作账号")');
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"),a=>a.getAttribute("href"))'),['/admin/accounts']);
-  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','上次登录（UTC+8）']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','续费日期','套餐类型','上次登录（UTC+8）']);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-owner-bind"))'), false, '普通用户不能分配账号');
   assert.equal(await evaluate('Boolean(document.querySelector(".account-notes"))'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-product"))'), false);
   assert.equal(await evaluate('Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="打开空白浏览器")'), false);
-  assert.equal(await evaluate('Boolean(document.querySelector(".account-actions,.account-toolbar,.stats"))'),false);
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-actions,.stats"))'),false);
   assert.equal(await evaluate('Boolean(document.querySelector(".user-menu a[href$=wallet]"))'),true);
+
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".account-renewal-filters button"),button=>button.textContent)'), ['正常（>10 天）', '即将续费（0–10 天）', '已逾期']);
+  for (const [plan, label] of [['plus','PLUS'], ['pro_5x','PRO-5X'], ['pro_20x','PRO-20X']]) {
+    account.subscription_plan = plan;
+    await cdp.send('Page.reload', {}, sessionId);
+    await wait(`document.querySelector(".user-accounts-table tbody tr td:nth-child(3)")?.textContent === ${JSON.stringify(label)}`);
+  }
+  for (const status of ['safe', 'soon', 'overdue']) {
+    const mark = requests.length;
+    await evaluate(`document.querySelector('.account-renewal-filters button[data-status="${status}"]').click()`);
+    await wait(`document.querySelector('.account-renewal-filters button[data-status="${status}"]').getAttribute('aria-pressed') === 'true'`);
+    for (let i=0; i<100 && !requests.slice(mark).some(value => new URL(value).searchParams.get('renewal_status') === status); i++) await delay(20);
+    assert.ok(requests.slice(mark).some(value => { const url = new URL(value); return url.pathname === '/api/accounts' && url.searchParams.get('renewal_status') === status && url.searchParams.get('page') === '1'; }));
+  }
+  await evaluate('document.querySelector(".account-renewal-filters button[data-status=overdue]").click()');
+  await wait('document.querySelector(".user-accounts-table tbody tr td:nth-child(3)")?.textContent === "PRO-20X"');
   const requestMark = requests.length, localMark = localRequests.length;
   await delay(2200);
   assert.equal(localRequests.length,localMark);

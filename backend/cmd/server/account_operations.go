@@ -48,7 +48,7 @@ func accountFilter(r *http.Request, user int64, admin bool) (string, []any, erro
 	}
 	group := r.URL.Query().Get("group")
 	renewalStatus := r.URL.Query().Get("renewal_status")
-	if renewalStatus != "" && (!admin || (renewalStatus != "safe" && renewalStatus != "soon" && renewalStatus != "overdue")) {
+	if renewalStatus != "" && (renewalStatus != "safe" && renewalStatus != "soon" && renewalStatus != "overdue") {
 		return "", nil, fmt.Errorf("续费时间状态无效")
 	}
 	if !admin {
@@ -110,9 +110,9 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 			return
 		}
 	}
-	projection := `(to_jsonb(a)-'session_ciphertext'-'api_key')||jsonb_build_object('has_session',COALESCE(a.session_ciphertext,'')<>'','owner_email',CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE u.email END,` + accountPaymentCardJSON + `,` + accountBillingAddressJSON + `)`
+	projection := `(to_jsonb(a)-'session_ciphertext'-'api_key')||jsonb_build_object('subscription_plan',` + accountSubscriptionPlan + `,'has_session',COALESCE(a.session_ciphertext,'')<>'','owner_email',CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE u.email END,` + accountPaymentCardJSON + `,` + accountBillingAddressJSON + `)`
 	if !admin {
-		projection = `jsonb_build_object('id',a.id,'label',a.label,'email',a.email,'renewal_date',a.renewal_date,'verified_plan',a.verified_plan,'last_login_at',a.last_login_at)`
+		projection = `jsonb_build_object('id',a.id,'label',a.label,'email',a.email,'renewal_date',a.renewal_date,'verified_plan',a.verified_plan,'subscription_plan',` + accountSubscriptionPlan + `,'last_login_at',a.last_login_at)`
 	}
 	rows, err := jsonRows(r.Context(), s.db, "SELECT "+projection+filter+` ORDER BY `+order+` LIMIT $5 OFFSET $6`, append(args, limit, offset)...)
 	if err != nil {

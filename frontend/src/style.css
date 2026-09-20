@@ -372,6 +372,8 @@ button,input,textarea{font-family:inherit}
 .user-accounts-table { min-width: 0; width: 100%; table-layout: fixed; }
 .user-accounts-table th, .user-accounts-table td { white-space: normal; overflow-wrap: anywhere; }
 .user-accounts-table .last-login { min-width: 0; }
+.user-accounts-table .table-sort { max-width: 100%; white-space: normal; text-align: left; }
+.user-accounts-table .table-sort svg { flex-shrink: 0; }
 
 .json-tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .json-field.dragging .json-editor { border-color: var(--focus); outline: 2px dashed var(--focus); outline-offset: 2px; }

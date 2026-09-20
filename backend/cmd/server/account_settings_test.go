@@ -125,7 +125,7 @@ INSERT INTO chatgpt_accounts(id,user_id,label,email,group_id,renewal_date,delete
 		t.Fatal("取消筛选应包含未设置日期账号", all)
 	}
 	call("GET", "/api/accounts?paged=1&renewal_status=invalid", 1, nil, 400)
-	call("GET", "/api/accounts?paged=1&renewal_status=soon", 2, nil, 400)
+	call("GET", "/api/accounts?paged=1&renewal_status=soon", 2, nil, 200)
 	s := &Server{db: db, secret: []byte("account-settings-test")}
 	r := httptest.NewRequest("GET", "/api/accounts/export?renewal_status=soon&group=1&q=Today", nil)
 	r.Header.Set("Authorization", "Bearer "+s.token(1))
@@ -221,4 +221,33 @@ func TestAccountPaymentCardBindingLifecycle(t *testing.T) {
 	if err := db.QueryRow(`SELECT count(*) FROM operation_events WHERE entity_type='account' AND entity_id=1 AND action='payment_card'`).Scan(&count); err != nil || count != 4 {
 		t.Fatal("绑卡、解绑、删卡审计不正确", count, err)
 	}
+}
+
+func TestMemberAccountRenewalFilters(t *testing.T) {
+	db, call := accountSettingsTest(t)
+	_, err := db.Exec(`UPDATE chatgpt_accounts SET renewal_date=(NOW() AT TIME ZONE 'Asia/Shanghai')::date+CASE id WHEN 1 THEN 11 WHEN 2 THEN 10 WHEN 4 THEN -1 ELSE 0 END;
+INSERT INTO chatgpt_accounts(id,user_id,label,email,renewal_date,deleted_at) VALUES
+(6,2,'Today','today@test.local',(NOW() AT TIME ZONE 'Asia/Shanghai')::date,NULL),
+(7,2,'Deleted','deleted@test.local',(NOW() AT TIME ZONE 'Asia/Shanghai')::date,NOW()),
+(8,2,'Undated','undated@test.local',NULL,NULL);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		status string
+		ids    []int
+	}{{"safe", []int{1}}, {"soon", []int{6, 2}}, {"overdue", []int{4}}, {"", []int{8, 6, 4, 2, 1}}} {
+		for i, id := range c.ids {
+			data := call("GET", fmt.Sprintf("/api/accounts?paged=1&renewal_status=%s&page_size=1&page=%d", c.status, i+1), 2, nil, 200)
+			rows := data["accounts"].([]any)
+			if data["total"] != float64(len(c.ids)) || len(rows) != 1 || rows[0].(map[string]any)["id"] != float64(id) {
+				t.Fatalf("用户续费筛选 %s 分页或归属错误: %v", c.status, data)
+			}
+		}
+	}
+	filtered := call("GET", "/api/accounts?paged=1&renewal_status=soon&q=Today&sort=renewal_date&direction=asc&group=2", 2, nil, 200)
+	if filtered["total"] != float64(1) || filtered["accounts"].([]any)[0].(map[string]any)["id"] != float64(6) {
+		t.Fatal("用户筛选未正确组合搜索、排序或错误使用管理分组", filtered)
+	}
+	call("GET", "/api/accounts?paged=1&renewal_status=invalid", 2, nil, 400)
 }
