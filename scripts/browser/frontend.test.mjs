@@ -58,6 +58,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let ledgerResponseLost = false;
   const userRows = [{ id: 3, username: 'admin', email: '', role: 'super_admin', created_at: '2026-09-01T00:00:00Z' }, { id: 1, email: 'member@example.com', role: '', created_at: '2026-09-02T00:00:00Z' }];
   const roleWrites = [];
+  const passwordWrites = [];
+  let passwordSaveFail = false;
   const ownerLookups = [], ownerWrites = [];
   const ownerTargets = [{ id: 4, email: 'recipient@example.com' }, { id: 1, email: 'member@example.com' }];
   let rechargePackages=[], rechargeOrders=[];
@@ -178,7 +180,12 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       else if (url.pathname==='/api/proxy-activity') data={events:[],records:[]};
       else if (url.pathname==='/api/payment-exceptions') data={exceptions:[]};
       else if (url.pathname.startsWith('/api/users')) {
-        if (request.method === 'PATCH') { const input = JSON.parse(request.postData); roleWrites.push(input); userRows[1].role = input.role; data = { role: input.role }; }
+        if (url.pathname === '/api/users/1/password' && request.method === 'PATCH') {
+          const input = JSON.parse(request.postData); passwordWrites.push(input);
+          if (passwordSaveFail) { responseCode = 503; data = { error: '模拟密码保存失败' }; }
+          else data = { message: '密码已修改，该用户需要重新登录' };
+        }
+        else if (request.method === 'PATCH') { const input = JSON.parse(request.postData); roleWrites.push(input); userRows[1].role = input.role; data = { role: input.role }; }
         else data = { users: userRows, total: userRows.length, page: 1, page_size: 20 };
       } else if (url.pathname.startsWith('/api/account-groups')) {
         const input = request.postData ? JSON.parse(request.postData) : {};
@@ -363,8 +370,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
     return evaluate(`(() => { const element = document.querySelector(${JSON.stringify(selector)}); Object.getOwnPropertyDescriptor(${type}.prototype, 'value').set.call(element, ${JSON.stringify(value)}); element.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   };
   const select = async (label, text, query = '', keyboard = false) => {
-    await wait(`(() => { const button = Array.from(document.querySelectorAll('button[role=combobox]')).find(button => button.getAttribute('aria-label') === ${JSON.stringify(label)} && !button.disabled); if (!button) return false; button.click(); return true; })()`);
-    await wait('Boolean(document.querySelector(".select-search input"))');
+    // 异步刷新可能短暂禁用并收起下拉框，等目标弹层实际打开再选择。
+    await wait(`(() => { const button = Array.from(document.querySelectorAll('button[role=combobox]')).find(button => button.getAttribute('aria-label') === ${JSON.stringify(label)} && !button.disabled); if (!button) return false; if (button.getAttribute('aria-expanded') !== 'true') { button.click(); return false; } return Boolean(document.querySelector('.select-search input')); })()`);
     if (query) await fill('.select-search input', query);
     await wait(`Array.from(document.querySelectorAll('[role=option]')).some(option => option.textContent === ${JSON.stringify(text)})`);
     if (keyboard) await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 }, sessionId);
@@ -872,6 +879,34 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('确认修改');
   await wait('!document.querySelector("dialog") && document.querySelector(".user-manager tbody button[role=combobox]").innerText.includes("管理员")');
   assert.deepEqual(roleWrites, [{ role: 'admin' }]);
+  assert.equal(await evaluate('document.querySelector(".user-manager tbody tr:first-child .user-login-actions")'), null);
+  await click('修改密码');
+  await wait('Boolean(document.querySelector(".user-password-dialog"))');
+  assert.equal(await evaluate('document.querySelectorAll(".user-password-dialog input[type=password]").length'), 2);
+  assert.equal(await evaluate('Boolean(document.querySelector(".user-password-dialog input[name=current_password]"))'), false);
+  await click('确认修改密码');
+  assert.equal(passwordWrites.length, 0, '未填写新密码不能提交');
+  await fill('input[name=new_password]', 'new-user-password');
+  await fill('input[name=confirm_password]', 'different-password');
+  await click('确认修改密码');
+  await wait('document.querySelector(".user-password-dialog [role=alert]")?.textContent.includes("两次输入的新密码不一致")');
+  assert.equal(passwordWrites.length, 0, '两次新密码不一致不能提交');
+  await fill('input[name=confirm_password]', 'new-user-password');
+  passwordSaveFail = true;
+  await click('确认修改密码');
+  await wait('document.querySelector(".user-password-dialog [role=alert]")?.textContent === "模拟密码保存失败"');
+  assert.equal(passwordWrites.length, 1);
+  passwordSaveFail = false;
+  await writeFile(join(directory, 'user-password-dialog.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  await click('确认修改密码');
+  await wait('!document.querySelector("dialog") && document.querySelector(".user-manager [role=status]")?.textContent.includes("密码已修改")');
+  assert.deepEqual(passwordWrites.at(-1), { new_password: 'new-user-password', confirm_password: 'new-user-password' });
+  await click('修改密码');
+  await wait('Boolean(document.querySelector(".user-password-dialog"))');
+  assert.ok(await evaluate('Array.from(document.querySelectorAll(".user-password-dialog input")).every(input => input.value === "")'), '重开弹窗清空密码');
+  await click('取消');
+  await wait('!document.querySelector("dialog")');
+  assert.equal(passwordWrites.length, 2);
   const usersShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'admin-users.png'), Buffer.from(usersShot.data, 'base64'));
   await cdp.send('Page.reload', {}, sessionId);

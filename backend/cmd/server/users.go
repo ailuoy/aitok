@@ -23,7 +23,7 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	}
 	role, err := s.role(r.Context(), id)
 	if err != nil || role != "super_admin" {
-		reply(w, map[string]string{"error": "仅超级管理员可以管理用户角色"}, 403)
+		reply(w, map[string]string{"error": "仅超级管理员可以管理用户"}, 403)
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -67,6 +67,15 @@ func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/users/"), "/")
+	if len(parts) == 2 && parts[1] == "password" {
+		target, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil || target < 1 {
+			http.NotFound(w, r)
+			return
+		}
+		s.changeUserPassword(w, r, id, target)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "access" {
 		target, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil || target < 1 {

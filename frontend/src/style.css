@@ -401,3 +401,7 @@ button,input,textarea{font-family:inherit}
 
 .account-actions .quick-month-order{flex-basis:100%;width:max-content;max-width:max-content}
 .quick-order-period{grid-column:1 / -1;margin:0}
+
+.user-login-actions{display:flex;flex-wrap:wrap;gap:8px}
+.user-password-dialog form{display:grid;gap:14px}
+.user-password-dialog form>label{display:grid;gap:6px}

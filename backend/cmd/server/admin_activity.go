@@ -156,7 +156,7 @@ func (s *Server) auditFilter(next http.Handler) http.Handler {
 
 // 未知路径可能夹带凭据，只保留已知资源、数字 ID 和固定动作段。
 func safeAuditResource(path string) string {
-	known := map[string]bool{"api": true, "accounts": true, "account-groups": true, "addresses": true, "bank-cards": true, "card-operations": true, "orders": true, "packages": true, "users": true, "wallet": true, "topups": true, "audit": true, "proxy-activity": true, "payment-exceptions": true, "notices": true, "order-operators": true, "me": true, "logout": true, "export": true, "import": true, "ledger": true, "access": true, "role": true, "group": true, "login": true, "subscription": true, "browser": true, "browser-session": true, "session": true, "renewal-date": true, "renew": true, "sync": true, "refund": true, "collection-quote": true, "record": true}
+	known := map[string]bool{"api": true, "accounts": true, "account-groups": true, "addresses": true, "bank-cards": true, "card-operations": true, "orders": true, "packages": true, "users": true, "wallet": true, "topups": true, "audit": true, "proxy-activity": true, "payment-exceptions": true, "notices": true, "order-operators": true, "me": true, "logout": true, "export": true, "import": true, "ledger": true, "access": true, "role": true, "password": true, "group": true, "login": true, "subscription": true, "browser": true, "browser-session": true, "session": true, "renewal-date": true, "renew": true, "sync": true, "refund": true, "collection-quote": true, "record": true}
 	known["billing-address"] = true
 	known["payment-card"], known["payment-cards"] = true, true
 	known["owner"] = true
