@@ -2,10 +2,16 @@ import React, { useRef, useState } from 'react';
 import Select from './Select';
 import { request } from './api';
 
+const planLabels = { plus: 'PLUS', pro_5x: 'PRO-5X', pro_20x: 'PRO-20X' };
+
+function formatPlan(plan) {
+  return planLabels[plan] || '未设置';
+}
+
 export default function AccountSubscriptionPackage({ account, packages, loading, token, onChange, onError }) {
   const [busy, setBusy] = useState(false);
   const writing = useRef(false);
-  const options = [{ value: '', label: '未设置' }, ...packages.map(pkg => ({ value: String(pkg.id), label: `${pkg.name} · ${pkg.region} · ${pkg.months}个月${pkg.enabled ? '' : '（已下架）'}` }))];
+  const options = [{ value: '', label: '未设置' }, ...packages.map(pkg => ({ value: String(pkg.id), label: `${formatPlan(pkg.plan)} · ${pkg.name} · ${pkg.region} · ${pkg.months}个月${pkg.enabled ? '' : '（已下架）'}` }))];
   if (account.subscription_package_id && !packages.some(pkg => pkg.id === account.subscription_package_id)) {
     options.push({ value: String(account.subscription_package_id), label: '原套餐（不可用）', disabled: true });
   }

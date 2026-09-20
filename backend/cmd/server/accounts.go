@@ -313,7 +313,14 @@ func accountView(a Account, admin bool) any {
 	if admin {
 		return a
 	}
-	return map[string]any{"id": a.ID, "label": a.Label, "email": a.Email, "last_login_at": a.LastLoginAt}
+	return map[string]any{
+		"id":            a.ID,
+		"label":         a.Label,
+		"email":         a.Email,
+		"renewal_date":  a.RenewalDate,
+		"verified_plan": a.VerifiedPlan,
+		"last_login_at": a.LastLoginAt,
+	}
 }
 func accountViews(accounts []Account, admin bool) []any {
 	result := make([]any, 0, len(accounts))

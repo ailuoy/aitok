@@ -112,7 +112,7 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 	}
 	projection := `(to_jsonb(a)-'session_ciphertext'-'api_key')||jsonb_build_object('has_session',COALESCE(a.session_ciphertext,'')<>'','owner_email',CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE u.email END,` + accountPaymentCardJSON + `,` + accountBillingAddressJSON + `)`
 	if !admin {
-		projection = `jsonb_build_object('id',a.id,'label',a.label,'email',a.email,'last_login_at',a.last_login_at)`
+		projection = `jsonb_build_object('id',a.id,'label',a.label,'email',a.email,'renewal_date',a.renewal_date,'verified_plan',a.verified_plan,'last_login_at',a.last_login_at)`
 	}
 	rows, err := jsonRows(r.Context(), s.db, "SELECT "+projection+filter+` ORDER BY `+order+` LIMIT $5 OFFSET $6`, append(args, limit, offset)...)
 	if err != nil {
@@ -144,12 +144,11 @@ func accountOrder(key, direction string, admin bool) (string, error) {
 	if direction == "" {
 		direction = "desc"
 	}
-	fields := map[string]string{"id": "a.id", "account": "lower(a.label)", "last_login_at": "a.last_login_at"}
+	fields := map[string]string{"id": "a.id", "account": "lower(a.label)", "last_login_at": "a.last_login_at", "renewal_date": "a.renewal_date"}
 	if admin {
 		fields["owner"] = "lower(CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE u.email END)"
 		fields["group"] = "lower(g.name)"
 		fields["session"] = "(COALESCE(a.session_ciphertext,'')<>'')"
-		fields["renewal_date"] = "a.renewal_date"
 		fields["renewal_enabled"] = "a.renewal_enabled"
 		fields["payment_card"] = "lower(c.label)"
 	}
