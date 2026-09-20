@@ -82,7 +82,7 @@ function App() {
   } else if (desktopAuth && token && user) {
     content = <DesktopAuthorize token={token} user={user} route={route} />;
   } else if (protectedPage && token && user) {
-    content = !['admin','super_admin'].includes(user.role) && path !== '/admin/accounts' ? <main className="dashboard"><p>无权访问此页面。</p><Link to="/admin/accounts">返回我的账号</Link></main> : <AdminLayout key={user.id + ":" + user.role} collapsed={sidebarCollapsed} onExpandSidebar={expandSidebar} user={user} token={token} path={path}><Dashboard key={user.id + ":" + user.role} user={user} accounts={accounts} setAccounts={setAccounts} token={token} route={route} /></AdminLayout>;
+    content = !['admin','super_admin'].includes(user.role) && !['/admin/accounts', '/admin/wallet'].includes(path) ? <main className="dashboard"><p>无权访问此页面。</p><Link to="/admin/accounts">返回我的账号</Link></main> : <AdminLayout key={user.id + ":" + user.role} collapsed={sidebarCollapsed} onExpandSidebar={expandSidebar} user={user} token={token} path={path}><Dashboard key={user.id + ":" + user.role} user={user} accounts={accounts} setAccounts={setAccounts} token={token} route={route} /></AdminLayout>;
   } else if (authPage || protectedPage) {
     content = <Auth key={path} mode={path === '/register' ? 'signup' : 'login'} onSuccess={value => { localStorage.setItem('token', value); setToken(value); setUser(null); }} onBack={() => navigate('/')} onModeChange={mode => navigate((mode === 'signup' ? '/register' : '/login') + route.search)} />;
   } else {

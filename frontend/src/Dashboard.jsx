@@ -158,7 +158,6 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     finally { setBindingAccount(null); }
   }
   const refresh = useCallback(async (syncPending = false) => {
-    if (!admin) { const data = await request('/accounts', token); setAccounts(data.accounts); setError(''); return {orders: []}; }
     const [accountData, initialWallet] = await Promise.all([request('/accounts', token), request('/wallet', token)]);
     let walletData = initialWallet;
     let warning = '';
@@ -172,7 +171,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     }
     setAccounts(accountData.accounts); setWallet({ ...walletData, sync_warning: warning }); refreshCards(value => value + 1); setError('');
     return walletData;
-  }, [token, setAccounts, admin]);
+  }, [token, setAccounts]);
   useEffect(() => { refresh(true).catch(e => setError(e.message)); }, [refresh]);
   const params = route.searchParams;
   const topupStatus = params.get('topup');

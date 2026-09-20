@@ -74,7 +74,7 @@ func TestRoleBoundaryAndTwoFactor(t *testing.T) {
 			t.Fatal("用户账号响应含管理字段")
 		}
 	}
-	for _, v := range []struct{ method, path string }{{"DELETE", "/api/accounts/1"}, {"PATCH", "/api/accounts/1/session"}, {"POST", "/api/accounts/1/browser-session"}, {"POST", "/api/accounts/1/browser"}, {"POST", "/api/accounts/import"}, {"GET", "/api/accounts/export"}, {"GET", "/api/wallet"}, {"GET", "/api/packages"}, {"GET", "/api/bank-cards"}, {"GET", "/api/addresses"}, {"GET", "/api/account-groups"}, {"GET", "/api/users"}, {"GET", "/api/proxy-activity"}, {"GET", "/api/two-factor"}, {"POST", "/api/orders"}, {"POST", "/api/unknown-management"}} {
+	for _, v := range []struct{ method, path string }{{"DELETE", "/api/accounts/1"}, {"PATCH", "/api/accounts/1/session"}, {"POST", "/api/accounts/1/browser-session"}, {"POST", "/api/accounts/1/browser"}, {"POST", "/api/accounts/import"}, {"GET", "/api/accounts/export"}, {"GET", "/api/packages"}, {"GET", "/api/bank-cards"}, {"GET", "/api/addresses"}, {"GET", "/api/account-groups"}, {"GET", "/api/users"}, {"GET", "/api/proxy-activity"}, {"GET", "/api/two-factor"}, {"POST", "/api/orders"}, {"POST", "/api/unknown-management"}} {
 		if status, _ := call(1, v.method, v.path, nil, ""); status != 403 {
 			t.Fatalf("用户越权 %s %s: %d", v.method, v.path, status)
 		}

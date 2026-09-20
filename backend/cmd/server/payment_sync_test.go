@@ -33,7 +33,6 @@ func TestPaymentQuantityAndReconciliation(t *testing.T) {
 		t.Fatal(err)
 	}
 	provider := &fakeStripe{}
-	db.Exec("UPDATE users SET role='admin' WHERE id=1")
 	s := &Server{db: db, secret: []byte("test-key"), stripe: provider, billing: billingConfig{SecretKey: "sk_test_fake", WebhookSecret: "whsec_test", BaseURL: "http://localhost:15680", TokensPerUSD: 1, RenewalCost: 20, RenewalMonths: 1, Price1ID: "price_test_1", Price100ID: "price_test_100"}}
 	routes := s.routes()
 	call := func(method, path, body string, id int64, status int) map[string]any {
@@ -69,7 +68,7 @@ func TestPaymentQuantityAndReconciliation(t *testing.T) {
 		t.Fatal("订单金额和数量记录错误")
 	}
 	path := "/api/wallet/topups/" + order + "/sync"
-	call("POST", path, "", 2, 403)
+	call("POST", path, "", 2, 404)
 	if provider.readCalls != 0 {
 		t.Fatal("越权请求不应访问支付供应商")
 	}
@@ -79,6 +78,7 @@ func TestPaymentQuantityAndReconciliation(t *testing.T) {
 		t.Fatal("未付款订单不得入账")
 	}
 	provider.session.PaymentStatus = stripe.CheckoutSessionPaymentStatusPaid
+	provider.session.PaymentIntent = &stripe.PaymentIntent{ID: "pi_test_wallet_owner"}
 	provider.session.Status = stripe.CheckoutSessionStatusComplete
 	provider.session.AmountTotal = 1
 	call("POST", path, "", 1, 409)
@@ -91,5 +91,36 @@ func TestPaymentQuantityAndReconciliation(t *testing.T) {
 	wallet = call("GET", "/api/wallet", "", 1, 200)
 	if wallet["balance"] != float64(7) || len(wallet["ledger"].([]any)) != 1 || wallet["orders"].([]any)[0].(map[string]any)["status"] != "paid" {
 		t.Fatal("主动核账与延迟回调应只入账一次")
+	}
+	other := call("GET", "/api/wallet?user_id=1", "", 2, 200)
+	if other["balance"] != float64(0) || len(other["orders"].([]any)) != 0 || len(other["ledger"].([]any)) != 0 || len(other["renewals"].([]any)) != 0 {
+		t.Fatal("普通用户读取到了他人的钱包记录")
+	}
+	refund := `{"amount_usd":"1.00","reason":"test refund request","request_key":"wallet-owner-refund"}`
+	call("POST", "/api/wallet/topups/"+order+"/refund", refund, 2, 404)
+	call("POST", "/api/wallet/topups/"+order+"/refund", refund, 1, 201)
+	if call("GET", "/api/wallet", "", 1, 200)["balance"] != float64(7) {
+		t.Fatal("申请退款不能直接改变余额")
+	}
+	call("GET", "/api/payment-exceptions", "", 1, 403)
+	call("POST", "/api/payment-exceptions/1/approve", "{}", 1, 403)
+	call("POST", "/api/orders", "{}", 1, 403)
+}
+
+func TestUserWalletEndpointAllowlist(t *testing.T) {
+	for _, test := range []struct {
+		method, path string
+		allowed      bool
+	}{
+		{"GET", "/api/wallet", true}, {"POST", "/api/wallet/topups", true},
+		{"POST", "/api/wallet/topups/order-1/sync", true}, {"POST", "/api/wallet/topups/order-1/refund", true},
+		{"PATCH", "/api/wallet", false}, {"GET", "/api/wallet/topups", false},
+		{"GET", "/api/wallet/topups/order-1/sync", false}, {"POST", "/api/wallet/topups//sync", false},
+		{"POST", "/api/wallet/topups/order-1/approve", false}, {"POST", "/api/wallet/topups/order-1/extra/refund", false},
+		{"POST", "/api/wallet/topups/order-1/sync/extra", false}, {"POST", "/api/orders/1/pay", false},
+	} {
+		if allowed := userEndpointAllowed(test.method, test.path); allowed != test.allowed {
+			t.Errorf("%s %s: allowed=%v want %v", test.method, test.path, allowed, test.allowed)
+		}
 	}
 }

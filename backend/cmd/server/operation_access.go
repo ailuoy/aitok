@@ -117,7 +117,7 @@ func (s *Server) accessFilter(next http.Handler) http.Handler {
 				return
 			}
 			if role == "user" && !userEndpointAllowed(r.Method, r.URL.Path) {
-				reply(w, map[string]string{"error": "普通用户仅可查看和添加自己的账号"}, 403)
+				reply(w, map[string]string{"error": "普通用户仅可查看和添加自己的账号及使用本人钱包"}, 403)
 				return
 			}
 		}
@@ -167,12 +167,20 @@ func userEndpointAllowed(method, path string) bool {
 	switch path {
 	case "/api/me":
 		return method == "GET"
+	case "/api/wallet":
+		return method == "GET"
+	case "/api/wallet/topups":
+		return method == "POST"
 	case "/api/accounts":
 		return method == "GET" || method == "POST"
 	case "/api/logout", "/api/admin-activity":
 		return method == "POST"
 	case "/api/login", "/api/register", "/api/login-code", "/api/send-code", "/api/forgot-password", "/api/reset-password", "/api/stripe/webhook":
 		return true
+	}
+	if method == "POST" && strings.HasPrefix(path, "/api/wallet/topups/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/api/wallet/topups/"), "/")
+		return len(parts) == 2 && parts[0] != "" && (parts[1] == "sync" || parts[1] == "refund")
 	}
 	return false
 }

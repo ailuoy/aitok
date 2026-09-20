@@ -40,7 +40,7 @@ export default function WalletPanel({ wallet, token, refresh, user, notice }) {
     <div className="wallet-grid">
       <div className="wallet-balance"><span className="eyebrow">AITOK WALLET</span><h2>你的每一份灵感，都有余量。</h2>
         <div className="balance-value"><Coins size={28} /><strong>{wallet.balance.toLocaleString()}</strong><span>代币</span></div>
-        <p>1 美元 = {wallet.tokens_per_usd} 代币</p><Link to="/admin/orders">创建充值订单并使用钱包付款</Link>
+        <p>1 美元 = {wallet.tokens_per_usd} 代币</p>{['admin', 'super_admin'].includes(user.role) && <Link to="/admin/orders">创建充值订单并使用钱包付款</Link>}
       </div>
       <div className="topup-card"><h3>充值代币</h3><p className="muted">通过 Stripe 安全支付，支付确认后自动到账。</p>
         <div className="topup-options" role="radiogroup" aria-label="充值金额">{wallet.topup_options.map(item => <button key={item.amount_minor} role="radio" aria-checked={selected === item.amount_minor} disabled={busy} className={selected === item.amount_minor ? 'selected' : ''} onClick={() => setSelected(item.amount_minor)}><strong>{item.tokens} <small>代币</small></strong><span>{money(item.amount_minor)}</span></button>)}</div>

@@ -30,6 +30,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   t.after(() => child.kill());
   const cdp = new CDP(child);
   const user = { id: 3, username: 'admin', role: 'super_admin' };
+  const walletData = { balance: 0, orders: [], ledger: [], renewals: [], topup_options: [{ amount_minor: 100, tokens: 1 }], tokens_per_usd: 1, stripe_enabled: false };
+  const walletTopups = [];
   const account = { id: 1, user_id: 1, label: '工作账号', email: 'chat@example.com', has_session: true, renewal_enabled: true, payment_card_id: null };
   const errors = [], imported = [], launches = [], requests = [];
   const localLaunches = [], localRequests = [], blankLaunches = [];
@@ -311,7 +313,17 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const matchesStatus=!status || (Number.isFinite(days) && (status==='safe' ? days>10 : status==='soon' ? days>=0 && days<=10 : days<0));
         const accountRows=matchesStatus && (!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
         data = { accounts: accountRows, account, total:accountRows.length, page:1, page_size:20 };
-      } else if (url.pathname === '/api/wallet') data = { balance: 0, orders: [], ledger: [], renewals: [], renewal_token_cost: 20, renewal_months: 1, topup_options: [{ amount_minor: 100, tokens: 1 }], tokens_per_usd: 1, stripe_enabled: false };
+      } else if (url.pathname === '/api/wallet') data = walletData;
+      else if (url.pathname === '/api/wallet/topups' && request.method === 'POST') {
+        const input = JSON.parse(request.postData); walletTopups.push(input);
+        walletData.orders = [{ order_no: 'user-wallet-test', unit_amount_minor: input.amount_minor, amount_minor: input.amount_minor * input.quantity, quantity: input.quantity, tokens: input.quantity, status: 'pending', created_at: '2026-09-20T00:00:00Z' }];
+        // 本机模拟支付返回，绝不跳转真实支付渠道。
+        data = { checkout_url: `http://127.0.0.1:${server.address().port}/admin/wallet?topup=success&order=user-wallet-test`, order_no: 'user-wallet-test' };
+      } else if (url.pathname === '/api/wallet/topups/user-wallet-test/sync' && request.method === 'POST') {
+        const order = walletData.orders[0]; order.status = 'paid'; walletData.balance = order.tokens;
+        walletData.ledger = [{ id: 1, amount: order.tokens, balance_after: order.tokens, kind: 'stripe_topup', description: '本人充值', created_at: order.created_at }];
+        data = { status: 'paid' };
+      }
       else if (url.pathname === '/api/accounts/1/browser') {
         if (request.method === 'PATCH' || request.method === 'POST') {
           const input = JSON.parse(request.postData);
@@ -1141,7 +1153,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(requests.some(url => new URL(url).pathname === '/api/accounts/1/browser'), false, '浏览器管理不能请求服务器浏览器配置');
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
 
-  // 普通用户只有账号入口，管理列、行操作和其他路由均不可访问。
+  // 普通用户可使用本人钱包，其他管理列、行操作和管理路由仍不可访问。
   user.id = 1; user.role = 'user'; user.username = '';
   await cdp.send('Page.reload', {}, sessionId);
   await wait('document.body.innerText.includes("工作账号")');
@@ -1152,13 +1164,38 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate('Boolean(document.querySelector(".account-product"))'), false);
   assert.equal(await evaluate('Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="打开空白浏览器")'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-actions,.account-toolbar,.stats"))'),false);
-  assert.equal(await evaluate('Boolean(document.querySelector(".user-menu a[href$=wallet]"))'),false);
+  assert.equal(await evaluate('Boolean(document.querySelector(".user-menu a[href$=wallet]"))'),true);
   const requestMark = requests.length, localMark = localRequests.length;
   await delay(2200);
   assert.equal(localRequests.length,localMark);
   assert.equal(exportCount,0);
   assert.equal(await evaluate('document.querySelector(".user-accounts-table").scrollWidth <= document.querySelector(".data-table-wrap").clientWidth'),true);
   await writeFile(join(directory,'user-accounts.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  walletData.stripe_enabled = true;
+  await evaluate('document.querySelector(".user-menu summary").click()');
+  await evaluate('document.querySelector(".user-menu a[href$=wallet]").click()');
+  await wait('location.pathname === "/admin/wallet" && Boolean(document.querySelector(".wallet-grid"))');
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('Boolean(document.querySelector(".wallet-panel .primary:not(:disabled)"))');
+  assert.equal(await evaluate(`Boolean(document.querySelector('.wallet-panel a[href="/admin/orders"]'))`), false);
+  await fill('#topup-quantity', '3');
+  await evaluate('document.querySelector(".wallet-panel .primary").click()');
+  await wait('document.querySelector(".balance-value strong")?.textContent === "3" && document.body.innerText.includes("充值已到账") && location.search === ""');
+  assert.equal(walletTopups.length, 1);
+  assert.equal(walletTopups[0].amount_minor, 100);
+  assert.equal(walletTopups[0].quantity, 3);
+  assert.ok(walletTopups[0].request_key);
+  assert.ok(await evaluate('document.querySelector(".wallet-panel").textContent.includes("user-wallet-test")'));
+  await click('全部流水');
+  await wait('document.querySelector(".wallet-panel").textContent.includes("本人充值")');
+  await click('账号扣款记录');
+  await wait('document.body.innerText.includes("暂无历史账号扣款记录")');
+  await click('充值记录');
+  assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'));
+  await writeFile(join(directory,'user-wallet.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".balance-value strong")?.textContent === "3"');
+  walletData.balance = 0; walletData.orders = []; walletData.ledger = []; walletData.stripe_enabled = false;
   await cdp.send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/admin/bank-cards'},sessionId);
   await wait('document.body.innerText.includes("无权访问此页面")');
   assert.equal(requests.slice(requestMark).some(url=>url.includes('/api/bank-cards')),false);
