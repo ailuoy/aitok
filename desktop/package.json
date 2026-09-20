@@ -1,7 +1,7 @@
 {
   "name": "aitok-desktop",
   "productName": "AiTok 助手",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "AiTok 本机浏览器桌面助手",
   "author": "AiTok",
   "private": true,

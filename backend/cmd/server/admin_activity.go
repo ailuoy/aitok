@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var adminPagePattern = regexp.MustCompile(`^/admin/(accounts|proxies|addresses|bank-cards|users|wallet|orders|packages|notices|audit|proxy-activity|payment-exceptions)(/[0-9]+)?$`)
+var adminPagePattern = regexp.MustCompile(`^/admin/(accounts|proxies|addresses|bank-cards|users|wallet|consumption-orders|orders|packages|notices|audit|proxy-activity|payment-exceptions)(/[0-9]+)?$`)
 var auditControls = map[string]string{
 	"browser_fingerprint": "重新生成浏览器指纹",
 	"button":              "点击按钮", "link": "打开链接", "form": "提交表单", "select": "选择选项", "toggle": "切换选项",
@@ -160,6 +160,7 @@ func safeAuditResource(path string) string {
 	known["billing-address"] = true
 	known["payment-card"], known["payment-cards"] = true, true
 	known["owner"] = true
+	known["consumption-orders"], known["wallet-quote"] = true, true
 	known["desktop-auth"] = true
 	known["notes"] = true
 	known["subscription-package"] = true

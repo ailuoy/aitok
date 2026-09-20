@@ -245,7 +245,7 @@ func (s *Server) applyStripeSession(ctx context.Context, eventType stripe.EventT
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO wallet_ledger(user_id,amount,balance_after,kind,reference,description) VALUES($1,$2,$3,'stripe_topup',$4,'Stripe 充值')`, id, tokens, balance, "stripe:"+session.ClientReferenceID)
+	_, err = tx.ExecContext(ctx, `INSERT INTO wallet_ledger(user_id,amount,balance_after,kind,reference,description,balance_after_subunit) VALUES($1,$2,$3,'stripe_topup',$4,'Stripe 充值',(SELECT balance_subunit FROM wallets WHERE user_id=$1))`, id, tokens, balance, "stripe:"+session.ClientReferenceID)
 	if err != nil {
 		return err
 	}

@@ -1,7 +1,7 @@
 import { API } from './apiConfig';
 
 let active = null;
-const pagePattern = /^\/admin\/(accounts|proxies|addresses|bank-cards|users|wallet|orders|packages|notices|audit|proxy-activity|payment-exceptions)(\/[0-9]+)?$/;
+const pagePattern = /^\/admin\/(accounts|proxies|addresses|bank-cards|users|wallet|consumption-orders|orders|packages|notices|audit|proxy-activity|payment-exceptions)(\/[0-9]+)?$/;
 export const adminPage = () => pagePattern.test(location.pathname) ? location.pathname : '';
 export const adminAuditHeaders = () => adminPage() ? { 'X-Aitok-Page': adminPage() } : {};
 export const activityContext = () => active && adminPage() ? { ...active, page: adminPage() } : null;

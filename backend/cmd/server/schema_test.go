@@ -144,8 +144,8 @@ AND ARRAY(SELECT a.attname::text FROM pg_attribute a WHERE a.attrelid=c.oid AND 
 			t.Fatal(err)
 		}
 		checks.Close()
-		if checkedTables != 21 {
-			t.Fatalf("结构核对应覆盖全部21张表，实际%d", checkedTables)
+		if checkedTables != 22 {
+			t.Fatalf("结构核对应覆盖全部22张表，实际%d", checkedTables)
 		}
 		rows, err := tx.Query(schemaDefinitionQuery)
 		if err != nil {

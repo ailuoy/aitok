@@ -114,6 +114,7 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 	if !admin {
 		projection = `jsonb_build_object('id',a.id,'label',a.label,'email',a.email,'renewal_date',a.renewal_date,'verified_plan',a.verified_plan,'subscription_plan',` + accountSubscriptionPlan + `,'last_login_at',a.last_login_at)`
 	}
+	projection += `||jsonb_build_object('spent_usd_minor',` + accountSpentUSD + `)`
 	rows, err := jsonRows(r.Context(), s.db, "SELECT "+projection+filter+` ORDER BY `+order+` LIMIT $5 OFFSET $6`, append(args, limit, offset)...)
 	if err != nil {
 		operationError(w, err)

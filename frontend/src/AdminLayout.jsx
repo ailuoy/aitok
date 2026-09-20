@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronRight, CreditCard, Menu, MessageSquare, Monitor, Settings, X } from 'lucide-react';
+import { ChevronRight, CreditCard, Menu, ReceiptText, MessageSquare, Monitor, Settings, X } from 'lucide-react';
 import { Link, adminPath } from './router';
 import { installAdminActivity, recordAdminActivity } from './adminActivity';
 
@@ -42,7 +42,7 @@ export default function AdminLayout({ collapsed = false, onExpandSidebar, user, 
     if (compact) onExpandSidebar();
   }
   function menuLink([page, label], icon = false) {
-    return <Link key={page} to={adminPath(page)} title={label} aria-label={label} aria-current={path === adminPath(page) ? 'page' : undefined}>{icon && <MessageSquare size={17} />}<span className="sidebar-label">{label}</span></Link>;
+    return <Link key={page} to={adminPath(page)} title={label} aria-label={label} aria-current={path === adminPath(page) ? 'page' : undefined}>{icon && (page === 'consumption-orders' ? <ReceiptText size={17} /> : <MessageSquare size={17} />)}<span className="sidebar-label">{label}</span></Link>;
   }
   useEffect(() => { setOpen(false); }, [path]);
   useEffect(() => {
@@ -63,7 +63,7 @@ export default function AdminLayout({ collapsed = false, onExpandSidebar, user, 
           <div id={`sidebar-group-${id}`} className="sidebar-submenu" hidden={compact || !expanded[id]}>
             {items.filter(([, , role]) => !role || role === user.role).map(item => menuLink(item))}
           </div>
-        </div>) : menuLink(['accounts', 'ChatGPT 账号'], true)}
+        </div>) : <>{menuLink(['accounts', 'ChatGPT 账号'], true)}{menuLink(['consumption-orders', '消费订单'], true)}</>}
       </nav>
       <div className="sidebar-role">{{ super_admin: '超级管理员', admin: '管理员' }[user.role] || '用户'}</div>
     </aside>

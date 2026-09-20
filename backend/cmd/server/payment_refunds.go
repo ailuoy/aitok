@@ -227,7 +227,7 @@ func reconcileWalletRefund(ctx context.Context, tx *sql.Tx, order string) error 
 			if err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO wallet_ledger(user_id,amount,balance_after,kind,reference,description) VALUES($1,$2,$3,'stripe_refund',$4,'Stripe 退款代币回收')`, user, -take, balance-take, "stripe-refund:"+order+":"+strconv.FormatInt(reversed+take, 10))
+			_, err = tx.ExecContext(ctx, `INSERT INTO wallet_ledger(user_id,amount,balance_after,kind,reference,description,balance_after_subunit) VALUES($1,$2,$3,'stripe_refund',$4,'Stripe 退款代币回收',(SELECT balance_subunit FROM wallets WHERE user_id=$1))`, user, -take, balance-take, "stripe-refund:"+order+":"+strconv.FormatInt(reversed+take, 10))
 			if err != nil {
 				return err
 			}
@@ -244,7 +244,7 @@ func reconcileWalletRefund(ctx context.Context, tx *sql.Tx, order string) error 
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO wallet_ledger(user_id,amount,balance_after,kind,reference,description) VALUES($1,$2,$3,'dispute_reversal',$4,'争议胜诉返还代币')`, user, -delta, balance, "dispute-return:"+order+":"+eventKey())
+		_, err = tx.ExecContext(ctx, `INSERT INTO wallet_ledger(user_id,amount,balance_after,kind,reference,description,balance_after_subunit) VALUES($1,$2,$3,'dispute_reversal',$4,'争议胜诉返还代币',(SELECT balance_subunit FROM wallets WHERE user_id=$1))`, user, -delta, balance, "dispute-return:"+order+":"+eventKey())
 		if err != nil {
 			return err
 		}

@@ -1,4 +1,4 @@
--- 当前完整表结构快照（截至 025_table_ids）：21 张业务表，均有独立的自增 id 主键。
+-- 当前完整表结构快照（截至 032_order_wallet_debits）：22 张业务表，均有独立的自增 id 主键。
 -- 包含字段、默认值、约束、索引和表注释；不包含业务数据或环境凭据。
 -- 可在空库独立初始化；已有数据库升级使用 release.sql / 新增编号迁移。
 -- 所有表的最后三个字段依次为 created_at、updated_at、deleted_at；表级约束列在字段之后。
@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS wallets (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL,
   balance BIGINT NOT NULL DEFAULT 0 CHECK (balance >= 0),
+  balance_subunit SMALLINT NOT NULL DEFAULT 0 CHECK (balance_subunit BETWEEN 0 AND 99),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
@@ -129,6 +130,8 @@ CREATE TABLE IF NOT EXISTS wallet_ledger (
   kind TEXT NOT NULL,
   reference TEXT NOT NULL UNIQUE,
   description TEXT NOT NULL,
+  amount_subunit SMALLINT NOT NULL DEFAULT 0 CHECK (amount_subunit BETWEEN -99 AND 99),
+  balance_after_subunit SMALLINT NOT NULL DEFAULT 0 CHECK (balance_after_subunit BETWEEN 0 AND 99),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
@@ -443,3 +446,25 @@ CREATE TABLE IF NOT EXISTS exchange_rates (
 );
 CREATE INDEX IF NOT EXISTS exchange_rates_latest_idx ON exchange_rates(base_currency,quote_currency,created_at DESC,id DESC) WHERE deleted_at IS NULL;
 COMMENT ON TABLE exchange_rates IS '每日汇率同步历史：rate 表示 1 PHP 折合 quote_currency（USD 或 CNY）的金额；同批币种在一个事务内写入并共享生效与同步时间，保留来源及软删除历史，供套餐折算与订单快照追溯。';
+
+CREATE TABLE IF NOT EXISTS order_wallet_debits (
+  id BIGSERIAL PRIMARY KEY,
+  order_id BIGINT NOT NULL UNIQUE,
+  user_id BIGINT NOT NULL,
+  account_id BIGINT NOT NULL,
+  account_email TEXT NOT NULL,
+  account_label TEXT NOT NULL,
+  order_no TEXT NOT NULL,
+  amount_usd_minor BIGINT NOT NULL CHECK (amount_usd_minor > 0),
+  tokens_minor BIGINT NOT NULL CHECK (tokens_minor > 0),
+  tokens_per_usd BIGINT NOT NULL CHECK (tokens_per_usd > 0),
+  balance_after_minor BIGINT NOT NULL CHECK (balance_after_minor >= 0),
+  wallet_ledger_id BIGINT NOT NULL UNIQUE,
+  actor_id BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+COMMENT ON TABLE order_wallet_debits IS '账号消费订单：按实收美元快照扣除当前绑定用户的钱包，金额单位为美分及百分之一代币，保留付款人和账号快照；每订单全历史仅扣款一次。';
+CREATE INDEX IF NOT EXISTS order_wallet_debits_user_idx ON order_wallet_debits(user_id,id DESC) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS order_wallet_debits_account_idx ON order_wallet_debits(account_id,user_id) WHERE deleted_at IS NULL;

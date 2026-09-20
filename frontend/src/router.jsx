@@ -1,6 +1,6 @@
 import React, { useSyncExternalStore } from 'react';
 
-export const adminPages = ['accounts', 'proxies', 'addresses', 'bank-cards', 'users', 'wallet', 'orders', 'packages', 'notices', 'audit', 'proxy-activity', 'payment-exceptions'];
+export const adminPages = ['accounts', 'proxies', 'addresses', 'bank-cards', 'users', 'wallet', 'consumption-orders', 'orders', 'packages', 'notices', 'audit', 'proxy-activity', 'payment-exceptions'];
 export const adminPath = page => '/admin/' + page;
 export function canonicalAdminPath(path) {
   if (path === '/admin' || path === '/admin/') return adminPath('accounts');

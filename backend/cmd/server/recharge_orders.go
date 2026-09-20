@@ -14,40 +14,41 @@ import (
 )
 
 type RechargeOrder struct {
-	OrderSource          string          `json:"order_source"`
-	ID                   int64           `json:"id"`
-	OrderNo              string          `json:"order_no"`
-	UserID               int64           `json:"user_id"`
-	AccountID            int64           `json:"account_id"`
-	AccountEmail         string          `json:"account_email"`
-	PackageID            int64           `json:"package_id"`
-	Package              RechargePackage `json:"package_snapshot"`
-	PeriodStart          string          `json:"period_start"`
-	PeriodEnd            string          `json:"period_end"`
-	SaleUSDMinor         int64           `json:"sale_usd_minor"`
-	WalletTokens         int64           `json:"wallet_tokens"`
-	OrderStatus          string          `json:"order_status"`
-	PaymentMethod        string          `json:"payment_method"`
-	PaymentStatus        string          `json:"payment_status"`
-	FulfillmentStatus    string          `json:"fulfillment_status"`
-	PaymentReference     string          `json:"payment_reference"`
-	PurchaseReference    string          `json:"purchase_reference"`
-	CardID               *int64          `json:"card_id"`
-	CostUSDMinor         int64           `json:"cost_usd_minor"`
-	RefundedUSDMinor     int64           `json:"refunded_usd_minor"`
-	RefundedTokens       int64           `json:"refunded_tokens"`
-	AssigneeID           *int64          `json:"assignee_id"`
-	Evidence             string          `json:"evidence"`
-	FailureReason        string          `json:"failure_reason"`
-	Notes                string          `json:"notes"`
-	Version              int64           `json:"version"`
-	VerifiedAt           *time.Time      `json:"verified_at"`
-	ReceivedCurrency     string          `json:"received_currency"`
-	ReceivedAmountMinor  int64           `json:"received_amount_minor"`
-	ReceivedUSDMinor     int64           `json:"received_usd_minor"`
-	ReceivedExchangeRate *CollectionRate `json:"received_exchange_rate"`
-	ReceivedAt           *time.Time      `json:"received_at"`
-	Profit               *OrderProfit    `json:"profit,omitempty"`
+	WalletDebit          *orderWalletQuote `json:"wallet_debit,omitempty"`
+	OrderSource          string            `json:"order_source"`
+	ID                   int64             `json:"id"`
+	OrderNo              string            `json:"order_no"`
+	UserID               int64             `json:"user_id"`
+	AccountID            int64             `json:"account_id"`
+	AccountEmail         string            `json:"account_email"`
+	PackageID            int64             `json:"package_id"`
+	Package              RechargePackage   `json:"package_snapshot"`
+	PeriodStart          string            `json:"period_start"`
+	PeriodEnd            string            `json:"period_end"`
+	SaleUSDMinor         int64             `json:"sale_usd_minor"`
+	WalletTokens         int64             `json:"wallet_tokens"`
+	OrderStatus          string            `json:"order_status"`
+	PaymentMethod        string            `json:"payment_method"`
+	PaymentStatus        string            `json:"payment_status"`
+	FulfillmentStatus    string            `json:"fulfillment_status"`
+	PaymentReference     string            `json:"payment_reference"`
+	PurchaseReference    string            `json:"purchase_reference"`
+	CardID               *int64            `json:"card_id"`
+	CostUSDMinor         int64             `json:"cost_usd_minor"`
+	RefundedUSDMinor     int64             `json:"refunded_usd_minor"`
+	RefundedTokens       int64             `json:"refunded_tokens"`
+	AssigneeID           *int64            `json:"assignee_id"`
+	Evidence             string            `json:"evidence"`
+	FailureReason        string            `json:"failure_reason"`
+	Notes                string            `json:"notes"`
+	Version              int64             `json:"version"`
+	VerifiedAt           *time.Time        `json:"verified_at"`
+	ReceivedCurrency     string            `json:"received_currency"`
+	ReceivedAmountMinor  int64             `json:"received_amount_minor"`
+	ReceivedUSDMinor     int64             `json:"received_usd_minor"`
+	ReceivedExchangeRate *CollectionRate   `json:"received_exchange_rate"`
+	ReceivedAt           *time.Time        `json:"received_at"`
+	Profit               *OrderProfit      `json:"profit,omitempty"`
 }
 
 func (s *Server) rechargeOrders(w http.ResponseWriter, r *http.Request) {
@@ -86,8 +87,12 @@ func (s *Server) rechargeOrders(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(405)
 		return
 	}
+	walletQuoteRequest := strings.HasSuffix(r.URL.Path, "/wallet-quote")
 	quoteRequest := strings.HasSuffix(r.URL.Path, "/collection-quote")
 	path := r.URL.Path
+	if walletQuoteRequest {
+		path = strings.TrimSuffix(path, "/wallet-quote")
+	}
 	if quoteRequest {
 		path = strings.TrimSuffix(path, "/collection-quote")
 	}
@@ -96,13 +101,17 @@ func (s *Server) rechargeOrders(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if walletQuoteRequest {
+		s.orderWalletQuote(w, r, user, id)
+		return
+	}
 	if quoteRequest {
 		s.orderCollectionQuote(w, r, user, id)
 		return
 	}
 	if r.Method == "GET" {
 		var raw json.RawMessage
-		err = s.db.QueryRowContext(r.Context(), `SELECT to_jsonb(o) FROM recharge_orders o WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin).Scan(&raw)
+		err = s.db.QueryRowContext(r.Context(), `SELECT to_jsonb(o)||`+orderWalletDebitJSON+` FROM recharge_orders o WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3)`, id, user, admin).Scan(&raw)
 		if err != nil {
 			operationError(w, err)
 			return
@@ -150,7 +159,7 @@ func (s *Server) listOrders(w http.ResponseWriter, r *http.Request, user int64, 
 			return
 		}
 	}
-	rows, err := jsonRows(r.Context(), s.db, `SELECT to_jsonb(o)-'evidence' FROM recharge_orders o`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $6`, append(args, limit, offset)...)
+	rows, err := jsonRows(r.Context(), s.db, `SELECT (to_jsonb(o)-'evidence')||`+orderWalletDebitJSON+` FROM recharge_orders o`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $6`, append(args, limit, offset)...)
 	if err != nil {
 		operationError(w, err)
 		return
@@ -397,23 +406,26 @@ func rechargeOrderNumber(now time.Time) (string, error) {
 }
 
 type orderCommand struct {
-	OrderSource      string `json:"order_source,omitempty"`
-	Action           string `json:"action"`
-	RequestKey       string `json:"request_key"`
-	Version          int64  `json:"version"`
-	Method           string `json:"method"`
-	Reference        string `json:"reference"`
-	Evidence         string `json:"evidence"`
-	Reason           string `json:"reason"`
-	Amount           string `json:"amount_usd"`
-	CardID           int64  `json:"card_id"`
-	AssigneeID       int64  `json:"assignee_id"`
-	Success          bool   `json:"success"`
-	Plan             string `json:"plan"`
-	End              string `json:"period_end"`
-	ReceivedCurrency string `json:"received_currency"`
-	ReceivedAmount   string `json:"received_amount"`
-	CollectionRateID int64  `json:"collection_rate_id"`
+	ExpectedUserID           int64  `json:"expected_user_id"`
+	ExpectedReceivedUSDMinor int64  `json:"expected_received_usd_minor"`
+	ExpectedTokensPerUSD     int64  `json:"expected_tokens_per_usd"`
+	OrderSource              string `json:"order_source,omitempty"`
+	Action                   string `json:"action"`
+	RequestKey               string `json:"request_key"`
+	Version                  int64  `json:"version"`
+	Method                   string `json:"method"`
+	Reference                string `json:"reference"`
+	Evidence                 string `json:"evidence"`
+	Reason                   string `json:"reason"`
+	Amount                   string `json:"amount_usd"`
+	CardID                   int64  `json:"card_id"`
+	AssigneeID               int64  `json:"assignee_id"`
+	Success                  bool   `json:"success"`
+	Plan                     string `json:"plan"`
+	End                      string `json:"period_end"`
+	ReceivedCurrency         string `json:"received_currency"`
+	ReceivedAmount           string `json:"received_amount"`
+	CollectionRateID         int64  `json:"collection_rate_id"`
 }
 
 func (s *Server) orderAction(w http.ResponseWriter, r *http.Request, user, id int64, admin bool) {
@@ -440,7 +452,7 @@ func (s *Server) orderAction(w http.ResponseWriter, r *http.Request, user, id in
 	}
 	finance := s.permitted(r.Context(), user, "finance")
 	refund := s.permitted(r.Context(), user, "refunds")
-	if (in.Action == "collect" && in.Method != "wallet" && !finance) || ((in.Action == "purchase" || in.Action == "record") && !finance) || (in.Action == "refund_note" && !refund) || ((in.Action == "verify" || in.Action == "retry" || in.Action == "discard") && !admin) {
+	if (in.Action == "wallet_debit" && !finance) || (in.Action == "collect" && in.Method != "wallet" && !finance) || ((in.Action == "purchase" || in.Action == "record") && !finance) || (in.Action == "refund_note" && !refund) || ((in.Action == "verify" || in.Action == "retry" || in.Action == "discard") && !admin) {
 		reply(w, map[string]string{"error": "没有此操作权限"}, 403)
 		return
 	}
@@ -491,6 +503,11 @@ func (s *Server) orderAction(w http.ResponseWriter, r *http.Request, user, id in
 		return
 	}
 	switch in.Action {
+	case "wallet_debit":
+		if debitErr := s.debitOrderWallet(r, tx, user, &o, in); debitErr != nil {
+			fail(debitErr.Error())
+			return
+		}
 	case "record":
 		var cardID int64
 		cardID, err = boundOrderPaymentCard(r, tx, o.AccountID, in.CardID)
@@ -519,7 +536,7 @@ func (s *Server) orderAction(w http.ResponseWriter, r *http.Request, user, id in
 			var balance int64
 			err = tx.QueryRowContext(r.Context(), `UPDATE wallets SET balance=balance-$2,updated_at=NOW() WHERE user_id=$1 AND deleted_at IS NULL AND balance>=$2 RETURNING balance`, user, o.WalletTokens).Scan(&balance)
 			if err == nil {
-				_, err = tx.ExecContext(r.Context(), `INSERT INTO wallet_ledger(user_id,amount,balance_after,kind,reference,description) VALUES($1,$2,$3,'recharge_order',$4,$5)`, user, -o.WalletTokens, balance, "order:"+o.OrderNo, "充值订单 "+o.OrderNo)
+				_, err = tx.ExecContext(r.Context(), `INSERT INTO wallet_ledger(user_id,amount,balance_after,kind,reference,description,balance_after_subunit) VALUES($1,$2,$3,'recharge_order',$4,$5,(SELECT balance_subunit FROM wallets WHERE user_id=$1))`, user, -o.WalletTokens, balance, "order:"+o.OrderNo, "充值订单 "+o.OrderNo)
 			}
 			o.PaymentReference = "wallet:" + o.OrderNo
 		} else if in.Method == "manual" && in.Reference != "" && in.Evidence != "" {

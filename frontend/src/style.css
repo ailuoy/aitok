@@ -407,3 +407,15 @@ button,input,textarea{font-family:inherit}
 .user-login-actions{display:flex;flex-wrap:wrap;gap:8px}
 .user-password-dialog form{display:grid;gap:14px}
 .user-password-dialog form>label{display:grid;gap:6px}
+
+/* 消费记录与钱包扣款确认复用现有表格和对话框。 */
+.consumption-balance { margin: 20px 0 28px; }
+.consumption-balance > div { display: flex; align-items: baseline; gap: 10px; margin-top: 8px; }
+.consumption-balance strong { font-size: 32px; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
+.wallet-debit-account { display: grid; gap: 8px; overflow-wrap: anywhere; margin: 8px 0 24px; }
+.wallet-debit-summary { display: grid; gap: 16px; margin: 0 0 20px; }
+.wallet-debit-summary > div { display: flex; justify-content: space-between; gap: 24px; }
+.wallet-debit-summary dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.wallet-debit-summary > div:last-child { padding-top: 16px; border-top: 1px solid var(--line, #8883); }
+
+.workspace-dialog.wallet-debit-dialog { width: min(520px, calc(100vw - 32px)); }

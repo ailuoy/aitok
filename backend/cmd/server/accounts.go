@@ -20,6 +20,7 @@ import (
 const accountSubscriptionPlan = `COALESCE((SELECT p.plan FROM recharge_packages p WHERE p.id=(to_jsonb(a)->>'subscription_package_id')::bigint AND p.deleted_at IS NULL),'')`
 
 type Account struct {
+	SpentUSDMinor         int64           `json:"spent_usd_minor"`
 	BillingAddress        json.RawMessage `json:"billing_address"`
 	BillingAddressID      *int64          `json:"billing_address_id"`
 	BillingAddressLabel   string          `json:"billing_address_label"`
@@ -48,7 +49,7 @@ type Account struct {
 
 func (s *Server) listAccounts(ctx context.Context, id int64, admin bool) ([]Account, error) {
 	// 增量迁移执行前仍可读取原账号列表；备注保存要求已完成 030 迁移。
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.user_id,a.label,COALESCE(to_jsonb(a)->>'notes',''),(to_jsonb(a)->>'subscription_package_id')::bigint,`+accountSubscriptionPlan+`,a.email,u.email,a.created_at,a.renewal_date::text,COALESCE(a.session_ciphertext,'')<>'',a.group_id,a.last_login_at,a.verified_plan,a.verified_at,a.subscription_ends_at::text,a.renewal_enabled,c.id,COALESCE(c.label,''),COALESCE(c.last4,''),COALESCE(`+usablePaymentCard+`,false),a.billing_address_id,COALESCE(concat_ws(', ',NULLIF(b.address_line1,''),NULLIF(b.city,''),NULLIF(b.state,''),NULLIF(b.postal_code,'')),''),`+accountBillingAddressValue+` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL LEFT JOIN addresses b ON b.id=a.billing_address_id AND b.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) ORDER BY a.id DESC`, id, admin)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.user_id,a.label,COALESCE(to_jsonb(a)->>'notes',''),(to_jsonb(a)->>'subscription_package_id')::bigint,`+accountSubscriptionPlan+`,a.email,u.email,a.created_at,a.renewal_date::text,COALESCE(a.session_ciphertext,'')<>'',a.group_id,a.last_login_at,a.verified_plan,a.verified_at,a.subscription_ends_at::text,a.renewal_enabled,c.id,COALESCE(c.label,''),COALESCE(c.last4,''),COALESCE(`+usablePaymentCard+`,false),a.billing_address_id,COALESCE(concat_ws(', ',NULLIF(b.address_line1,''),NULLIF(b.city,''),NULLIF(b.state,''),NULLIF(b.postal_code,'')),''),`+accountBillingAddressValue+`,`+accountSpentUSD+` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL LEFT JOIN addresses b ON b.id=a.billing_address_id AND b.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) ORDER BY a.id DESC`, id, admin)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +58,7 @@ func (s *Server) listAccounts(ctx context.Context, id int64, admin bool) ([]Acco
 	for rows.Next() {
 		var a Account
 		var billingAddress []byte
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Label, &a.Notes, &a.SubscriptionPackageID, &a.SubscriptionPlan, &a.Email, &a.OwnerEmail, &a.CreatedAt, &a.RenewalDate, &a.HasSession, &a.GroupID, &a.LastLoginAt, &a.VerifiedPlan, &a.VerifiedAt, &a.SubscriptionEndsAt, &a.RenewalEnabled, &a.PaymentCardID, &a.PaymentCardLabel, &a.PaymentCardLast4, &a.PaymentCardAvailable, &a.BillingAddressID, &a.BillingAddressLabel, &billingAddress); err != nil {
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Label, &a.Notes, &a.SubscriptionPackageID, &a.SubscriptionPlan, &a.Email, &a.OwnerEmail, &a.CreatedAt, &a.RenewalDate, &a.HasSession, &a.GroupID, &a.LastLoginAt, &a.VerifiedPlan, &a.VerifiedAt, &a.SubscriptionEndsAt, &a.RenewalEnabled, &a.PaymentCardID, &a.PaymentCardLabel, &a.PaymentCardLast4, &a.PaymentCardAvailable, &a.BillingAddressID, &a.BillingAddressLabel, &billingAddress, &a.SpentUSDMinor); err != nil {
 			return nil, err
 		}
 		a.BillingAddress = billingAddress
@@ -318,6 +319,7 @@ func accountView(a Account, admin bool) any {
 		return a
 	}
 	return map[string]any{
+		"spent_usd_minor":   a.SpentUSDMinor,
 		"id":                a.ID,
 		"label":             a.Label,
 		"email":             a.Email,

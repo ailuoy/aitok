@@ -167,7 +167,7 @@ func userEndpointAllowed(method, path string) bool {
 	switch path {
 	case "/api/me":
 		return method == "GET"
-	case "/api/wallet":
+	case "/api/wallet", "/api/consumption-orders":
 		return method == "GET"
 	case "/api/wallet/topups":
 		return method == "POST"

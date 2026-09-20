@@ -67,6 +67,7 @@ func (s *Server) routes(options ...khttp.ServerOption) *khttp.Server {
 	server.HandlePrefix("/api/addresses/", http.HandlerFunc(s.addresses))
 	server.HandleFunc("/api/account-groups", s.accountGroups)
 	server.HandlePrefix("/api/account-groups/", http.HandlerFunc(s.accountGroups))
+	server.HandleFunc("/api/consumption-orders", s.consumptionOrders)
 	server.HandleFunc("/api/wallet", s.walletDashboard)
 	server.HandleFunc("/api/wallet/topups", s.createCheckout)
 	server.HandlePrefix("/api/wallet/topups/", http.HandlerFunc(s.syncPayment))

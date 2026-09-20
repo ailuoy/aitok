@@ -67,6 +67,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let rechargePackages=[], rechargeOrders=[];
   let phpRate='0.01589', phpCNYRate='0.1067';
   const operationWrites=[];
+  const walletDebits=[];
+  let debitResponseLost = false;
   const adminActivities=[];
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
@@ -150,6 +152,21 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const currency=url.searchParams.get('currency'),amountMinor=Math.round(Number(url.searchParams.get('amount'))*100);
         const usdMinor=currency==='CNY'?Math.round(amountMinor/7):amountMinor;
         data={currency,amount_minor:amountMinor,usd_minor:usdMinor,exchange_rate:{usd_per_unit:currency==='CNY'?'1/7':'1',...(currency==='CNY'?{batch:{id:99,source:'test',effective_at:new Date().toISOString(),synced_at:new Date().toISOString()}}:{})},profit:{usd_minor:usdMinor-20000,received_minor:amountMinor-(currency==='CNY'?140000:20000),cost_usd_minor:20000,rate_percent:((usdMinor-20000)/usdMinor*100).toFixed(2),estimated:true}};
+      } else if (url.pathname.endsWith('/wallet-quote')) {
+        const order=rechargeOrders[0], minor=order.received_usd_minor;
+        data={user_id:account.user_id,user_email:'member@example.com',account_email:account.email,account_label:account.label,amount_usd_minor:minor,tokens_minor:minor,tokens_per_usd:1,balance_minor:30000,balance_after_minor:30000-minor,version:order.version};
+      } else if (url.pathname === '/api/consumption-orders') {
+        data={orders:walletDebits,total:walletDebits.length,balance:walletData.balance};
+      } else if (url.pathname === '/api/orders/1' && request.method === 'POST' && JSON.parse(request.postData).action === 'wallet_debit') {
+        const input=JSON.parse(request.postData), order=rechargeOrders[0];
+        operationWrites.push(input);
+        if (!order.wallet_debit) {
+          order.wallet_debit={amount_usd_minor:order.received_usd_minor};order.version++;
+          account.spent_usd_minor=order.received_usd_minor;
+          walletData.balance=(30000-order.received_usd_minor)/100;
+          walletDebits.push({id:1,account_label:account.label,account_email:account.email,amount_usd_minor:order.received_usd_minor,balance_after_minor:30000-order.received_usd_minor,created_at:'2026-09-21T00:00:00Z'});
+        }
+        if (debitResponseLost) { responseCode=503;data={error:'模拟响应丢失，请重试'}; } else data={order};
       } else if (url.pathname === '/api/orders/record' && request.method === 'POST' && quickOrderFail) {
         failedQuickInput = JSON.parse(request.postData);
         responseCode = 409; data = { error: '模拟月订单记账失败' };
@@ -504,7 +521,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000,exp_month:12,exp_year:2035,status:'active'}];
   await navigateAdmin('accounts');
   const productLabel = `PLUS · ${rechargePackages[0].name} · ${rechargePackages[0].region} · ${rechargePackages[0].months}个月`;
-  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th")).slice(1, 4).map(th => th.textContent.trim())'), ['所属用户', '产品选型', '分组']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th")).slice(1, 5).map(th => th.textContent.trim())'), ['累计消费 USD', '所属用户', '产品选型', '分组']);
   await select('账号 chat@example.com 的产品选型', productLabel, rechargePackages[0].region);
   await wait('document.querySelector(".account-product button").innerText.includes("测试 Plus") && !document.querySelector(".account-product button").disabled');
   assert.equal(account.subscription_package_id, rechargePackages[0].id);
@@ -1158,8 +1175,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   account.subscription_plan = 'pro_20x'; account.verified_plan = '';
   await cdp.send('Page.reload', {}, sessionId);
   await wait('document.body.innerText.includes("工作账号")');
-  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"),a=>a.getAttribute("href"))'),['/admin/accounts']);
-  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','续费日期','套餐类型','上次登录（UTC+8）']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"),a=>a.getAttribute("href"))'),['/admin/accounts','/admin/consumption-orders']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','累计消费 USD','续费日期','套餐类型','上次登录（UTC+8）']);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-owner-bind"))'), false, '普通用户不能分配账号');
   assert.equal(await evaluate('Boolean(document.querySelector(".account-notes"))'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-product"))'), false);
@@ -1171,7 +1188,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   for (const [plan, label] of [['plus','PLUS'], ['pro_5x','PRO-5X'], ['pro_20x','PRO-20X']]) {
     account.subscription_plan = plan;
     await cdp.send('Page.reload', {}, sessionId);
-    await wait(`document.querySelector(".user-accounts-table tbody tr td:nth-child(3)")?.textContent === ${JSON.stringify(label)}`);
+    await wait(`document.querySelector(".user-accounts-table tbody tr td:nth-child(4)")?.textContent === ${JSON.stringify(label)}`);
   }
   for (const status of ['safe', 'soon', 'overdue']) {
     const mark = requests.length;
@@ -1181,7 +1198,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
     assert.ok(requests.slice(mark).some(value => { const url = new URL(value); return url.pathname === '/api/accounts' && url.searchParams.get('renewal_status') === status && url.searchParams.get('page') === '1'; }));
   }
   await evaluate('document.querySelector(".account-renewal-filters button[data-status=overdue]").click()');
-  await wait('document.querySelector(".user-accounts-table tbody tr td:nth-child(3)")?.textContent === "PRO-20X"');
+  await wait('document.querySelector(".user-accounts-table tbody tr td:nth-child(4)")?.textContent === "PRO-20X"');
   const requestMark = requests.length, localMark = localRequests.length;
   await delay(2200);
   assert.equal(localRequests.length,localMark);
@@ -1728,6 +1745,37 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(quickInput.received_amount, '1680.00');
   assert.equal(quickInput.order_source, '快捷渠道');
   assert.equal(operationWrites.length, beforeQuickWrites + 1);
+  // 钱包扣款按实收确认，响应丢失时沿用同一个请求键重试。
+  rechargeOrders[0].received_usd_minor=20881;
+  walletData.balance=300;
+  await navigateAdmin('orders');
+  await click('钱包扣款');
+  await wait('document.querySelector("dialog")?.innerText.includes("208.81")');
+  assert.ok(await evaluate('document.querySelector("dialog").innerText.includes("member@example.com")'));
+  assert.ok(await evaluate('document.querySelector("dialog").innerText.includes("91.19")'));
+  await writeFile(join(directory,'wallet-debit.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  debitResponseLost=true;
+  await click('确认扣款');
+  await wait('document.querySelector("dialog .error")?.textContent.includes("模拟响应丢失")');
+  const debitRequest=operationWrites.at(-1);
+  debitResponseLost=false;
+  await click('确认扣款');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("钱包已扣")');
+  assert.equal(operationWrites.at(-1).request_key,debitRequest.request_key);
+  assert.equal(debitRequest.expected_received_usd_minor,20881);
+  assert.equal(debitRequest.expected_user_id,account.user_id);
+  assert.equal(walletDebits.length,1);
+  assert.equal(await evaluate('Array.from(document.querySelectorAll("button")).some(b=>b.textContent==="钱包扣款")'),false);
+  user.role='user';
+  await cdp.send('Page.navigate',{url:'http://127.0.0.1:'+server.address().port+'/admin/consumption-orders'},sessionId);
+  await wait('document.querySelector(".consumption-balance strong")?.textContent==="91.19"');
+  assert.ok(await evaluate('document.querySelector(".consumption-orders").innerText.includes("208.81")'));
+  assert.equal(await evaluate('/官网成本|毛利润|银行卡|管理员/.test(document.querySelector(".consumption-orders").innerText)'),false);
+  await writeFile(join(directory,'consumption-orders.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},sessionId);
+  assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth'));
+  await writeFile(join(directory,'consumption-orders-mobile.png'),Buffer.from((await cdp.send('Page.captureScreenshot',{format:'png'},sessionId)).data,'base64'));
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false},sessionId);
   user.role = 'admin';
   const userRequestsBefore = requests.filter(url => url.includes('/api/users')).length;
   await cdp.send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port + '/admin/users' }, sessionId);

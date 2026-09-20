@@ -70,7 +70,7 @@ func TestRoleBoundaryAndTwoFactor(t *testing.T) {
 			t.Fatal("用户可读取他人账号")
 		}
 		a := accounts[0].(map[string]any)
-		if len(a) != 7 || a["email"] != "own@test.local" {
+		if len(a) != 8 || a["email"] != "own@test.local" {
 			t.Fatal("用户账号响应含管理字段")
 		}
 	}
