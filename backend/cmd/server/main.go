@@ -24,6 +24,9 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// 网页和桌面助手的登录有效期统一为 1 个月（30 天）。
+const loginTokenLifetime = 30 * 24 * time.Hour
+
 type Server struct {
 	db                *sql.DB
 	secret            []byte
@@ -300,7 +303,7 @@ func (s *Server) token(id int64) string {
 	if err != nil {
 		return ""
 	}
-	p := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(id, 10) + ":" + strconv.FormatInt(time.Now().Add(24*time.Hour).Unix(), 10) + ":" + stamp))
+	p := base64.RawURLEncoding.EncodeToString([]byte(strconv.FormatInt(id, 10) + ":" + strconv.FormatInt(time.Now().Add(loginTokenLifetime).Unix(), 10) + ":" + stamp))
 	m := hmac.New(sha256.New, s.secret)
 	m.Write([]byte(p))
 	return p + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil))

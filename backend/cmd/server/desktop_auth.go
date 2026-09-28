@@ -50,7 +50,7 @@ func (s *Server) desktopAuthorize(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "登录已失效，请重新登录"}, 401)
 		return
 	}
-	claims := desktopClaims{"desktop", user, time.Now().Add(24 * time.Hour).Unix(), stamp, input.State, input.Channel, strings.TrimRight(s.billing.BaseURL, "/")}
+	claims := desktopClaims{"desktop", user, time.Now().Add(loginTokenLifetime).Unix(), stamp, input.State, input.Channel, strings.TrimRight(s.billing.BaseURL, "/")}
 	body, _ := json.Marshal(claims)
 	payload := base64.RawURLEncoding.EncodeToString(body)
 	mac := hmac.New(sha256.New, s.secret)
