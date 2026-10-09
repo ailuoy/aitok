@@ -107,10 +107,9 @@ app.on('window-all-closed', () => {});
 app.on('before-quit', event => { if (!quitting) { event.preventDefault(); void quit(); } });
 
 if (ownsLock) app.whenReady().then(async () => {
-  authentication = new DesktopAuth({ profile, path: join(app.getPath('userData'), 'login-' + profile.channel + '.json'), encryption: safeStorage, request: (url, options) => net.fetch(url, options), openExternal: url => shell.openExternal(url), onChange: () => {
+  authentication = new DesktopAuth({ profile, path: join(app.getPath('userData'), 'login-' + profile.channel + '.json'), encryption: safeStorage, request: (url, options) => net.fetch(url, options), openExternal: url => shell.openExternal(url), onLogin: showWindow, onChange: () => {
     if (!manager || quitting) return;
     void manager.updateAuthentication(authentication.status).then(() => {
-      if (authentication.status === 'authenticated') showWindow();
       if (tray) updateTray();
     }).catch(() => {});
   } });

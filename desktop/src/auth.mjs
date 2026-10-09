@@ -4,8 +4,8 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export class DesktopAuth {
-  constructor({ profile, path, encryption, openExternal, onChange = () => {}, request = fetch }) {
-    Object.assign(this, { profile, path, encryption, openExternal, onChange, request });
+  constructor({ profile, path, encryption, openExternal, onChange = () => {}, onLogin = () => {}, request = fetch }) {
+    Object.assign(this, { profile, path, encryption, openExternal, onChange, onLogin, request });
     this.token = ''; this.user = null; this.expires = 0; this.status = 'signed_out'; this.error = ''; this.pending = null; this.generation = 0; this.lastCheck = 0; this.retryAfter = 0; this.failures = 0; this.writes = Promise.resolve();
   }
   snapshot() { return { status: this.status, user: this.user, expires_at: this.expires, error: this.error }; }
@@ -107,6 +107,8 @@ export class DesktopAuth {
         this.status = 'authenticated'; this.error = ''; this.lastCheck = Date.now(); this.retryAfter = 0; this.failures = 0;
         clearTimeout(this.pending.timer); this.pending = null;
         send(200, { ok: true }); server.close(); this.onChange();
+        // 只有用户主动完成授权才通知显示窗口，恢复凭证和后台重连保持静默。
+        this.onLogin();
       } catch {
         if (this.pending?.state === state) this.pending.processing = false;
         send(400, { error: '授权失败，请回到助手重新登录' });

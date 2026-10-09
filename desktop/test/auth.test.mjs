@@ -7,10 +7,10 @@ import { DesktopAuth } from '../src/auth.mjs';
 import { profiles } from '../src/profiles.mjs';
 import { LauncherManager } from '../src/manager.mjs';
 
-async function setup(t) {
+async function setup(t, { onLogin = () => {} } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'aitok-auth-test-'));
   let opened, claim, invalid = 0, failure = null, requests = 0;
-  const options = { profile: profiles.test, path: join(directory, 'login.json'),
+  const options = { profile: profiles.test, path: join(directory, 'login.json'), onLogin,
     encryption: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value.split('').reverse().join('')), decryptString: value => value.toString().split('').reverse().join('') },
     openExternal: async url => { opened = new URL(url); },
     request: async (url, init) => {
@@ -33,6 +33,36 @@ async function setup(t) {
   const post = (url, origin = profiles.test.origin) => fetch(url, {method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({token:'scoped-desktop-test'})});
   return {auth, options, begin, post, get claim(){return claim}, get requests(){return requests}, fail:value=>{failure=value}, invalidate:(status=401)=>{invalid=status}};
 }
+
+test('仅主动授权成功通知显示主窗口，恢复登录、断线重连和唤醒校验保持静默', async t => {
+  let shown = 0;
+  const fixture = await setup(t, { onLogin: () => { shown++; } });
+  const { auth, begin, post, options } = fixture;
+  const callback = (await begin()).searchParams.get('callback');
+  assert.equal(shown, 0);
+  assert.equal((await post(callback, 'https://evil.invalid')).status, 403);
+  assert.equal(shown, 0);
+  assert.equal((await post(callback)).status, 200);
+  assert.equal(shown, 1);
+
+  const restored = new DesktopAuth(options);
+  t.after(() => restored.close());
+  await restored.restore();
+  assert.equal(restored.status, 'authenticated');
+  assert.equal(shown, 1);
+  fixture.fail(503);
+  await assert.rejects(auth.check(true));
+  fixture.fail(null);
+  await auth.check(true);
+  await auth.check(true);
+  assert.equal(auth.status, 'authenticated');
+  assert.equal(shown, 1);
+
+  fixture.invalidate();
+  await assert.rejects(auth.check(true));
+  assert.equal(auth.status, 'signed_out');
+  assert.equal(shown, 1);
+});
 
 test('网络中断、超时和后台错误保留浏览器，重连期间拒绝新操作且恢复后不重开窗口', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
