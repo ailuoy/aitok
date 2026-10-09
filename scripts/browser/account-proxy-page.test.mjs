@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import { accountProxyPage } from '../../frontend/src/accountProxyPage.mjs';
 import { matchesRenewalStatus, renewalDays } from '../../frontend/src/accountRenewalStatus.mjs';
 
+test('付款卡筛选在 SOCKS5 排序分页前生效，并与分组、关键词和续费筛选组合', () => {
+  const accounts = [1, 2, 3, 4].map(id => ({ id, label: '测试账号', email: `user${id}@test.local`, group_id: 1, payment_card_id: id < 3 ? 9 : null, renewal_date: '2026-10-10' }));
+  const options = { environmentID: String, query: '', group: 'all', direction: 'asc', pageSize: 1, page: 1, today: '2026-10-10' };
+  for (const [paymentCard, ids] of [['9', [2, 1]], ['none', [4, 3]], ['', [4, 3, 2, 1]]]) {
+    const pages = ids.map((_, i) => accountProxyPage(accounts, { ...options, paymentCard, page: i + 1 }));
+    assert.deepEqual(pages.flatMap(page => page.accounts.map(account => account.id)), ids);
+    assert.ok(pages.every(page => page.total === ids.length));
+  }
+  assert.equal(accountProxyPage(accounts, { ...options, paymentCard: '99' }).total, 0);
+  assert.deepEqual(accountProxyPage(accounts, { ...options, paymentCard: '9', group: '1', query: 'USER1', renewalStatus: 'soon' }).accounts.map(account => account.id), [1]);
+});
+
 test('本机 SOCKS5 对完整筛选结果排序后分页，同代理排序稳定且不修改原数据', () => {
   const accounts = [1, 2, 3, 4, 5].map(id => ({ id, label: `账号${id}`, email: `user${id}@example.com`, group_id: id < 5 ? 1 : null }));
   const options = { config: { proxies: [{ id: 'a', name: '代理2', host: 'a.example' }, { id: 'b', name: '代理10', host: 'b.example' }], bindings: { 'env:1': 'b', 'env:2': 'a', 'env:4': 'a', 'env:5': 'b' } }, environmentID: id => `env:${id}`, query: '', group: 'all', direction: 'asc', pageSize: 2 };

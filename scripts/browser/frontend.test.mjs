@@ -328,7 +328,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
         const days=(Date.parse(account.renewal_date)-Date.parse(today))/86400000;
         const matchesStatus=!status || (Number.isFinite(days) && (status==='safe' ? days>10 : status==='soon' ? days>=0 && days<=10 : days<0));
-        const accountRows=matchesStatus && (!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
+        const paymentCard=url.searchParams.get('payment_card_id');
+        const matchesCard=!paymentCard || (paymentCard==='none' ? !account.payment_card_id : String(account.payment_card_id)===paymentCard);
+        const accountRows=matchesCard && matchesStatus && (!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
         data = { accounts: accountRows, account, total:accountRows.length, page:1, page_size:20 };
       } else if (url.pathname === '/api/wallet') data = walletData;
       else if (url.pathname === '/api/wallet/topups' && request.method === 'POST') {
@@ -543,6 +545,15 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector(".account-card-balance")?.dataset.status === "sufficient"');
   assert.ok(await evaluate('document.querySelector(".account-card-balance").textContent.includes("$1,000.00")'));
   assert.ok(await evaluate('document.querySelector(".account-card-funding").textContent.includes("2 个续订 · 需 $40.00")'));
+  // 付款卡筛选支持尾号搜索、空结果、取消筛选，并同步列表和预算请求。
+  await select('按付款卡筛选账号', '运营测试卡 · •••• 4242', '4242');
+  await wait('Boolean(document.querySelector(".account-payment-card button:not(:disabled)"))');
+  assert.ok(requests.some(value => { const url = new URL(value); return url.pathname === '/api/accounts' && url.searchParams.get('payment_card_id') === '9' && url.searchParams.get('page') === '1'; }));
+  assert.ok(requests.some(value => { const url = new URL(value); return url.pathname === '/api/accounts/payment-cards' && url.searchParams.get('payment_card_id') === '9'; }));
+  await select('按付款卡筛选账号', '未绑定付款卡');
+  await wait('document.querySelector(".accounts-table")?.textContent.includes("没有匹配的账号。")');
+  await select('按付款卡筛选账号', '全部付款卡');
+  await wait('document.querySelector(".account-card-balance")?.dataset.status === "sufficient"');
   const fundingGreen = await evaluate('getComputedStyle(document.querySelector(".account-card-balance")).color');
   account.renewal_date = renewalToday;
   cardFunding = { ...cardFunding, required_usd_minor: 100001, funding_status: 'insufficient' };
@@ -1178,6 +1189,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".workspace-nav a"),a=>a.getAttribute("href"))'),['/admin/accounts','/admin/consumption-orders']);
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent)'),['账号','累计消费 USD','续费日期','套餐类型','上次登录（UTC+8）']);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-owner-bind"))'), false, '普通用户不能分配账号');
+  assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="按付款卡筛选账号"]'))`), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-notes"))'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-product"))'), false);
   assert.equal(await evaluate('Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="打开空白浏览器")'), false);

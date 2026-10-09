@@ -47,12 +47,14 @@ func accountFilter(r *http.Request, user int64, admin bool) (string, []any, erro
 		return "", nil, fmt.Errorf("搜索关键词过长")
 	}
 	group := r.URL.Query().Get("group")
+	card := r.URL.Query().Get("payment_card_id")
 	renewalStatus := r.URL.Query().Get("renewal_status")
 	if renewalStatus != "" && (renewalStatus != "safe" && renewalStatus != "soon" && renewalStatus != "overdue") {
 		return "", nil, fmt.Errorf("续费时间状态无效")
 	}
 	if !admin {
 		group = ""
+		card = ""
 	}
 	gid := int64(-1)
 	if group == "none" {
@@ -75,7 +77,19 @@ func accountFilter(r *http.Request, user int64, admin bool) (string, []any, erro
 	case "overdue":
 		filter += ` AND a.renewal_date < ` + today
 	}
-	args := []any{user, admin, r.URL.Query().Get("q"), gid}
+	cardID := int64(-1)
+	if card == "none" {
+		cardID = 0
+	} else if card != "" {
+		var err error
+		cardID, err = strconv.ParseInt(card, 10, 64)
+		if err != nil || cardID < 1 {
+			return "", nil, fmt.Errorf("付款卡筛选无效")
+		}
+	}
+	// 与列表返回的绑定一致：已删除卡视为未绑定，冻结或过期卡仍可筛选。
+	filter += ` AND ($5::bigint=-1 OR COALESCE(c.id,0)=$5)`
+	args := []any{user, admin, r.URL.Query().Get("q"), gid, cardID}
 	return filter, args, nil
 }
 
@@ -115,7 +129,7 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 		projection = `jsonb_build_object('id',a.id,'label',a.label,'email',a.email,'renewal_date',a.renewal_date,'verified_plan',a.verified_plan,'subscription_plan',` + accountSubscriptionPlan + `,'last_login_at',a.last_login_at)`
 	}
 	projection += `||jsonb_build_object('spent_usd_minor',` + accountSpentUSD + `)`
-	rows, err := jsonRows(r.Context(), s.db, "SELECT "+projection+filter+` ORDER BY `+order+` LIMIT $5 OFFSET $6`, append(args, limit, offset)...)
+	rows, err := jsonRows(r.Context(), s.db, "SELECT "+projection+filter+` ORDER BY `+order+` LIMIT $6 OFFSET $7`, append(args, limit, offset)...)
 	if err != nil {
 		operationError(w, err)
 		return
