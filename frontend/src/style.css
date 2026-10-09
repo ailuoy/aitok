@@ -425,3 +425,9 @@ button,input,textarea{font-family:inherit}
 .wallet-debit-summary > div:last-child { padding-top: 16px; border-top: 1px solid var(--line, #8883); }
 
 .workspace-dialog.wallet-debit-dialog { width: min(520px, calc(100vw - 32px)); }
+
+.card-accounts-dialog{width:min(1000px,calc(100vw - 32px))}
+.card-renewal-difference{font-variant-numeric:tabular-nums;white-space:nowrap}
+.card-renewal-difference .cell-secondary{display:block;font-size:11px;color:var(--muted);font-weight:400}
+.card-accounts-table .table-text{min-width:160px}
+@media(max-width:700px){.card-accounts-dialog .card-ledger-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.card-accounts-dialog .card-ledger-summary>div:last-child{grid-column:1/-1}}

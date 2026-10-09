@@ -66,25 +66,9 @@ func (s *Server) accountCardFunding(ctx context.Context, filter string, args []a
 		cardIndexes[card.ID] = len(cards)
 		cards = append(cards, card)
 	}
-	rate, err := latestExchangeRate(ctx, tx)
+	packages, err := renewalPackages(ctx, tx, time.Now())
 	if err != nil {
 		return nil, err
-	}
-	rawPackages, err := jsonRows(ctx, tx, `SELECT to_jsonb(p) FROM recharge_packages p WHERE p.deleted_at IS NULL AND p.enabled`)
-	if err != nil {
-		return nil, err
-	}
-	prices := make(map[int64]int64, len(rawPackages))
-	now := time.Now()
-	for _, raw := range rawPackages {
-		var pkg RechargePackage
-		if err := json.Unmarshal(raw, &pkg); err != nil {
-			return nil, err
-		}
-		pricePackage(&pkg, rate, now)
-		if pkg.PriceReady && pkg.SaleUSDMinor > 0 {
-			prices[pkg.ID] = pkg.SaleUSDMinor
-		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT c.id,COALESCE(a.subscription_package_id,0),count(*)`+filter+` AND `+usablePaymentCard+` AND a.renewal_enabled AND a.renewal_date IS NOT NULL GROUP BY c.id,a.subscription_package_id`, args...)
 	if err != nil {
@@ -98,17 +82,17 @@ func (s *Server) accountCardFunding(ctx context.Context, filter string, args []a
 		}
 		card := &cards[cardIndexes[cardID]]
 		card.RenewalCount += count
-		price, ready := prices[packageID]
-		if !ready {
+		pkg := packages[packageID]
+		if !pkg.PriceReady {
 			card.UnknownCount += count
 			continue
 		}
 		// 保证累计金额既不溢出，也能被前端安全表示为整数美分。
 		const maxSafeMinor int64 = 1<<53 - 1
-		if count > (maxSafeMinor-card.Required)/price {
+		if count > (maxSafeMinor-card.Required)/pkg.SaleUSDMinor {
 			return nil, fmt.Errorf("续费合计金额超出范围")
 		}
-		card.Required += count * price
+		card.Required += count * pkg.SaleUSDMinor
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

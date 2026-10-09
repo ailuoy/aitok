@@ -138,6 +138,15 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	if strings.HasSuffix(r.URL.Path, "/accounts") {
+		id, parseErr := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/bank-cards/"), "/accounts"), 10, 64)
+		if parseErr != nil || id < 1 {
+			http.NotFound(w, r)
+			return
+		}
+		s.bankCardAccounts(w, r, user, id, admin)
+		return
+	}
 	if strings.HasSuffix(r.URL.Path, "/ledger") {
 		id, parseErr := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/bank-cards/"), "/ledger"), 10, 64)
 		if parseErr != nil || id < 1 {
@@ -166,26 +175,33 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("archived") == "1" {
 			filter = strings.Replace(filter, "deleted_at IS NULL", "deleted_at IS NOT NULL", 1)
 		}
+		// 列表余额、绑定数量和续费预算使用同一只读快照。
+		tx, err := s.db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+		if err != nil {
+			cardError(w, err)
+			return
+		}
+		defer tx.Rollback()
 		var total int
-		if err = s.db.QueryRowContext(r.Context(), `SELECT count(*) FROM bank_cards`+filter, user, query, admin).Scan(&total); err != nil {
+		if err = tx.QueryRowContext(r.Context(), `SELECT count(*) FROM bank_cards`+filter, user, query, admin).Scan(&total); err != nil {
 			cardError(w, err)
 			return
 		}
 		// 列表仅返回尾号；旧客户端的 include_numbers 参数也不能读取完整卡号。
-		rows, err := s.db.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $4`, user, query, admin, (page-1)*size, size)
+		rows, err := tx.QueryContext(r.Context(), `SELECT `+bankCardColumns+` FROM bank_cards`+filter+` ORDER BY id DESC LIMIT $5 OFFSET $4`, user, query, admin, (page-1)*size, size)
 		if err != nil {
 			cardError(w, err)
 			return
 		}
 		defer rows.Close()
-		cards := []BankCard{}
+		cards := []bankCardWithRenewal{}
 		for rows.Next() {
 			c, err := scanBankCard(rows)
 			if err != nil {
 				cardError(w, err)
 				return
 			}
-			cards = append(cards, c)
+			cards = append(cards, bankCardWithRenewal{BankCard: c})
 		}
 		if err = rows.Err(); err != nil {
 			cardError(w, err)
@@ -193,7 +209,7 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 		}
 		rows.Close()
 		// 平台选项来自当前用户有权管理的全部银行卡，不受列表搜索和分页影响。
-		platformRows, err := s.db.QueryContext(r.Context(), `SELECT DISTINCT platform FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $2) AND platform<>'' ORDER BY platform`, user, admin)
+		platformRows, err := tx.QueryContext(r.Context(), `SELECT DISTINCT platform FROM bank_cards WHERE deleted_at IS NULL AND (user_id=$1 OR $2) AND platform<>'' ORDER BY platform`, user, admin)
 		if err != nil {
 			cardError(w, err)
 			return
@@ -209,6 +225,22 @@ func (s *Server) bankCards(w http.ResponseWriter, r *http.Request) {
 			platforms = append(platforms, platform)
 		}
 		if err = platformRows.Err(); err != nil {
+			cardError(w, err)
+			return
+		}
+		platformRows.Close()
+		if len(cards) > 0 && r.URL.Query().Get("archived") != "1" {
+			now := time.Now()
+			packages, pricingErr := renewalPackages(r.Context(), tx, now)
+			if pricingErr == nil {
+				pricingErr = fillCardRenewals(r.Context(), tx, cards, packages, now)
+			}
+			if pricingErr != nil {
+				cardError(w, pricingErr)
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
 			cardError(w, err)
 			return
 		}

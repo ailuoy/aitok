@@ -50,6 +50,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let addressRows = Array.from({ length: 21 }, (_, index) => ({ id: index + 1, address_line1: index === 0 ? '4111 Gateway [Road]' : `${index + 1} Test Street`, address_line2: '', city: 'Portland', state: 'OR', postal_code: '97201', country: 'US', source_url: 'https://www.meiguodizhi.com/usa-address/oregon', source_data: { Full_Name: 'Test User', Occupation: 'Engineer', Extra_Field: 'Preserved value', CVV2: '123' }, can_edit: true }));
   const addressWrites = [];
   let bankCards = [];
+  let cardBoundRows = [], cardBoundFail = false;
+  const renewalSummary = card => {
+    const due = cardBoundRows.filter(account => account.in_month);
+    const unknown = due.filter(account => account.renewal_usd_minor == null).length;
+    const required = due.reduce((sum, account) => sum + (account.renewal_usd_minor || 0), 0);
+    return { month: '2026-10', bound_count: cardBoundRows.length, renewal_count: due.length, required_usd_minor: required, unknown_count: unknown, difference_usd_minor: unknown ? null : card.balance_usd_minor - (card.reserved_usd_minor || 0) - required };
+  };
   let cardFunding = { reserved_usd_minor: 0, required_usd_minor: 4000, renewal_count: 2, unknown_count: 0, funding_status: 'sufficient' };
   let cardFundingDelay = 0, cardFundingFail = false;
   let bankUploadTooLarge = false;
@@ -238,6 +245,11 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       } else if (url.pathname === '/api/accounts/1/login') {
         if (request.method === 'POST') { loginWrites++; account.last_login_at = JSON.parse(request.postData).logged_in_at; }
         data = { last_login_at: account.last_login_at };
+      } else if (/^\/api\/bank-cards\/\d+\/accounts$/.test(url.pathname)) {
+        const card = bankCards.find(card => card.id === Number(url.pathname.split('/')[3]));
+        const page = Number(url.searchParams.get('page') || 1), size = Number(url.searchParams.get('page_size') || 20);
+        data = { accounts: cardBoundRows.slice((page - 1) * size, page * size), total: cardBoundRows.length, page, page_size: size, renewal: renewalSummary(card), available_usd_minor: card.balance_usd_minor - (card.reserved_usd_minor || 0) };
+        if (cardBoundFail) { responseCode = 503; data = { error: '模拟绑定账号加载失败' }; }
       } else if (/^\/api\/bank-cards\/\d+\/ledger$/.test(url.pathname)) {
         if (request.method === 'GET' && url.searchParams.get('quote') === '1') {
           const pkg = rechargePackages.find(item => item.id === Number(url.searchParams.get('package_id')));
@@ -280,7 +292,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
             const {number, cvc, ...card} = bankCards[0];
             data = {card: {...card, number: '*'.repeat(number.length - 4) + card.last4, has_cvc:Boolean(cvc)}, edit_token:'verified-card-edit'};
           }
-        } else data = url.pathname === '/api/bank-cards/1' ? { card: bankCards[0] } : { cards: bankCards.map(({ number, cvc, ...card }) => ({...card, has_cvc:Boolean(cvc)})), platforms: [...new Set(bankCards.map(card => card.platform).filter(Boolean))], total: bankCards.length, page: 1, page_size: 20 };
+        } else data = url.pathname === '/api/bank-cards/1' ? { card: bankCards[0] } : { cards: bankCards.map(({ number, cvc, ...card }) => ({...card, has_cvc:Boolean(cvc), renewal: renewalSummary(card)})), platforms: [...new Set(bankCards.map(card => card.platform).filter(Boolean))], total: bankCards.length, page: 1, page_size: 20 };
       } else if (url.pathname.startsWith('/api/addresses')) {
         const input = request.postData ? JSON.parse(request.postData) : {};
         const id = Number(url.pathname.split('/')[3]);
@@ -1347,6 +1359,53 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate('document.querySelector(".image-full").src'),bankCards[0].wallet_qr_image);
   await evaluate('document.querySelector(".image-preview-dialog .close").click()');
   await wait('!document.querySelector("dialog")');
+
+
+  // 银行卡绑定数量与本月差额：正负颜色、零余额差、未知金额和分页明细。
+  cardBoundRows = Array.from({ length: 21 }, (_, index) => ({ id: index + 1, label: `绑定账号${index + 1}`, email: `bound${index + 1}@test.local`, subscription_package_id: 1, subscription_plan: 'plus', package_name: 'Plus 月付套餐', renewal_usd_minor: 2000, renewal_date: index < 2 ? '2026-10-20' : '2026-11-20', renewal_enabled: true, in_month: index < 2 }));
+  await evaluate('document.querySelector(".bank-card-manager .section-title .text-btn").click()');
+  await wait('document.querySelector(".card-bound-count")?.textContent === "21 个"');
+  assert.equal(await evaluate('document.querySelector(".bank-card-row .card-renewal-difference strong").textContent'), '−$40.00');
+  assert.equal(await evaluate('document.querySelector(".bank-card-row .card-renewal-difference strong").className'), 'danger');
+  bankCards[0].balance_usd_minor = 5000;
+  await evaluate('document.querySelector(".bank-card-manager .section-title .text-btn").click()');
+  await wait('document.querySelector(".bank-card-row .card-renewal-difference strong")?.textContent === "+$10.00"');
+  assert.equal(await evaluate('document.querySelector(".bank-card-row .card-renewal-difference strong").className'), 'credit');
+  await evaluate('document.querySelector(".card-bound-count").click()');
+  await wait('document.querySelector(".card-accounts-table")?.textContent.includes("bound1@test.local")');
+  assert.ok(await evaluate('document.querySelector(".card-accounts-table").textContent.includes("PLUS") && document.querySelector(".card-accounts-table").textContent.includes("$20.00") && document.querySelector(".card-accounts-table").textContent.includes("2026-10-20")'));
+  assert.equal(await evaluate('document.querySelectorAll(".card-accounts-table tbody tr").length'), 20);
+  assert.ok(await evaluate('document.querySelector(".card-accounts-dialog").getBoundingClientRect().width <= innerWidth'));
+  assert.ok(await evaluate('document.querySelector(".card-accounts-dialog .card-ledger-summary").scrollWidth <= document.querySelector(".card-accounts-dialog .card-ledger-summary").clientWidth'));
+  await writeFile(join(directory, 'card-bound-accounts-mobile.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  await evaluate('Array.from(document.querySelectorAll(".card-accounts-dialog button")).find(button => button.textContent === "下一页").click()');
+  await wait('document.querySelector(".card-accounts-table")?.textContent.includes("bound21@test.local")');
+  assert.equal(await evaluate('document.querySelectorAll(".card-accounts-table tbody tr").length'), 1);
+  assert.equal(await evaluate('document.querySelector(".card-accounts-dialog .card-renewal-difference strong").textContent'), '+$10.00');
+  await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);
+  await writeFile(join(directory, 'card-bound-accounts-desktop.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  await evaluate('document.querySelector(".card-accounts-dialog .close").click()');
+  cardBoundFail = true;
+  await evaluate('document.querySelector(".card-bound-count").click()');
+  await wait('document.querySelector(".card-accounts-dialog")?.textContent.includes("模拟绑定账号加载失败")');
+  cardBoundFail = false;
+  await evaluate('document.querySelector(".card-accounts-dialog .error button").click()');
+  await wait('Boolean(document.querySelector(".card-accounts-table"))');
+  await evaluate('document.querySelector(".card-accounts-dialog .close").click()');
+  bankCards[0].balance_usd_minor = 4000;
+  await evaluate('document.querySelector(".bank-card-manager .section-title .text-btn").click()');
+  await wait('document.querySelector(".bank-card-row .card-renewal-difference strong")?.textContent === "+$0.00"');
+  assert.equal(await evaluate('document.querySelector(".bank-card-row .card-renewal-difference strong").className'), 'credit');
+  cardBoundRows[0].renewal_usd_minor = null;
+  await evaluate('document.querySelector(".bank-card-manager .section-title .text-btn").click()');
+  await wait('document.querySelector(".bank-card-row .card-renewal-difference strong")?.textContent === "待核算"');
+  assert.ok(await evaluate('document.querySelector(".bank-card-row .card-renewal-difference").textContent.includes("1 个账号待核算")'));
+  cardBoundRows = []; bankCards[0].balance_usd_minor = 0;
+  await evaluate('document.querySelector(".bank-card-manager .section-title .text-btn").click()');
+  await wait('document.querySelector(".card-bound-count")?.textContent === "0 个"');
+  await evaluate('document.querySelector(".card-bound-count").click()');
+  await wait('document.querySelector(".card-accounts-dialog")?.textContent.includes("此卡暂无绑定账号。")');
+  await evaluate('document.querySelector(".card-accounts-dialog .close").click()');
 
   assert.equal(bankCards[0].notes, '月度订阅\n仅工作用途');
   assert.ok(await evaluate('document.querySelector(".bank-card-row").innerText.includes("自定义卡平台") && document.querySelector(".bank-card-row").innerText.includes("仅工作用途")'));
