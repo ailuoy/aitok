@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from decimal import Decimal, ROUND_HALF_UP
 
-PACKAGES = [("Plus", "plus", 99900), ("5X", "pro_5x", 649000), ("20X", "pro_20x", 999000)]
+PACKAGES = [("Plus", "plus", 99900), ("5X", "pro_5x", 649000), ("10X", "pro_20x", 999000)]
 VAT_RATE = Decimal("0.12")
 
 
@@ -47,7 +47,9 @@ def main():
         # 先把含税 PHP 分还原为未税 PHP 分，再按当日汇率折算 USD 分。
         amount = int((Decimal(gross_amount) / (1 + VAT_RATE)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         name = "ChatGPT " + label + " · 菲律宾 App Store（未税）"
-        matches = [p for p in data["packages"] if p["name"] == name and p["plan"] == plan and p["region"] == "PH"]
+        # 兼容旧名称，重新导入时更新原套餐，避免产生重复记录。
+        names = {name, name.replace("10X", "20X")} if plan == "pro_20x" else {name}
+        matches = [p for p in data["packages"] if p["name"] in names and p["plan"] == plan and p["region"] == "PH"]
         if len(matches) > 1:
             raise RuntimeError("存在重名套餐，请先人工核对：" + name)
         usd = int((Decimal(amount) * Decimal(rate["rate"])).quantize(Decimal("1"), rounding=ROUND_HALF_UP))

@@ -10,7 +10,7 @@ export class BrowserAssistant {
     environment.cdp.on('message', this.listener);
   }
   close() { this.environment.cdp.off('message', this.listener); this.token = null; this.data = null; this.pages.clear(); }
-  status() { const env = this.environment; return { state: env.state, email: env.actualEmail || env.expectedEmail || env.session?.user?.email, plan: ({ free: 'Free', plus: 'Plus', pro: 'Pro', pro_20x: 'Pro 20x', pro_5x: 'Pro 5x', team: 'Team', business: 'Business' })[env.plan] || env.plan || null }; }
+  status() { const env = this.environment; return { state: env.state, email: env.actualEmail || env.expectedEmail || env.session?.user?.email, plan: ({ free: 'Free', plus: 'Plus', pro: 'Pro', pro_20x: 'Pro 10x', pro_5x: 'Pro 5x', team: 'Team', business: 'Business' })[env.plan] || env.plan || null }; }
   async request(path = '', options = {}) {
     if (!this.token) throw new Error('请从后台重新打开账号以启用助手');
     const response = await fetch(this.endpoint + path, { ...options, headers: { Authorization: 'Bearer ' + this.token, ...(options.body ? { 'Content-Type': 'application/json' } : {}) }, redirect: 'error', signal: AbortSignal.timeout(15000) });
@@ -64,7 +64,7 @@ export class BrowserAssistant {
         result = await this.request('/cards/' + input.card_id);
       }
       else if (input.action === 'plan') {
-        if (!['Plus', 'Pro 20x', 'Pro 5x'].includes(input.plan)) throw new Error('套餐无效');
+        if (!['Plus', 'Pro 10x', 'Pro 5x'].includes(input.plan)) throw new Error('套餐无效');
         await cdp.send('Target.createTarget', { url: 'https://chatgpt.com/#pricing' });
         result = { message: '已打开官网套餐页，请选择 ' + input.plan + '；以官网可购买的方案为准。' };
       } else {

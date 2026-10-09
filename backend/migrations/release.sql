@@ -813,4 +813,9 @@ COMMENT ON TABLE order_wallet_debits IS '账号消费订单：按实收美元快
 CREATE INDEX IF NOT EXISTS order_wallet_debits_user_idx ON order_wallet_debits(user_id,id DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS order_wallet_debits_account_idx ON order_wallet_debits(account_id,user_id) WHERE deleted_at IS NULL;
 
+-- 来源：033_account_usage_status.sql
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS usage_status TEXT NOT NULL DEFAULT 'in_use' CHECK (usage_status IN ('in_use','discarded'));
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS discard_reason TEXT NOT NULL DEFAULT '' CHECK (length(discard_reason) <= 2000);
+COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、管理员长文本备注、使用中或废弃状态及最近废弃理由、当前订阅产品选型、上次登录、续订意愿及提醒、人工续订日期、默认付款卡、账单地址及有订单凭据的订阅核验状态；使用状态仅作管理标记，恢复使用保留最近废弃理由；产品选型可人工维护，订单开通同步对应套餐；绑定仅供助手默认选择，不代表官网绑卡或自动扣款。';
+
 COMMIT;

@@ -110,7 +110,7 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   assert.equal((await detailField('安全码')).value, '未填写', '普通卡不推断安全码');
   assert.ok((await detailField('安全码')).button.attributes.includes('disabled'));
   const planButtons = (await nodes()).find(node => node.nodeName === 'DIV' && node.attributes?.includes('plans')).children;
-  assert.deepEqual(planButtons.map(text), ['Plus', '5X', '20X']);
+  assert.deepEqual(planButtons.map(text), ['Plus', '5X', '10X']);
   const planBoxes = await Promise.all(planButtons.map(node => cdp.send('DOM.getBoxModel', { nodeId: node.nodeId }, sessionId)));
   assert.equal(new Set(planBoxes.map(box => box.model.content[1])).size, 1, '套餐按钮在同一行');
   await evaluate('window.trackOutside=true');

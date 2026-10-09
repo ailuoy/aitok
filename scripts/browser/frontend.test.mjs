@@ -304,7 +304,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         data = { cards: bankCards.map(({ id, label, last4, brand, balance_usd_minor }) => ({ id, label, last4, brand, balance_usd_minor, ...cardFunding })) };
         if (cardFundingFail) { responseCode = 503; data = { error: '模拟余额核算失败' }; }
         if (cardFundingDelay) await delay(cardFundingDelay);
-      } else if (request.method === 'PATCH' && (url.pathname === '/api/accounts/1/subscription' || url.pathname === '/api/accounts/1/subscription-package' || url.pathname === '/api/accounts/1/payment-card')) {
+      } else if (request.method === 'PATCH' && (url.pathname === '/api/accounts/1/subscription' || url.pathname === '/api/accounts/1/subscription-package' || url.pathname === '/api/accounts/1/usage-status' || url.pathname === '/api/accounts/1/payment-card')) {
         if (accountSettingsFail) { responseCode = 409; data = { error: '模拟账号设置保存失败' }; }
         else {
           const input = JSON.parse(request.postData);
@@ -522,18 +522,58 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("暂无充值订单")');
   bankCards=[{id:9,label:'运营测试卡',last4:'4242',balance_usd_minor:100000,exp_month:12,exp_year:2035,status:'active'}];
   await navigateAdmin('accounts');
+  // 使用状态独立于续订；取消不保存，失败保留草稿，理由按纯文本展示。
+  const statusSelector = '账号 chat@example.com 的使用状态';
+  assert.equal(await evaluate('document.querySelector(".account-status-cell button[role=combobox]").textContent'), '使用中');
+  const statusHeaders = await evaluate('Array.from(document.querySelectorAll(".accounts-table th"),th=>th.textContent.trim())');
+  assert.equal(statusHeaders[statusHeaders.indexOf('是否续订')+1], '状态');
+  assert.equal(statusHeaders[statusHeaders.indexOf('状态')+1], '付款卡');
+  await select(statusSelector, '废弃');
+  await wait('Boolean(document.querySelector(".account-status-dialog"))');
+  await click('取消');
+  assert.equal(account.usage_status, undefined);
+  await select(statusSelector, '废弃');
+  const discardReason = '账号暂时停用\n<script>仅为文本</script>';
+  await fill('textarea[name=discard_reason]', discardReason, 'HTMLTextAreaElement');
+  accountSettingsFail = true;
+  await click('确认废弃');
+  await wait('document.querySelector(".account-status-dialog")?.innerText.includes("模拟账号设置保存失败")');
+  assert.equal(await evaluate('document.querySelector("textarea[name=discard_reason]").value'), discardReason);
+  accountSettingsFail = false;
+  await click('确认废弃');
+  await wait('!document.querySelector(".account-status-dialog") && document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
+  assert.equal(account.discard_reason, discardReason);
+  assert.equal(await evaluate('document.querySelector(".account-discard-reason").textContent'), discardReason);
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-discard-reason script"))'), false);
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
+  await click('编辑废弃理由');
+  await fill('textarea[name=discard_reason]', '已补充理由', 'HTMLTextAreaElement');
+  await click('保存理由');
+  await wait('!document.querySelector(".account-status-dialog") && document.querySelector(".account-discard-reason")?.textContent === "已补充理由"');
+  await select(statusSelector, '使用中');
+  await wait('document.querySelector(".account-usage-status")?.dataset.status === "in_use" && !document.querySelector(".account-usage-status button[role=combobox]").disabled');
+  assert.equal(account.discard_reason, '已补充理由');
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-discard-reason"))'), false);
+  await select(statusSelector, '废弃');
+  await fill('textarea[name=discard_reason]', '', 'HTMLTextAreaElement');
+  await click('确认废弃');
+  await wait('!document.querySelector(".account-status-dialog") && document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
+  assert.equal(account.discard_reason, '');
+  await select(statusSelector, '使用中');
+  await wait('document.querySelector(".account-usage-status")?.dataset.status === "in_use" && !document.querySelector(".account-usage-status button[role=combobox]").disabled');
   const productLabel = `PLUS · ${rechargePackages[0].name} · ${rechargePackages[0].region} · ${rechargePackages[0].months}个月`;
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th")).slice(1, 5).map(th => th.textContent.trim())'), ['累计消费 USD', '所属用户', '产品选型', '分组']);
   await select('账号 chat@example.com 的产品选型', productLabel, rechargePackages[0].region);
-  await wait('document.querySelector(".account-product button").innerText.includes("测试 Plus") && !document.querySelector(".account-product button").disabled');
+  await wait('document.querySelector(".account-product button").innerText === "PLUS" && !document.querySelector(".account-product button").disabled');
   assert.equal(account.subscription_package_id, rechargePackages[0].id);
   await cdp.send('Page.reload', {}, sessionId);
-  await wait('document.querySelector(".account-product button")?.innerText.includes("测试 Plus") && !document.querySelector(".account-product button").disabled');
+  await wait('document.querySelector(".account-product button")?.innerText === "PLUS" && !document.querySelector(".account-product button").disabled');
   accountSettingsFail = true;
   await select('账号 chat@example.com 的产品选型', '未设置');
   await wait('document.body.innerText.includes("模拟账号设置保存失败") && !document.querySelector(".account-product button").disabled');
   assert.equal(account.subscription_package_id, rechargePackages[0].id);
-  assert.equal(await evaluate('document.querySelector(".account-product button").innerText'), productLabel);
+  assert.equal(await evaluate('document.querySelector(".account-product button").innerText'), 'PLUS');
   accountSettingsFail = false;
   await select('账号 chat@example.com 的产品选型', '未设置');
   await wait('document.querySelector(".account-product button").innerText === "未设置" && !document.querySelector(".account-product button").disabled');
@@ -1192,12 +1232,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="按付款卡筛选账号"]'))`), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-notes"))'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-product"))'), false);
+  assert.equal(await evaluate('Boolean(document.querySelector(".account-usage-status"))'), false);
   assert.equal(await evaluate('Array.from(document.querySelectorAll("button")).some(button=>button.textContent==="打开空白浏览器")'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-actions,.stats"))'),false);
   assert.equal(await evaluate('Boolean(document.querySelector(".user-menu a[href$=wallet]"))'),true);
 
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".account-renewal-filters button"),button=>button.textContent)'), ['正常（>10 天）', '即将续费（0–10 天）', '已逾期']);
-  for (const [plan, label] of [['plus','PLUS'], ['pro_5x','PRO-5X'], ['pro_20x','PRO-20X']]) {
+  for (const [plan, label] of [['plus','PLUS'], ['pro_5x','PRO-5X'], ['pro_20x','PRO-10X']]) {
     account.subscription_plan = plan;
     await cdp.send('Page.reload', {}, sessionId);
     await wait(`document.querySelector(".user-accounts-table tbody tr td:nth-child(4)")?.textContent === ${JSON.stringify(label)}`);
@@ -1210,7 +1251,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
     assert.ok(requests.slice(mark).some(value => { const url = new URL(value); return url.pathname === '/api/accounts' && url.searchParams.get('renewal_status') === status && url.searchParams.get('page') === '1'; }));
   }
   await evaluate('document.querySelector(".account-renewal-filters button[data-status=overdue]").click()');
-  await wait('document.querySelector(".user-accounts-table tbody tr td:nth-child(4)")?.textContent === "PRO-20X"');
+  await wait('document.querySelector(".user-accounts-table tbody tr td:nth-child(4)")?.textContent === "PRO-10X"');
   const requestMark = requests.length, localMark = localRequests.length;
   await delay(2200);
   assert.equal(localRequests.length,localMark);

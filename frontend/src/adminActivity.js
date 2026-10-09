@@ -25,6 +25,7 @@ export async function recordAdminActivity(context, event) {
 }
 
 function controlFor(element) {
+  if (element.closest('.account-usage-status,.account-status-dialog')) return 'account_status';
   if (element.matches('.account-owner-bind')) return 'bind_user';
   if (element.matches('.account-renewal-switch')) return 'subscription';
   if (element.closest('.pagination-pages')) return 'paginate';

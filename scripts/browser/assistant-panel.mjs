@@ -94,7 +94,7 @@ function installPanel(version, isVerificationPage) {
     const notes = create('div', '读取中…', 'account-notes', info);
     notes.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:120px;overflow:auto;margin-top:3px;';
     create('h3', '官方套餐', '', panel); const plans = create('div', '', 'plans', panel);
-    for (const [text, name] of [['Plus', 'Plus'], ['5X', 'Pro 5x'], ['20X', 'Pro 20x']]) { const button = create('button', text, '', plans); button.onclick = event => { if (event.isTrusted) run(button, () => call('plan', { plan: name })); }; }
+    for (const [text, name] of [['Plus', 'Plus'], ['5X', 'Pro 5x'], ['10X', 'Pro 10x']]) { const button = create('button', text, '', plans); button.onclick = event => { if (event.isTrusted) run(button, () => call('plan', { plan: name })); }; }
     create('p', '在官网选择对应方案，价格及额度以官网为准。', 'hint', panel);
     create('h3', '当前收银页填充', '', panel);
     let data = { cards: [], addresses: [] }, cardID = '', addressID = '', cardRequest = 0, selectedCard = null;

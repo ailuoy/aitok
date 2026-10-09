@@ -320,6 +320,7 @@ button,input,textarea{font-family:inherit}
 .data-table th,.data-table td{padding:11px 12px;vertical-align:middle}
 .data-table thead th{font-size:11px;font-weight:600}
 .data-table tbody tr:hover td{background:var(--inset)}
+.data-table tbody tr.account-row-highlighted>td{background:color-mix(in srgb,#facc15 20%,var(--surface))}
 .data-table strong{font-weight:600}
 .data-table .table-text{min-width:120px;max-width:240px;white-space:normal;overflow-wrap:anywhere;line-height:1.55}
 .data-table .cell-secondary{display:block;font-size:11px;color:var(--muted);margin-top:3px;white-space:normal;overflow-wrap:anywhere}
@@ -345,6 +346,11 @@ button,input,textarea{font-family:inherit}
 .data-table .icon-btn{padding:5px;display:inline-flex}
 .data-table .proxy-result{font-size:11px;min-width:160px;gap:3px}
 .data-table .account-product{min-width:240px;width:260px}
+.data-table .account-status-cell{min-width:150px;width:170px}
+.account-usage-status{display:grid;gap:5px}
+.account-usage-status[data-status=discarded] .select-trigger{color:var(--danger)}
+.account-usage-status>.text-btn{justify-self:start;padding:0;font-size:11px}
+.account-discard-reason{margin:0;max-width:220px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:11px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .accounts-table{min-width:1790px}.proxy-table{min-width:1120px}.address-table{min-width:1050px}
 .table-sort{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;white-space:nowrap;cursor:pointer}
 .table-sort:hover,.table-sort:focus-visible{color:var(--accent)}

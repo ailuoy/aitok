@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Server) insertAccount(ctx context.Context, user int64, label, email, encrypted string) (Account, error) {
-	a := Account{UserID: user, Label: label, Email: email, HasSession: true}
+	a := Account{UserID: user, Label: label, Email: email, HasSession: true, UsageStatus: "in_use"}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return a, err
