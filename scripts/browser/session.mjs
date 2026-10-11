@@ -2,18 +2,19 @@ import { spawn } from 'node:child_process';
 import { mkdir, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CDP } from './cdp.mjs';
-import { loginCookies, restoreLoginCookies } from './cookies.mjs';
+import { isLoginCookie, loginCookies, restoreLoginCookies } from './cookies.mjs';
 import { parseProxy, createProxyBridge } from './proxy.mjs';
 import { checkBrowserIP, IPIFY_URL, BILLING_URL, CLEANIP_URL } from './browser-ip.mjs';
 import { configureProfile } from './profile.mjs';
 import { EventEmitter } from 'node:events';
 import { BrowserAssistant } from './assistant.mjs';
+import { SessionRefresh } from './session-refresh.mjs';
 import { homedir } from 'node:os';
 import { loginCheckSource } from './page-verification.mjs';
 import { profileDirectory, readFingerprint, writeFingerprint, fingerprintSummary, assertProfileClosed } from './fingerprint-store.mjs';
 import { FingerprintRuntime, prepareFingerprintExtension } from './fingerprint-runtime.mjs';
 
-export function validateSession(value) {
+export function validateSession(value, { allowExpired = false } = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || typeof value.accessToken !== 'string' || !value.accessToken || value.accessToken.length > 128000 || /[^\x21-\x7e]/.test(value.accessToken)) {
     throw new Error('Session 缺少有效 accessToken');
   }
@@ -23,7 +24,7 @@ export function validateSession(value) {
     const claims = JSON.parse(Buffer.from(value.accessToken.split('.')[1], 'base64url').toString());
     if (Number.isFinite(claims.exp) && claims.exp > 0) expiries.push(claims.exp * 1000);
   } catch { /* 不在本地判断签名或非 JWT Token 的有效性。 */ }
-  if (expiries.some(expiry => expiry <= Date.now())) throw new Error('Session 已过期，请先更新');
+  if (!allowExpired && expiries.some(expiry => expiry <= Date.now())) throw new Error('Session 已过期，请先更新');
   const clean = Object.fromEntries(['accessToken', 'user', 'expires', 'account', 'authProvider'].filter(key => value[key] !== undefined).map(key => [key, value[key]]));
   const cookies = loginCookies(value);
   if (cookies.length) clean.cookies = cookies;
@@ -61,6 +62,7 @@ export class SessionBrowser extends EventEmitter {
     this.cleanipURL = cleanipURL;
     this.checkIP = checkIP;
     this.environments = new Map();
+    this.sessionUpdates = new Map();
     this.fingerprints = new Map();
     this.fingerprintBusy = new Set();
     this.closed = false;
@@ -69,8 +71,9 @@ export class SessionBrowser extends EventEmitter {
   status(id) {
     const environment = this.environments.get(id);
     const fingerprint = fingerprintSummary(this.fingerprints.get(id));
-    if (!environment) return { state: 'closed', api_status: null, fingerprint };
-    return { state: environment.state, api_status: environment.apiStatus, message: environment.message, ip_check: environment.ipCheck, authenticated_at: environment.authenticatedAt, fingerprint,
+    const session_update = environment?.refresh?.status || this.sessionUpdates.get(id);
+    if (!environment) return { state: 'closed', api_status: null, fingerprint, session_update };
+    return { state: environment.state, session_update, api_status: environment.apiStatus, message: environment.message, ip_check: environment.ipCheck, authenticated_at: environment.authenticatedAt, fingerprint,
       fingerprint_warning: environment.fingerprintRuntime?.errors ? '部分页面的指纹初始化未完成，请关闭账号窗口后重试。' : undefined };
   }
 
@@ -95,8 +98,9 @@ export class SessionBrowser extends EventEmitter {
     } finally { this.fingerprintBusy.delete(id); }
   }
 
-  async start({ environment_id, session, proxy_url, expected_email, assistant_token, assistant_endpoint }) {
-    return this.startEnvironment({ environment_id, session: validateSession(session), proxy_url, expected_email, assistant_token, assistant_endpoint });
+  async start({ environment_id, session, proxy_url, expected_email, assistant_token, assistant_endpoint, refresh_session = false }) {
+    if (refresh_session && (typeof assistant_token !== 'string' || !assistant_token || assistant_token.length > 2048 || !assistant_endpoint)) throw new Error('更新 Session 缺少授权，请从后台重新验证');
+    return this.startEnvironment({ environment_id, session: validateSession(session, { allowExpired: refresh_session === true }), proxy_url, expected_email, assistant_token, assistant_endpoint, refresh_session: refresh_session === true });
   }
 
   async startBlank({ environment_id, proxy_url }) {
@@ -104,7 +108,7 @@ export class SessionBrowser extends EventEmitter {
     return this.startEnvironment({ environment_id, proxy_url, manual: true, session: null });
   }
 
-  async startEnvironment({ environment_id: id, session, proxy_url: proxyURL = '', expected_email: expectedEmail, assistant_token: assistantToken, assistant_endpoint: assistantEndpoint, manual = false }) {
+  async startEnvironment({ environment_id: id, session, proxy_url: proxyURL = '', expected_email: expectedEmail, assistant_token: assistantToken, assistant_endpoint: assistantEndpoint, manual = false, refresh_session: refreshSession = false }) {
     if (this.closed) throw new Error('此站点的浏览器服务已停止');
     if (typeof id !== 'string' || id.length < 1 || id.length > 300) throw new Error('浏览器环境标识无效');
     const proxy = parseProxy(proxyURL);
@@ -113,6 +117,7 @@ export class SessionBrowser extends EventEmitter {
     if (this.environments.size >= 10) throw new Error('最多同时打开 10 个浏览器环境');
     const environment = { id, state: 'starting', apiStatus: null, message: '正在启动浏览器', session, manual, expectedEmail, pages: new Map(), controller: new AbortController() };
     this.environments.set(id, environment);
+    this.sessionUpdates.delete(id);
     try {
       const profile = profileDirectory(this.directory, id);
       await mkdir(profile, { recursive: true, mode: 0o700 });
@@ -141,6 +146,8 @@ export class SessionBrowser extends EventEmitter {
         environment.controller.abort();
         environment.proxy?.close();
         environment.assistant?.close();
+        environment.refresh?.close();
+        if (environment.refresh) this.sessionUpdates.set(id, environment.refresh.status);
         environment.fingerprintRuntime?.close();
         environment.session = null;
         clearInterval(environment.verifyTimer);
@@ -152,8 +159,15 @@ export class SessionBrowser extends EventEmitter {
       environment.cdp = cdp;
       environment.fingerprintRuntime = new FingerprintRuntime(cdp, fingerprint, fingerprintExtension);
       await environment.fingerprintRuntime.start();
-      if (typeof assistantToken === 'string' && assistantToken.length <= 2048 && assistantEndpoint) environment.assistant = new BrowserAssistant(environment, assistantEndpoint, assistantToken);
-      if (!manual) environment.hasLoginCookie = await restoreLoginCookies(cdp, session);
+      if (refreshSession) environment.refresh = new SessionRefresh(environment, assistantEndpoint, assistantToken, () => this.stop(id));
+      else if (typeof assistantToken === 'string' && assistantToken.length <= 2048 && assistantEndpoint) environment.assistant = new BrowserAssistant(environment, assistantEndpoint, assistantToken);
+      // 更新时优先保留本机 Cookie，避免后台旧快照覆盖浏览器已续期的登录状态。
+      if (refreshSession) {
+        const { cookies } = await cdp.send('Storage.getCookies');
+        environment.hasLoginCookie = cookies.some(cookie => isLoginCookie(cookie.name) && ['chatgpt.com', '.chatgpt.com'].includes(cookie.domain) && (cookie.expires <= 0 || cookie.expires * 1000 > Date.now()));
+      }
+      // 旧 Session 的到期时间不代表 Cookie 的服务端有效期；更新模式交由官网验证。
+      if (!manual && !environment.hasLoginCookie) environment.hasLoginCookie = await restoreLoginCookies(cdp, refreshSession ? { ...session, expires: undefined } : session);
       // Cookie 在浏览器级恢复；指纹运行时只在新目标初始化时短暂暂停并保证恢复。
       // 复用 Chromium 启动时的空白标签，避免每次打开都额外留下 about:blank。
       const { targetInfos } = await cdp.send('Target.getTargets');
@@ -174,6 +188,7 @@ export class SessionBrowser extends EventEmitter {
       environment.opening = this.openBilling(environment, pageSession, proxyURL);
       return this.status(id);
     } catch (error) {
+      environment.refresh?.close();
       environment.fingerprintRuntime?.close();
       environment.child?.kill();
       environment.proxy?.close();
@@ -207,10 +222,11 @@ export class SessionBrowser extends EventEmitter {
         environment.message = result.ok ? `出口 IP ${result.exit_ip} 与代理 IP ${result.proxy_ips.join(' / ')} 不一致，未打开 ChatGPT。请检查代理后关闭并重新打开账号。` : `${result.error}；未打开 ChatGPT，请关闭后重试。`;
         return;
       }
-      await environment.cdp.send('Target.createTarget', { url: this.billingURL });
+      await environment.cdp.send('Target.createTarget', { url: environment.refresh ? this.billingURL.split('#')[0] : this.billingURL });
       if (!environment.session || environment.state === 'closing') return;
       environment.state = 'opened';
-      environment.message = proxyURL ? `出口 IP ${result.exit_ip} 与代理 IP 一致，已新开 ChatGPT 账单页。` : `直连出口 IP：${result.exit_ip}，已新开 ChatGPT 账单页。`;
+      const pageName = environment.refresh ? 'ChatGPT 登录页' : 'ChatGPT 账单页';
+      environment.message = proxyURL ? `出口 IP ${result.exit_ip} 与代理 IP 一致，已新开 ${pageName}。` : `直连出口 IP：${result.exit_ip}，已新开 ${pageName}。`;
       if (!environment.hasLoginCookie) environment.message += '本次 Session 未提供登录 Cookie；若尚未登录，请在窗口中登录或补充 Cookie。';
       environment.verifyTimer = setInterval(() => this.verifyLogin(environment), 5000);
       environment.verifyTimer.unref();
@@ -270,6 +286,7 @@ export class SessionBrowser extends EventEmitter {
             this.emit('activity', { environment_id: environment.id, action: 'login', ok: true, logged_in_at: environment.authenticatedAt });
           }
           environment.message = 'ChatGPT 已确认网页登录账号与导入账号一致';
+          await environment.refresh?.run();
         }
       } else if (value.status === 200 || value.status === 401) {
         environment.state = 'login_required';
@@ -302,6 +319,7 @@ export class SessionBrowser extends EventEmitter {
       environment.controller.abort();
       clearInterval(environment.verifyTimer); clearInterval(environment.pageTimer);
       environment.assistant?.close(); environment.proxy?.close();
+      environment.refresh?.close();
       environment.fingerprintRuntime?.close();
       const child = environment.child;
       if (!child || child.exitCode !== null || child.signalCode !== null) continue;

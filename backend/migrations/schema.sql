@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS chatgpt_accounts (
   email TEXT NOT NULL,
   api_key TEXT,
   session_ciphertext TEXT,
+  session_updated_at TIMESTAMPTZ,
   renewal_date DATE,
   group_id BIGINT,
   last_login_at TIMESTAMPTZ,

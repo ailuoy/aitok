@@ -104,7 +104,7 @@ CLOUDFLARE_EMAIL_API_BASE_URL=https://api.cloudflare.com/client/v4
 
 ## 账号与续订
 
-添加账号时粘贴完整的 `/api/auth/session` JSON，系统识别名称和邮箱；无法识别时可手动补充。支持 `accessToken` / `access_token`，以及 `tokens`、`credentials` 下的对应字段。名称可自定义，填写的邮箱需要与 Session 中识别到的邮箱一致。Session 加密保存，列表只返回是否已保存。旧账号不必删除，原账号 ID 保留；旧 API Key 不会自动转换为 Session。账号行的“更新 Session”可替换过期凭据，并检查邮箱是否属于同一账号。
+添加账号时粘贴完整的 `/api/auth/session` JSON，系统识别名称和邮箱；无法识别时可手动补充。支持 `accessToken` / `access_token`，以及 `tokens`、`credentials` 下的对应字段。名称可自定义，填写的邮箱需要与 Session 中识别到的邮箱一致。Session 加密保存，列表只返回是否已保存。旧账号不必删除，原账号 ID 保留；旧 API Key 不会自动转换为 Session。账号行的“更新 Session”经逐次验证器验证后，自动打开不加载小助手的独立浏览器，读取最新 Session 和登录 Cookie、校验邮箱、加密保存后自动关闭。允许旧 accessToken 过期时执行更新，并优先复用本机登录 Cookie；如需重新登录或 Cloudflare 验证，需在窗口内完成。等待登录最多五分钟，失败保留窗口并显示原因，已打开的账号须先关闭再更新。弹窗仍提供手动导入入口。管理员表格显示距最近更新的完整天数（不足一天单独标明）和 UTC+8 更新时间；历史无记录显示“未记录”，备注、代理等变更不影响该时间。上线需执行 035 迁移并更新前后端及桌面助手。
 
 ## 本机桌面助手（macOS / Windows）
 

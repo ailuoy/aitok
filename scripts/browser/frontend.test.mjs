@@ -40,6 +40,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let fingerprintResets = 0;
   let localFingerprint = null;
   let localState = 'closed', exportCount = 0, exportExpired = false;
+  let sessionUpdate;
   let proxies = [], bindings = {}, testCount = 0, draftFails = false, proxyPassword = '', accountDeletes = 0;
   let proxyBindingFails = false, proxiesUnavailable = false, localUnavailable = false, proxyDetailFails = false;
   let browserState = 'closed';
@@ -100,7 +101,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         localRequests.push(request);
         if (localUnavailable) { responseCode = 503; data = { error: '模拟本机助手未启动' }; }
         else if (url.pathname === '/activity-export') data = {device_id:'test-device',events:[],next_cursor:0};
-        else if (url.pathname === '/health') data = { status: 'ok', version: 2, fingerprint: 'native-noise-v1', blank_browser: true, shared_proxies: true };
+        else if (url.pathname === '/health') data = { status: 'ok', version: 2, fingerprint: 'native-noise-v1', blank_browser: true, shared_proxies: true, session_refresh: true };
         else if (url.pathname === '/blank-browsers' && request.method === 'POST') {
           if (blankFail) { responseCode = 503; data = { error: '模拟空白浏览器启动失败' }; }
           else { blankLaunches.push(JSON.parse(request.postData)); data = { state: 'opened', environment_id: 'blank-test' }; }
@@ -120,9 +121,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
           const matches = input.action === 'get_ip' ? false : true;
           data = { result: draftFails ? { ok: false, error: '代理认证失败' } : { ok: true, matches, exit_ip: matches ? '203.0.113.10' : '198.51.100.1', proxy_ips: ['203.0.113.10'], latency_ms: 25, tested_at: new Date().toISOString() } };
         } else {
-          if (request.method === 'POST') { localLaunches.push(JSON.parse(request.postData)); localState = 'opened'; }
+          if (request.method === 'POST') { localLaunches.push(JSON.parse(request.postData)); localState = 'opened'; sessionUpdate = localLaunches.at(-1).refresh_session ? { state: 'waiting', message: '等待登录后自动更新' } : undefined; }
           if (request.method === 'DELETE') localState = 'closed';
-          data = { state: localState, authenticated_at: authenticatedAt, fingerprint: localFingerprint };
+          data = { state: localState, authenticated_at: authenticatedAt, fingerprint: localFingerprint, session_update: sessionUpdate };
         }
       } else if (url.pathname.startsWith('/api/proxies')) {
         const input = request.postData ? JSON.parse(request.postData) : {};
@@ -333,7 +334,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       } else if (url.pathname === '/api/accounts/1' && request.method === 'DELETE') { accountDeletes++;
       } else if (url.pathname === '/api/accounts/1/browser-session') {
         if (request.method === 'POST') exportCount++;
-        if (exportExpired) { responseCode = 422; data = { error: 'Session 已过期，请更新' }; }
+        if (exportExpired && url.searchParams.get('mode') !== 'refresh') { responseCode = 422; data = { error: 'Session 已过期，请更新' }; }
         else data = { shared_proxy: bindings['1'] ? { ...proxies[0], password: proxyPassword } : null, account_id: 1, session: { accessToken: 'local-test-access', user: { email: account.email } }, assistant_token: 'local-test-assistant' };
       } else if (url.pathname === '/api/me') data = { user, accounts: [account] };
       else if (url.pathname === '/api/accounts') {
@@ -1797,6 +1798,23 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(localLaunches.length, 3);
   assert.equal(localLaunches[2].assistant_token, 'local-test-assistant', '重新进入弹窗时默认加载小助手');
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
+  // 已过期的 Session 仍可进入自动更新模式；成功后显示时间并关闭弹窗。
+  await click('更新 Session');
+  await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog textarea[name=session_json]"))'), false);
+  assert.equal(await evaluate('Boolean(document.querySelector(".browser-assistant-option"))'), false);
+  await fill('.two-factor input[inputmode=numeric]', '654321');
+  await click('验证并自动更新');
+  await wait('document.querySelector("dialog")?.innerText.includes("等待登录后自动更新")');
+  assert.equal(localLaunches.at(-1).refresh_session, true);
+  assert.equal(localLaunches.at(-1).assistant_token, 'local-test-assistant');
+  account.session_updated_at = new Date().toISOString();
+  sessionUpdate = { state: 'saved', session_updated_at: account.session_updated_at, message: '已保存' };
+  localState = 'closed';
+  await wait('!document.querySelector("dialog")');
+  await wait('document.querySelector(".account-row")?.innerText.includes("不足 1 天")');
+  assert.ok(await evaluate('document.querySelector(".account-section").innerText.includes("距上次更新 Session")'));
+  exportExpired = false;
   await navigateAdmin('proxies');
   await wait('Boolean(document.querySelector(".proxy-row"))');
   const deletesBefore = localRequests.filter(request => request.method === 'DELETE').length;
@@ -1967,7 +1985,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   const auditPayload=JSON.stringify(adminActivities);
   for (const secret of ['proxy-secret','4242424242424242','local-test-access']) assert.equal(auditPayload.includes(secret),false);
   assert.ok(adminActivities.every(e=>e.page.startsWith('/admin/') && !e.page.includes('?')));
-  assert.equal(otpHeaders.length, 4);
+  assert.equal(otpHeaders.length, 5);
   assert.ok(otpHeaders.every(code=>code === '654321'));
   assert.equal(requests.some(url => new URL(url).pathname === '/api/accounts/1/browser'), false, '两个浏览器入口必须共用本机环境');
   assert.deepEqual(errors, []);

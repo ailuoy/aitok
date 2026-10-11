@@ -208,7 +208,7 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "Session 中的邮箱与当前账号不一致，请为该邮箱新建账号"}, 409)
 		return
 	}
-	if launch || assistantUpdate {
+	if (launch && r.URL.Query().Get("mode") != "refresh") || assistantUpdate {
 		if session.ExpiresAt != nil && !session.ExpiresAt.After(time.Now()) {
 			reply(w, map[string]string{"error": "Session 已过期，请重新复制 /api/auth/session 并更新"}, 422)
 			return
@@ -235,13 +235,14 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		return
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),session_ciphertext=$1 WHERE id=$2 AND deleted_at IS NULL AND COALESCE(session_ciphertext,'')=$3`, encoded, accountID, encrypted)
-	if err != nil {
-		reply(w, map[string]string{"error": "更新 Session 失败"}, 500)
+	var updatedAt time.Time
+	err = tx.QueryRowContext(r.Context(), `UPDATE chatgpt_accounts SET updated_at=NOW(),session_updated_at=NOW(),session_ciphertext=$1 WHERE id=$2 AND deleted_at IS NULL AND COALESCE(session_ciphertext,'')=$3 RETURNING session_updated_at`, encoded, accountID, encrypted).Scan(&updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		reply(w, map[string]string{"error": "账号已被更新，请刷新后重试"}, 409)
 		return
 	}
-	if count, _ := result.RowsAffected(); count == 0 {
-		reply(w, map[string]string{"error": "账号已被更新，请刷新后重试"}, 409)
+	if err != nil {
+		reply(w, map[string]string{"error": "更新 Session 失败"}, 500)
 		return
 	}
 	if assistantUpdate {
@@ -254,5 +255,5 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "更新 Session 失败"}, 500)
 		return
 	}
-	reply(w, map[string]string{"message": "Session 已更新"}, 200)
+	reply(w, map[string]any{"message": "Session 已更新", "session_updated_at": updatedAt}, 200)
 }

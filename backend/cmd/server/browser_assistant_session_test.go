@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBrowserAssistantNotesBoundToAccount(t *testing.T) {
@@ -72,6 +73,10 @@ func TestBrowserAssistantSessionUpdate(t *testing.T) {
 		return value
 	}
 	saved := read()
+	var updatedAt time.Time
+	if err := db.QueryRow(`SELECT session_updated_at FROM chatgpt_accounts WHERE id=1`).Scan(&updatedAt); err != nil || time.Since(updatedAt) > time.Minute {
+		t.Fatal("成功保存须记录服务端更新时间", err)
+	}
 	credentials, err := decodeAccountCredentials(saved)
 	if err != nil || credentials.SessionJSON != fresh || credentials.ProxyURL != original.ProxyURL || strings.Contains(saved, "fresh-token") {
 		t.Fatal("Session 未加密保存或代理配置被覆盖", err)
@@ -100,6 +105,13 @@ func TestBrowserAssistantSessionUpdate(t *testing.T) {
 	call("POST", path, legacy, fresh, 403)
 	if read() != saved {
 		t.Fatal("更新失败不得覆盖已有 Session")
+	}
+	if _, err := db.Exec(`UPDATE chatgpt_accounts SET notes='修改备注',updated_at=NOW() WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	var after time.Time
+	if err := db.QueryRow(`SELECT session_updated_at FROM chatgpt_accounts WHERE id=1`).Scan(&after); err != nil || !after.Equal(updatedAt) {
+		t.Fatal("失败请求和普通资料修改不得改变 Session 更新时间", err)
 	}
 	var audit string
 	if err := db.QueryRow(`SELECT string_agg(after_data::text,' ') FROM operation_events WHERE action='assistant_session_update'`).Scan(&audit); err != nil || !strings.Contains(audit, "success") || !strings.Contains(audit, "failure") || strings.Contains(audit, "fresh-token") || strings.Contains(audit, "fresh-cookie") {

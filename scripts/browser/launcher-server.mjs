@@ -52,7 +52,7 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
     }
     try {
       if (request.method === 'GET' && request.url === '/health') {
-        send(200, { status: 'ok', version: 2, origin, fingerprint: 'native-noise-v1', shared_proxies: true, blank_browser: Boolean(authorize && browser.startBlank) }); return;
+        send(200, { status: 'ok', version: 2, origin, fingerprint: 'native-noise-v1', shared_proxies: true, session_refresh: true, blank_browser: Boolean(authorize && browser.startBlank) }); return;
       }
       const authorizedUser = authorize ? await authorize() : null;
       let input;

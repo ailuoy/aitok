@@ -3,7 +3,7 @@ WITH required(table_name,column_names) AS (VALUES
 ('socks5_proxies',ARRAY['id','name','host','port','username','password_ciphertext','last_test','created_at','updated_at','deleted_at']),
 ('users',ARRAY['id','email','password_hash','role','session_version','disabled','permissions','totp_ciphertext','totp_pending_ciphertext','totp_pending_expires_at','totp_enabled_at','totp_last_step','created_at','updated_at','deleted_at']),
 ('account_groups',ARRAY['id','user_id','name','created_at','updated_at','deleted_at']),
-('chatgpt_accounts',ARRAY['id','user_id','label','email','api_key','session_ciphertext','renewal_date','group_id','last_login_at','verified_plan','verified_at','subscription_ends_at','renewal_enabled','payment_card_id','billing_address_id','notes','subscription_package_id','usage_status','discard_reason','socks5_proxy_id','created_at','updated_at','deleted_at']),
+('chatgpt_accounts',ARRAY['id','user_id','label','email','api_key','session_ciphertext','session_updated_at','renewal_date','group_id','last_login_at','verified_plan','verified_at','subscription_ends_at','renewal_enabled','payment_card_id','billing_address_id','notes','subscription_package_id','usage_status','discard_reason','socks5_proxy_id','created_at','updated_at','deleted_at']),
 ('email_codes',ARRAY['id','email','purpose','code','expires_at','attempts','created_at','updated_at','deleted_at']),
 ('order_wallet_debits',ARRAY['id','order_id','user_id','account_id','account_email','account_label','order_no','amount_usd_minor','tokens_minor','tokens_per_usd','balance_after_minor','wallet_ledger_id','actor_id','created_at','updated_at','deleted_at']),
 ('wallets',ARRAY['id','user_id','balance','balance_subunit','created_at','updated_at','deleted_at']),

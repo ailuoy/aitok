@@ -836,4 +836,10 @@ ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS socks5_proxy_id BIGINT;
 CREATE INDEX IF NOT EXISTS chatgpt_accounts_socks5_proxy_idx ON chatgpt_accounts(socks5_proxy_id) WHERE deleted_at IS NULL AND socks5_proxy_id IS NOT NULL;
 COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、管理员长文本备注、使用中或废弃状态及最近废弃理由、当前订阅产品选型、上次登录、续订意愿及提醒、人工续订日期、默认付款卡、账单地址及有订单凭据的订阅核验状态；使用状态仅作管理标记，恢复使用保留最近废弃理由；产品选型可人工维护，订单开通同步对应套餐；绑定仅供助手默认选择，不代表官网绑卡或自动扣款。 SOCKS5 代理通过 socks5_proxy_id 关联全站共享配置，选择不按登录用户或设备区分。';
 
+-- 来源：035_session_updated_at.sql
+
+-- 仅记录实际保存 Session 的时间，历史记录不以普通更新时间推算。
+ALTER TABLE chatgpt_accounts ADD COLUMN IF NOT EXISTS session_updated_at TIMESTAMPTZ;
+
+
 COMMIT;
