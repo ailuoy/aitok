@@ -15,11 +15,15 @@ import (
 
 // 独立作用域的短期凭证，只读卡片/地址并更新绑定账号的 Session，仅交给本机进程。
 func (s *Server) assistantToken(user, account int64) string {
+	return s.scopedAssistantToken(user, account, "assistant-v2", 12*time.Hour)
+}
+
+func (s *Server) scopedAssistantToken(user, account int64, scope string, lifetime time.Duration) string {
 	stamp, err := s.sessionStamp(context.Background(), user)
 	if err != nil {
 		return ""
 	}
-	body := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("assistant-v2:%d:%d:%d:%s", user, account, time.Now().Add(12*time.Hour).Unix(), stamp)))
+	body := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%d:%d:%d:%s", scope, user, account, time.Now().Add(lifetime).Unix(), stamp)))
 	mac := hmac.New(sha256.New, s.secret)
 	mac.Write([]byte(body))
 	return body + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
@@ -55,6 +59,8 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 	scope := "assistant"
 	if strings.HasPrefix(string(raw), "assistant-v2:") {
 		scope = "assistant-v2"
+	} else if strings.HasPrefix(string(raw), "session-refresh-v1:") {
+		scope = "session-refresh-v1"
 	}
 	if _, err = fmt.Sscanf(string(raw), scope+":%d:%d:%d:%s", &user, &account, &expiry, &stamp); err != nil || time.Now().Unix() > expiry {
 		unauthorized()
@@ -85,12 +91,17 @@ func (s *Server) browserAssistant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if updateSession {
-		if scope != "assistant-v2" {
+		if scope != "assistant-v2" && scope != "session-refresh-v1" {
 			reply(w, map[string]string{"error": "请从后台重新打开账号以启用 Session 更新"}, 403)
 			return
 		}
 		// 账号 ID 只取自已签名凭证，不接受页面指定其他账号。
 		s.accountSession(w, r, user, account, false)
+		return
+	}
+	// 免验证的自动更新授权只允许回存 Session，不能读取银行卡或助手资料。
+	if scope == "session-refresh-v1" {
+		reply(w, map[string]string{"error": "此授权仅用于更新 Session"}, 403)
 		return
 	}
 	var paymentCardID, billingAddressID *int64

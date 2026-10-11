@@ -279,4 +279,4 @@ bash scripts/build-release-sql.sh > "backend/migrations/release.sql"
 
 ### 035：Session 最近更新时间
 
-新增可空的 `chatgpt_accounts.session_updated_at TIMESTAMPTZ`。导入账号或成功保存 Session 时由服务端记录，与凭据同事务提交；普通账号资料修改不更新该字段，历史账号保持 NULL（页面显示“未记录”）。先执行经确认的 035 迁移，再更新前后端和桌面助手。自动更新保留逐次 TOTP，允许旧 Session 过期时启动登录恢复；凭据保存成功后自动关闭窗口。
+新增可空的 `chatgpt_accounts.session_updated_at TIMESTAMPTZ`。导入账号或成功保存 Session 时由服务端记录，与凭据同事务提交；普通账号资料修改不更新该字段，历史账号保持 NULL（页面显示“未记录”）。先执行经确认的 035 迁移，再更新前后端和桌面助手。自动更新限定已登录管理员，免 TOTP；仅签发十分钟、绑定账号的 Session 回存授权，不允许读取助手资料或银行卡。允许旧 Session 过期时启动登录恢复；凭据保存成功后自动关闭窗口。

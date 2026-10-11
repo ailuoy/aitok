@@ -82,7 +82,7 @@ func TestAccountSessionIntegration(t *testing.T) {
 		body, _ := json.Marshal(input)
 		r := httptest.NewRequest(method, path, strings.NewReader(string(body)))
 		r.Header.Set("Authorization", "Bearer "+s.token(user))
-		if method == "POST" && (strings.HasSuffix(r.URL.Path, "/browser") || strings.HasSuffix(r.URL.Path, "/browser-session")) && s.permitted(r.Context(), user, "accounts") {
+		if method == "POST" && r.URL.Query().Get("mode") != "refresh" && (strings.HasSuffix(r.URL.Path, "/browser") || strings.HasSuffix(r.URL.Path, "/browser-session")) && s.permitted(r.Context(), user, "accounts") {
 			r.Header.Set("X-Aitok-TOTP", browserTestOTP(t, s, user))
 		}
 		w := httptest.NewRecorder()
@@ -114,13 +114,20 @@ func TestAccountSessionIntegration(t *testing.T) {
 	call("POST", path+"/browser-session", 3, nil, 422)
 	call("POST", path+"/browser-session?mode=refresh", 3, nil, 200)
 	call("POST", path+"/browser-session?mode=refresh", 1, nil, 403)
-	// 自动更新模式也必须逐次验证，不能利用查询参数绕过 TOTP。
+	// 自动更新免 TOTP，普通打开仍要求验证。
 	r := httptest.NewRequest("POST", path+"/browser-session?mode=refresh", nil)
 	r.Header.Set("Authorization", "Bearer "+s.token(3))
 	w = httptest.NewRecorder()
 	s.routes().ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatal("自动更新不应要求 TOTP", w.Code)
+	}
+	r = httptest.NewRequest("POST", path+"/browser-session", nil)
+	r.Header.Set("Authorization", "Bearer "+s.token(3))
+	w = httptest.NewRecorder()
+	s.routes().ServeHTTP(w, r)
 	if w.Code == 200 {
-		t.Fatal("自动更新未验证 TOTP")
+		t.Fatal("普通打开仍应要求 TOTP")
 	}
 	call("PATCH", path+"/session", 3, map[string]string{"session_json": raw}, 200)
 	call("POST", path+"/browser-session", 3, nil, 200)

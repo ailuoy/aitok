@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState } from 'react';
-import TwoFactor from './TwoFactor';
 import LauncherConnection from './LauncherConnection';
 import { browserEnvironmentID, launcherRequest, openLocalAccount } from './localBrowser';
 import useLauncherPort from './useLauncherPort';
@@ -10,9 +9,18 @@ export default function SessionRefresh({ account, userID, token, onStatus, onUpd
   const [error, setError] = useState('');
   const [task, setTask] = useState(null);
   const [closing, setClosing] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
+  const autoStarted = useRef(false);
   const callbacks = useRef({ onStatus, onUpdated, onComplete });
   callbacks.current = { onStatus, onUpdated, onComplete };
   const path = '/browsers/' + encodeURIComponent(browserEnvironmentID(userID, account.id));
+
+  useEffect(() => {
+    if (autoStarted.current) return;
+    autoStarted.current = true;
+    void start();
+  }, []);
 
   useEffect(() => {
     if (!task) return;
@@ -43,10 +51,14 @@ export default function SessionRefresh({ account, userID, token, onStatus, onUpd
     return () => { controller.abort(); clearTimeout(timer); };
   }, [task, path, account.id]);
 
-  async function start(code) {
-    setError('');
-    const next = await openLocalAccount(account, userID, token, code, { loadAssistant: false, refreshSession: true });
-    setStatus(next); callbacks.current.onStatus(account.id, next); setTask({ port });
+  async function start() {
+    if (startingRef.current) return;
+    startingRef.current = true; setStarting(true); setError('');
+    try {
+      const next = await openLocalAccount(account, userID, token, undefined, { loadAssistant: false, refreshSession: true });
+      setStatus(next); callbacks.current.onStatus(account.id, next); setTask({ port });
+    } catch (error) { setError(error.message); }
+    finally { startingRef.current = false; setStarting(false); }
   }
 
   async function close() {
@@ -58,13 +70,14 @@ export default function SessionRefresh({ account, userID, token, onStatus, onUpd
 
   return <div className="browser-session local-browser-session">
     <p className="muted">{account.email}</p>
-    <p>验证后自动打开账号浏览器，更新 Session 并关闭窗口。浏览器不加载小助手；如需登录或网页验证，请在打开的窗口中完成。</p>
+    <p>自动打开账号浏览器，更新 Session 并关闭窗口。浏览器不加载小助手；如需登录或网页验证，请在打开的窗口中完成。</p>
+    {starting && <p className="notice" role="status">正在打开浏览器并更新 Session…</p>}
     {status?.session_update && <p className={status.session_update.state === 'failed' ? 'error' : 'notice'} role="status">{status.session_update.message}</p>}
     {task && status?.message && <p className="muted">{status.message}</p>}
     {error && <p className="error" role="alert">{error}</p>}
-    {!task && <TwoFactor compact token={token} onVerify={start} verifyLabel="验证并自动更新" />}
+    {!task && !starting && <button className="primary" onClick={start}>重新更新 Session</button>}
     {task && <button className="outline" disabled={closing} onClick={close}>{closing ? '正在关闭…' : '关闭浏览器'}</button>}
-    {!task && <button className="text-btn" onClick={onManual}>手动导入 Session</button>}
-    {!task && <LauncherConnection />}
+    {!task && !starting && <button className="text-btn" onClick={onManual}>手动导入 Session</button>}
+    {!task && !starting && <LauncherConnection />}
   </div>;
 }

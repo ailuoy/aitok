@@ -126,3 +126,47 @@ func TestBrowserAssistantSessionUpdate(t *testing.T) {
 	}
 	call("POST", path, token, fresh, 401)
 }
+
+func TestSessionRefreshWithoutTOTPHasLimitedScope(t *testing.T) {
+	db, _ := accountSettingsTest(t)
+	t.Setenv("SESSION_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))))
+	s := &Server{db: db, secret: []byte("refresh-only-test")}
+	raw := `{"accessToken":"refresh-token","user":{"email":"a@test.local"}}`
+	encrypted, err := encryptSession(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE chatgpt_accounts SET session_ciphertext=$1 WHERE id=1`, encrypted); err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, token, body string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		s.routes().ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s: got %d want %d", method, path, w.Code, want)
+		}
+		return w
+	}
+	// 管理员未绑定验证器也可自动更新，普通用户及未登录请求仍拒绝。
+	w := call("POST", "/api/accounts/1/browser-session?mode=refresh", s.token(1), "", 200)
+	var data struct {
+		Token string `json:"assistant_token"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &data); err != nil || data.Token == "" {
+		t.Fatal("未签发自动更新授权", err)
+	}
+	call("POST", "/api/accounts/1/browser-session?mode=refresh", s.token(2), "", 403)
+	call("POST", "/api/accounts/1/browser-session?mode=refresh", "", "", 401)
+	for _, path := range []string{"/api/browser-assistant", "/api/browser-assistant/cards/1"} {
+		call("GET", path, data.Token, "", 403)
+	}
+	body, _ := json.Marshal(map[string]string{"session_json": raw})
+	call("POST", "/api/browser-assistant/session", data.Token, string(body), 200)
+	other, _ := json.Marshal(map[string]string{"session_json": strings.ReplaceAll(raw, "a@test.local", "b@test.local")})
+	call("POST", "/api/browser-assistant/session?account_id=2", data.Token, string(other), 409)
+	expired := s.scopedAssistantToken(1, 1, "session-refresh-v1", -time.Minute)
+	call("POST", "/api/browser-assistant/session", expired, string(body), 401)
+}

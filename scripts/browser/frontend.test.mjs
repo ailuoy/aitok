@@ -1799,13 +1799,14 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(localLaunches[2].assistant_token, 'local-test-assistant', '重新进入弹窗时默认加载小助手');
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   // 已过期的 Session 仍可进入自动更新模式；成功后显示时间并关闭弹窗。
+  const launchesBeforeRefresh = localLaunches.length;
   await click('更新 Session');
-  await wait('Boolean(document.querySelector(".two-factor input[inputmode=numeric]"))');
+  await wait('document.querySelector("dialog")?.innerText.includes("等待登录后自动更新")');
   assert.equal(await evaluate('Boolean(document.querySelector("dialog textarea[name=session_json]"))'), false);
   assert.equal(await evaluate('Boolean(document.querySelector(".browser-assistant-option"))'), false);
-  await fill('.two-factor input[inputmode=numeric]', '654321');
-  await click('验证并自动更新');
-  await wait('document.querySelector("dialog")?.innerText.includes("等待登录后自动更新")');
+  assert.equal(await evaluate('Boolean(document.querySelector("dialog .two-factor"))'), false);
+  assert.equal(localLaunches.length, launchesBeforeRefresh + 1, '点击后直接且只启动一次');
+  assert.equal(otpHeaders.at(-1), undefined, '自动更新无需验证码');
   assert.equal(localLaunches.at(-1).refresh_session, true);
   assert.equal(localLaunches.at(-1).assistant_token, 'local-test-assistant');
   account.session_updated_at = new Date().toISOString();
@@ -1986,7 +1987,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   for (const secret of ['proxy-secret','4242424242424242','local-test-access']) assert.equal(auditPayload.includes(secret),false);
   assert.ok(adminActivities.every(e=>e.page.startsWith('/admin/') && !e.page.includes('?')));
   assert.equal(otpHeaders.length, 5);
-  assert.ok(otpHeaders.every(code=>code === '654321'));
+  assert.ok(otpHeaders.slice(0, -1).every(code=>code === '654321'));
   assert.equal(requests.some(url => new URL(url).pathname === '/api/accounts/1/browser'), false, '两个浏览器入口必须共用本机环境');
   assert.deepEqual(errors, []);
   t.diagnostic(`页面截图：${directory}`);

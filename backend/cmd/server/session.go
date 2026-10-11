@@ -161,17 +161,16 @@ func decryptSession(encoded string) (string, error) {
 func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, accountID int64, launch bool) {
 	w.Header().Set("Cache-Control", "no-store")
 	assistantUpdate := r.URL.Path == "/api/browser-assistant/session"
+	refresh := launch && r.URL.Query().Get("mode") == "refresh"
 	var encrypted, email string
 	var err error
-	// 所有浏览器凭据导出均要求管理员身份和一次性 TOTP。
-	if launch {
+	// 管理员主动自动更新免 TOTP；普通打开浏览器仍逐次验证。
+	if launch && !refresh {
 		if !s.consumeTOTP(w, r, userID, r.Header.Get("X-Aitok-TOTP"), false) {
 			return
 		}
-		encrypted, email, err = s.managedAccount(r.Context(), userID, accountID)
-	} else {
-		encrypted, email, err = s.managedAccount(r.Context(), userID, accountID)
 	}
+	encrypted, email, err = s.managedAccount(r.Context(), userID, accountID)
 	if errors.Is(err, sql.ErrNoRows) {
 		reply(w, map[string]string{"error": "账号不存在"}, 404)
 		return
@@ -208,7 +207,7 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "Session 中的邮箱与当前账号不一致，请为该邮箱新建账号"}, 409)
 		return
 	}
-	if (launch && r.URL.Query().Get("mode") != "refresh") || assistantUpdate {
+	if (launch && !refresh) || assistantUpdate {
 		if session.ExpiresAt != nil && !session.ExpiresAt.After(time.Now()) {
 			reply(w, map[string]string{"error": "Session 已过期，请重新复制 /api/auth/session 并更新"}, 422)
 			return
@@ -220,7 +219,13 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 			reply(w, map[string]string{"error": "读取共享代理失败，请检查代理配置"}, 503)
 			return
 		}
-		reply(w, map[string]any{"shared_proxy": proxy, "account_id": accountID, "session": session.BrowserJSON, "expires_at": session.ExpiresAt, "assistant_token": s.assistantToken(userID, accountID)}, 200)
+		var token string
+		if refresh {
+			token = s.scopedAssistantToken(userID, accountID, "session-refresh-v1", 10*time.Minute)
+		} else {
+			token = s.assistantToken(userID, accountID)
+		}
+		reply(w, map[string]any{"shared_proxy": proxy, "account_id": accountID, "session": session.BrowserJSON, "expires_at": session.ExpiresAt, "assistant_token": token}, 200)
 		return
 	}
 	stored.SessionJSON = raw
