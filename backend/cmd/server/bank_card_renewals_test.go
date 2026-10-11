@@ -1,12 +1,88 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestCardRenewalNext10DaysUTC8(t *testing.T) {
+	for _, tc := range []struct{ now, start, end string }{
+		{"2026-12-31T15:59:59Z", "2026-12-31", "2027-01-10"},
+		{"2026-12-31T16:00:00Z", "2027-01-01", "2027-01-11"},
+		{"2028-02-28T16:00:00Z", "2028-02-29", "2028-03-10"},
+	} {
+		now, _ := time.Parse(time.RFC3339, tc.now)
+		start, end := cardRenewalNext10Days(now)
+		if start != tc.start || end != tc.end {
+			t.Fatalf("北京时间十天边界错误: %s %s %s", tc.now, start, end)
+		}
+	}
+}
+
+func TestCardUpcomingRenewals(t *testing.T) {
+	db, _ := accountSettingsTest(t)
+	// 固定跨年窗口，覆盖起止边界、关闭续订、空日期、软删除及未知价格。
+	_, err := db.Exec(`INSERT INTO chatgpt_accounts(id,user_id,label,email,payment_card_id,subscription_package_id,renewal_date,renewal_enabled,deleted_at) VALUES
+(6,2,'Today','today@test.local',1,1,'2026-12-27',true,NULL),
+(7,2,'Last day','last@test.local',1,2,'2027-01-05',true,NULL),
+(8,2,'Outside','outside@test.local',1,1,'2027-01-06',true,NULL),
+(9,2,'Overdue','overdue@test.local',1,1,'2026-12-26',true,NULL),
+(10,2,'Disabled','disabled@test.local',1,1,'2026-12-28',false,NULL),
+(11,2,'No date','no-date@test.local',1,1,NULL,true,NULL),
+(12,2,'Deleted','deleted@test.local',1,1,'2026-12-28',true,NOW()),
+(13,3,'Deleted owner','owner@test.local',1,1,'2026-12-28',true,NULL),
+(14,2,'Unknown','unknown@test.local',1,NULL,'2026-12-28',true,NULL),
+(15,2,'Other card','other@test.local',2,1,'2026-12-28',true,NULL)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 12, 27, 12, 0, 0, 0, exchangeTimezone)
+	packages := map[int64]RechargePackage{
+		1: {PriceReady: true, SaleUSDMinor: 2000},
+		2: {PriceReady: true, SaleUSDMinor: 7000},
+	}
+	summarize := func() []bankCardWithRenewal {
+		t.Helper()
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		cards := []bankCardWithRenewal{{BankCard: BankCard{ID: 1}}, {BankCard: BankCard{ID: 2}}, {BankCard: BankCard{ID: 3}}}
+		if err := fillCardRenewals(context.Background(), tx, cards, packages, now); err != nil {
+			t.Fatal(err)
+		}
+		return cards
+	}
+	cards := summarize()
+	summary := cards[0].Renewal
+	if summary.BoundCount != 7 || summary.Next10Days.RenewalCount != 3 || summary.Next10Days.Required != 9000 || summary.Next10Days.UnknownCount != 1 {
+		t.Fatalf("十天续费统计错误: %+v", summary)
+	}
+	if summary.RenewalCount != 3 || summary.Required != 4000 || summary.UnknownCount != 1 {
+		t.Fatalf("本月统计口径改变: %+v", summary)
+	}
+	if cards[1].Renewal.Next10Days.Required != 2000 || cards[2].Renewal.Next10Days != (cardRenewalTotals{}) {
+		t.Fatal("卡片统计未隔离或空卡统计错误", cards)
+	}
+	packages[2] = RechargePackage{}
+	if got := summarize()[0].Renewal.Next10Days; got.Required != 2000 || got.UnknownCount != 2 || got.RenewalCount != 3 {
+		t.Fatalf("不可用套餐应计入待核算: %+v", got)
+	}
+	packages[1] = RechargePackage{PriceReady: true, SaleUSDMinor: 1 << 53}
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if err := fillCardRenewals(context.Background(), tx, cards, packages, now); err == nil {
+		t.Fatal("续费金额超出安全整数范围应拒绝")
+	}
+}
 
 func TestCardRenewalMonthUTC8(t *testing.T) {
 	for _, tc := range []struct{ now, start, end string }{

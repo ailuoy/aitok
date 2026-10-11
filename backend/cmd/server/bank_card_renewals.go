@@ -10,12 +10,31 @@ import (
 )
 
 type cardRenewalSummary struct {
-	Month        string `json:"month"`
-	BoundCount   int64  `json:"bound_count"`
-	RenewalCount int64  `json:"renewal_count"`
-	Required     int64  `json:"required_usd_minor"`
-	UnknownCount int64  `json:"unknown_count"`
-	Difference   *int64 `json:"difference_usd_minor"`
+	Month      string `json:"month"`
+	BoundCount int64  `json:"bound_count"`
+	cardRenewalTotals
+	Next10Days cardRenewalTotals `json:"next_10_days"`
+	Difference *int64            `json:"difference_usd_minor"`
+}
+
+type cardRenewalTotals struct {
+	RenewalCount int64 `json:"renewal_count"`
+	Required     int64 `json:"required_usd_minor"`
+	UnknownCount int64 `json:"unknown_count"`
+}
+
+func (summary *cardRenewalTotals) add(count int64, pkg RechargePackage) error {
+	summary.RenewalCount += count
+	if !pkg.PriceReady {
+		summary.UnknownCount += count
+		return nil
+	}
+	const maxSafeMinor int64 = 1<<53 - 1
+	if count > (maxSafeMinor-summary.Required)/pkg.SaleUSDMinor {
+		return fmt.Errorf("续费合计金额超出范围")
+	}
+	summary.Required += count * pkg.SaleUSDMinor
+	return nil
 }
 
 // 只读汇总独立于银行卡编辑模型，不接受客户端传入预算。
@@ -53,11 +72,19 @@ func cardRenewalMonth(now time.Time) (string, string) {
 	return start.Format("2006-01-02"), start.AddDate(0, 1, 0).Format("2006-01-02")
 }
 
+// 按北京时间包含今天在内的未来十个自然日，结束日期不计入。
+func cardRenewalNext10Days(now time.Time) (string, string) {
+	local := now.In(exchangeTimezone)
+	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, exchangeTimezone)
+	return start.Format("2006-01-02"), start.AddDate(0, 0, 10).Format("2006-01-02")
+}
+
 const boundCardAccounts = ` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL WHERE a.deleted_at IS NULL AND a.payment_card_id=ANY($1::bigint[])`
 
 // 按当前页卡片批量汇总，绑定数量包含关闭续订及未设置日期的账号。
 func fillCardRenewals(ctx context.Context, tx *sql.Tx, cards []bankCardWithRenewal, packages map[int64]RechargePackage, now time.Time) error {
 	start, end := cardRenewalMonth(now)
+	nextStart, nextEnd := cardRenewalNext10Days(now)
 	ids := []int64{}
 	indexes := map[int64]int{}
 	for i := range cards {
@@ -71,29 +98,27 @@ func fillCardRenewals(ctx context.Context, tx *sql.Tx, cards []bankCardWithRenew
 	if len(ids) == 0 {
 		return nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT a.payment_card_id,COALESCE(a.subscription_package_id,0),count(*),count(*) FILTER (WHERE a.renewal_enabled AND a.renewal_date >= $2::date AND a.renewal_date < $3::date)`+boundCardAccounts+` GROUP BY a.payment_card_id,a.subscription_package_id`, ids, start, end)
+	rows, err := tx.QueryContext(ctx, `SELECT a.payment_card_id,COALESCE(a.subscription_package_id,0),count(*),
+count(*) FILTER (WHERE a.renewal_enabled AND a.renewal_date >= $2::date AND a.renewal_date < $3::date),
+count(*) FILTER (WHERE a.renewal_enabled AND a.renewal_date >= $4::date AND a.renewal_date < $5::date)`+boundCardAccounts+` GROUP BY a.payment_card_id,a.subscription_package_id`, ids, start, end, nextStart, nextEnd)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var cardID, packageID, count, due int64
-		if err := rows.Scan(&cardID, &packageID, &count, &due); err != nil {
+		var cardID, packageID, count, due, nextDue int64
+		if err := rows.Scan(&cardID, &packageID, &count, &due, &nextDue); err != nil {
 			return err
 		}
 		summary := cards[indexes[cardID]].Renewal
 		summary.BoundCount += count
-		summary.RenewalCount += due
 		pkg := packages[packageID]
-		if !pkg.PriceReady {
-			summary.UnknownCount += due
-			continue
+		if err := summary.cardRenewalTotals.add(due, pkg); err != nil {
+			return err
 		}
-		const maxSafeMinor int64 = 1<<53 - 1
-		if due > (maxSafeMinor-summary.Required)/pkg.SaleUSDMinor {
-			return fmt.Errorf("本月续费合计金额超出范围")
+		if err := summary.Next10Days.add(nextDue, pkg); err != nil {
+			return err
 		}
-		summary.Required += due * pkg.SaleUSDMinor
 	}
 	if err := rows.Err(); err != nil {
 		return err

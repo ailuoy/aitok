@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDesktopAuthorizationScopeAndRevocation(t *testing.T) {
@@ -29,11 +32,30 @@ func TestDesktopAuthorizationScopeAndRevocation(t *testing.T) {
 	}
 	state := strings.Repeat("a", 43)
 	body := `{"channel":"test","state":"` + state + `"}`
+	before := time.Now().Unix()
+	webToken := s.token(1)
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(webToken, ".")[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Split(string(payload), ":")
+	if len(fields) != 3 {
+		t.Fatal("网页登录凭据格式错误")
+	}
+	expires, err := strconv.ParseInt(fields[1], 10, 64)
+	const monthSeconds = int64(30 * 24 * 60 * 60)
+	if err != nil || expires < before+monthSeconds || expires > time.Now().Unix()+monthSeconds {
+		t.Fatal("网页登录凭据有效期应为 30 天", err)
+	}
 	call("POST", "/api/desktop-auth", "", body, 401)
 	call("POST", "/api/desktop-auth", s.token(2), body, 403)
 	call("POST", "/api/desktop-auth", s.token(1), `{"channel":"other","state":"invalid"}`, 400)
-	token := call("POST", "/api/desktop-auth", s.token(1), body, 200)["token"].(string)
+	before = time.Now().Unix()
+	token := call("POST", "/api/desktop-auth", webToken, body, 200)["token"].(string)
 	result := call("GET", "/api/desktop-auth/session", token, "", 200)
+	if expires := int64(result["expires_at"].(float64)); expires < before+monthSeconds || expires > time.Now().Unix()+monthSeconds {
+		t.Fatal("桌面登录凭据有效期应为 30 天")
+	}
 	if result["state"] != state || result["channel"] != "test" || result["user"].(map[string]any)["id"] != float64(1) {
 		t.Fatal("授权身份或环境错误")
 	}

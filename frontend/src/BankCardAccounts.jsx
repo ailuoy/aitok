@@ -6,6 +6,15 @@ import Pagination from './Pagination';
 import { formatCardUSD } from './BankCardLedger';
 import { formatAccountPlan, formatPackageName } from './packageLabels';
 
+export function CardUpcomingRenewals({ summary }) {
+  if (!summary) return <span className="muted">—</span>;
+  return <div title="北京时间，含今天在内未来 10 天已开启续订的账号，按当前套餐价格预估">
+    <strong>{summary.renewal_count} 个续费</strong>
+    <small className="cell-secondary">{summary.unknown_count ? '已知需' : '需'} {formatCardUSD(summary.required_usd_minor)}</small>
+    {summary.unknown_count > 0 && <small className="cell-secondary">{summary.unknown_count} 个账号待核算</small>}
+  </div>;
+}
+
 export function CardRenewalDifference({ summary }) {
   if (!summary) return <span className="muted">—</span>;
   const difference = summary.difference_usd_minor;
