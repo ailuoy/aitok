@@ -163,6 +163,7 @@ func safeAuditResource(path string) string {
 	known["owner"] = true
 	known["consumption-orders"], known["wallet-quote"] = true, true
 	known["desktop-auth"] = true
+	known["two-factor"] = true
 	known["notes"] = true
 	known["subscription-package"] = true
 	known["usage-status"] = true

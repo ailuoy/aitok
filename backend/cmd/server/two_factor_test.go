@@ -5,11 +5,114 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestTwoFactorQRReveal(t *testing.T) {
+	db := walletTestDB(t)
+	t.Setenv("SESSION_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("q", 32))))
+	password := "current-admin-password"
+	encoded, err := passwordHash(password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES
+(1,'admin+qr@test.local',$1,'admin'),(2,'__superadmin__','',''),
+(3,'unbound@test.local',$1,'admin'),(4,'member@test.local',$1,'user'),
+(5,'disabled@test.local',$1,'admin'),(6,'deleted@test.local',$1,'admin'),
+(7,'broken@test.local',$1,'admin'),(8,'no-password@test.local','','admin')`, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{db: db, secret: []byte("qr-reveal-tests"), admin: adminConfig{"operator", "super-admin-password"}}
+	tokens := map[int64]string{}
+	for _, id := range []int64{1, 2, 3, 4, 5, 6, 7, 8} {
+		if id != 3 {
+			browserTestOTP(t, s, id)
+		}
+		tokens[id] = s.token(id)
+	}
+	_, err = db.Exec(`UPDATE users SET disabled=true WHERE id=5;
+UPDATE users SET deleted_at=NOW() WHERE id=6;
+UPDATE users SET totp_ciphertext=(SELECT totp_ciphertext FROM users WHERE id=1) WHERE id=7;
+UPDATE users SET totp_last_step=42 WHERE id=1`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original string
+	if err := db.QueryRow(`SELECT to_jsonb(u)::text FROM users u WHERE id=1`).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(strings.Repeat("b", 20)))
+	call := func(user int64, method, action, suppliedPassword string, status int) map[string]any {
+		t.Helper()
+		body, _ := json.Marshal(map[string]string{"action": action, "password": suppliedPassword})
+		r := httptest.NewRequest(method, "/api/two-factor", strings.NewReader(string(body)))
+		r.Header.Set("Authorization", "Bearer "+tokens[user])
+		r.Header.Set("X-Aitok-Page", "/admin/accounts")
+		w := httptest.NewRecorder()
+		s.routes().ServeHTTP(w, r)
+		if w.Code != status || (status == 200 && w.Header().Get("Cache-Control") != "no-store") {
+			t.Fatalf("%s %s: got %d want %d，敏感响应应禁止缓存", method, action, w.Code, status)
+		}
+		if status != 200 || method == "GET" {
+			if strings.Contains(w.Body.String(), secret) || strings.Contains(w.Body.String(), "otpauth://") {
+				t.Fatal("状态查询或失败响应泄露密钥")
+			}
+		}
+		var out map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return out
+	}
+	if out := call(1, "GET", "", "", 200); out["enabled"] != true || len(out) != 1 {
+		t.Fatal("状态接口只能返回是否启用")
+	}
+	call(0, "POST", "reveal", password, 401)
+	call(4, "POST", "reveal", password, 403)
+	call(5, "POST", "reveal", password, 401)
+	call(6, "POST", "reveal", password, 401)
+	call(3, "POST", "reveal", password, 409)
+	call(7, "POST", "reveal", password, 503)
+	call(8, "POST", "reveal", "", 403)
+	call(1, "POST", "reveal", "wrong", 403)
+	call(1, "POST", "reveal", "", 403)
+	for _, tc := range []struct {
+		user     int64
+		password string
+		label    string
+	}{{1, password, "admin+qr@test.local"}, {2, s.admin.Password, "operator"}} {
+		out := call(tc.user, "POST", "reveal", tc.password, 200)
+		uri, err := url.Parse(out["otpauth_url"].(string))
+		if err != nil || uri.Scheme != "otpauth" || uri.Host != "totp" || uri.Path != "/AiTok:"+tc.label || uri.Query().Get("secret") != secret || uri.Query().Get("issuer") != "AiTok" || out["secret"] != secret {
+			t.Fatal("重新扫码必须返回当前用户原有验证器配置")
+		}
+	}
+	// 再次查看仍需密码，成功查看不能重置限流计数。
+	call(1, "POST", "reveal", "wrong", 403)
+	call(1, "POST", "reveal", password, 200)
+	call(1, "POST", "reveal", password, 429)
+	var after string
+	if err := db.QueryRow(`SELECT to_jsonb(u)::text FROM users u WHERE id=1`).Scan(&after); err != nil || after != original {
+		t.Fatal("重新扫码不应修改密钥、启用时间或验证码消费状态", err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT count(*) FROM operation_events WHERE entity_type='user' AND entity_id=1 AND actor_id=1 AND action='two_factor_qr_read' AND after_data->>'qr_viewed'='true'`).Scan(&count); err != nil || count != 2 {
+		t.Fatal("每次成功读取必须记录本人查看审计", count, err)
+	}
+	var audit string
+	if err := db.QueryRow(`SELECT string_agg(to_jsonb(e)::text,' ') FROM operation_events e`).Scan(&audit); err != nil {
+		t.Fatal(err)
+	}
+	for _, sensitive := range []string{secret, password, s.admin.Password, encoded, "otpauth://"} {
+		if strings.Contains(audit, sensitive) {
+			t.Fatal("审计中包含密码、密钥或二维码内容")
+		}
+	}
+}
 
 func TestTOTPStandardAndWindow(t *testing.T) {
 	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte("12345678901234567890"))

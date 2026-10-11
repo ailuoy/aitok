@@ -151,16 +151,24 @@ func (s *Server) twoFactor(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if in.Action != "setup" {
+	if in.Action != "setup" && in.Action != "reveal" {
 		w.WriteHeader(400)
 		return
 	}
 	if !s.allowAttempt(r.Context(), "totp-setup:"+strconv.FormatInt(user, 10), 5, 15*time.Minute) {
-		reply(w, map[string]string{"error": "设置过于频繁，请稍后重试"}, 429)
+		reply(w, map[string]string{"error": "密码验证过于频繁，请稍后重试"}, 429)
 		return
 	}
-	var email, password string
-	if err := s.db.QueryRowContext(r.Context(), `SELECT email,password_hash FROM users WHERE id=$1 AND deleted_at IS NULL AND NOT disabled`, user).Scan(&email, &password); err != nil {
+	tx, err := s.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		operationError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	var email, password, active string
+	var enabled bool
+	// 密码校验、密钥读取和审计使用同一事务，避免并发修改账号状态。
+	if err := tx.QueryRowContext(r.Context(), `SELECT email,password_hash,COALESCE(totp_ciphertext,''),totp_enabled_at IS NOT NULL FROM users WHERE id=$1 AND deleted_at IS NULL AND NOT disabled AND (role='admin' OR email=$2) FOR UPDATE`, user, adminIdentity).Scan(&email, &password, &active, &enabled); err != nil {
 		operationError(w, err)
 		return
 	}
@@ -174,6 +182,30 @@ func (s *Server) twoFactor(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "当前登录密码不正确"}, 403)
 		return
 	}
+	if in.Action == "reveal" {
+		if !enabled {
+			reply(w, map[string]string{"error": "尚未绑定验证器，请先完成绑定"}, 409)
+			return
+		}
+		secret, err := readTOTP(active, user)
+		if err != nil {
+			reply(w, map[string]string{"error": "验证器配置不可用，请联系系统维护人员"}, 503)
+			return
+		}
+		if err = recordEvent(r.Context(), tx, user, user, "user", "two_factor_qr_read", eventKey(), nil, map[string]bool{"qr_viewed": true}); err == nil {
+			err = tx.Commit()
+		}
+		if err != nil {
+			operationError(w, err)
+			return
+		}
+		replyTOTPSetup(w, email, secret)
+		return
+	}
+	if enabled {
+		reply(w, map[string]string{"error": "验证器已绑定，不能覆盖现有配置"}, 409)
+		return
+	}
 	key := make([]byte, 20)
 	if _, err := rand.Read(key); err != nil {
 		operationError(w, err)
@@ -185,7 +217,7 @@ func (s *Server) twoFactor(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "未配置验证器密钥加密"}, 503)
 		return
 	}
-	result, err := s.db.ExecContext(r.Context(), `UPDATE users SET totp_pending_ciphertext=$2,totp_pending_expires_at=NOW()+INTERVAL '10 minutes',updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND NOT disabled AND (role='admin' OR email=$3) AND totp_enabled_at IS NULL`, user, encrypted, adminIdentity)
+	result, err := tx.ExecContext(r.Context(), `UPDATE users SET totp_pending_ciphertext=$2,totp_pending_expires_at=NOW()+INTERVAL '10 minutes',updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL AND NOT disabled AND (role='admin' OR email=$3) AND totp_enabled_at IS NULL`, user, encrypted, adminIdentity)
 	if err != nil {
 		operationError(w, err)
 		return
@@ -194,6 +226,14 @@ func (s *Server) twoFactor(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "验证器已绑定，不能覆盖现有配置"}, 409)
 		return
 	}
+	if err := tx.Commit(); err != nil {
+		operationError(w, err)
+		return
+	}
+	replyTOTPSetup(w, email, secret)
+}
+
+func replyTOTPSetup(w http.ResponseWriter, email, secret string) {
 	query := url.Values{"secret": {secret}, "issuer": {"AiTok"}, "algorithm": {"SHA1"}, "digits": {"6"}, "period": {"30"}}
 	reply(w, map[string]string{"otpauth_url": "otpauth://totp/" + url.PathEscape("AiTok:"+email) + "?" + query.Encode(), "secret": secret}, 200)
 }
