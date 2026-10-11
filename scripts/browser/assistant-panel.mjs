@@ -1,6 +1,6 @@
 import { isVerificationPage } from './page-verification.mjs';
 
-export const ASSISTANT_VERSION = '0.0.5';
+export const ASSISTANT_VERSION = '0.0.6';
 export function assistantPanelSource() { return `(${installPanel.toString()})(${JSON.stringify(ASSISTANT_VERSION)}, ${isVerificationPage.toString()})`; }
 
 function installPanel(version, isVerificationPage) {

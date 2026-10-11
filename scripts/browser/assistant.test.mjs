@@ -92,7 +92,7 @@ test('真实 Chromium 助手隔离、右侧展示、拖拽、手动填充与页�
   assert.ok(Math.abs((await bounds()).right - 1188) <= 1, '助手默认靠右');
   assert.equal(detailReads, 1);
   assert.ok((await nodes()).some(node => text(node) === '4242424242424242'));
-  assert.ok((await nodes()).some(node => text(node) === '0.0.5'));
+  assert.ok((await nodes()).some(node => text(node) === '0.0.6'));
   const notesNode = (await nodes()).find(node => node.attributes?.includes('account-notes'));
   assert.equal(text(notesNode), accountNotes);
   assert.ok(notesNode.children.every(node => node.nodeName === '#text'), '账号备注按纯文本展示');
