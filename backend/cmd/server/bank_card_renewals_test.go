@@ -98,6 +98,66 @@ func TestCardRenewalMonthUTC8(t *testing.T) {
 	}
 }
 
+func TestBankCardUpcomingAccountDetails(t *testing.T) {
+	db, call := accountSettingsTest(t)
+	_, err := db.Exec(`INSERT INTO recharge_packages(id,name,plan,region,currency,original_amount_minor,sale_usd_minor,months,enabled) VALUES
+(1,'Plus monthly','plus','US','USD',2000,2000,1,true),
+(2,'Pro unavailable','pro_5x','US','USD',7000,7000,1,false);
+UPDATE chatgpt_accounts SET payment_card_id=1,subscription_package_id=1,renewal_date=(NOW() AT TIME ZONE 'Asia/Shanghai')::date;
+UPDATE chatgpt_accounts SET renewal_date=NULL WHERE id=3;
+UPDATE chatgpt_accounts SET renewal_date=renewal_date+9 WHERE id=4;
+INSERT INTO chatgpt_accounts(id,user_id,label,email,payment_card_id,subscription_package_id,renewal_date,renewal_enabled,deleted_at) VALUES
+(6,2,'Unknown','unknown@test.local',1,NULL,(NOW() AT TIME ZONE 'Asia/Shanghai')::date+1,true,NULL),
+(7,2,'Outside','outside@test.local',1,1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date+10,true,NULL),
+(8,2,'Deleted','deleted@test.local',1,1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date,true,NOW()),
+(9,2,'Other card','other@test.local',2,1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date,true,NULL),
+(10,2,'Overdue','past@test.local',1,1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date-1,true,NULL),
+(11,2,'Unavailable','unavailable@test.local',1,2,(NOW() AT TIME ZONE 'Asia/Shanghai')::date+5,true,NULL)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/bank-cards/1/accounts?renewal_window=next_10_days"
+	wantIDs, wantDays := []int{1, 6, 11, 4}, []int{0, 1, 5, 9}
+	for i, id := range wantIDs {
+		data := call("GET", fmt.Sprintf("%s&page_size=1&page=%d", path, i+1), 1, nil, 200)
+		summary := data["renewal"].(map[string]any)["next_10_days"].(map[string]any)
+		rows := data["accounts"].([]any)
+		if data["total"] != float64(4) || summary["renewal_count"] != data["total"] || len(rows) != 1 || summary["required_usd_minor"] != float64(4000) || summary["unknown_count"] != float64(2) {
+			t.Fatal("续费明细分页与统计范围不一致", data)
+		}
+		account := rows[0].(map[string]any)
+		today, err := time.Parse("2006-01-02", data["today"].(string))
+		if err != nil || account["id"] != float64(id) || account["renewal_date"] != today.AddDate(0, 0, wantDays[i]).Format("2006-01-02") || account["has_session"] != (id == 1 || id == 4) {
+			t.Fatal("明细排序、北京时间倒计时或浏览器可用标记错误", account, err)
+		}
+		if id == 1 && (account["subscription_plan"] != "plus" || account["package_name"] != "Plus monthly" || account["renewal_usd_minor"] != float64(2000)) {
+			t.Fatal("套餐或续费金额错误", account)
+		}
+		if (id == 6 || id == 11) && account["renewal_usd_minor"] != nil {
+			t.Fatal("未知价格不应显示为零金额", account)
+		}
+		encoded, _ := json.Marshal(data)
+		for _, secret := range []string{"session_ciphertext", "test-session", "secret-number", "secret-cvc"} {
+			if strings.Contains(string(encoded), secret) {
+				t.Fatal("续费明细泄露敏感数据")
+			}
+		}
+	}
+	if rows := call("GET", path+"&page=5&page_size=1", 1, nil, 200)["accounts"].([]any); len(rows) != 0 {
+		t.Fatal("超出页码应返回空列表")
+	}
+	call("GET", path, 2, nil, 403)
+	call("GET", "/api/bank-cards/1/accounts?renewal_window=invalid", 1, nil, 400)
+	call("GET", "/api/bank-cards/4/accounts?renewal_window=next_10_days", 1, nil, 404)
+	if _, err := db.Exec(`UPDATE chatgpt_accounts SET renewal_enabled=false WHERE payment_card_id=1`); err != nil {
+		t.Fatal(err)
+	}
+	data := call("GET", path, 1, nil, 200)
+	if data["total"] != float64(0) || len(data["accounts"].([]any)) != 0 {
+		t.Fatal("关闭续订后应更新明细与数量", data)
+	}
+}
+
 func TestBankCardRenewalsAndBoundAccounts(t *testing.T) {
 	db, call := accountSettingsTest(t)
 	exec := func(query string) {

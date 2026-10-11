@@ -12,7 +12,7 @@ import CardOperations from './CardOperations';
 import BankCardAccounts, { CardRenewalDifference, CardUpcomingRenewals } from './BankCardAccounts';
 import BankCardLedger, { formatCardUSD } from './BankCardLedger';
 
-export default function BankCardManager({ token, accounts = [] }) {
+export default function BankCardManager({ token, accounts = [], onOpenBrowser }) {
   const [pageSize, setPageSize] = useState(20);
   const [data, setData] = useState({ cards: [], total: 0 });
   const [archived,setArchived]=useState(false), [operations,setOperations]=useState(null);
@@ -24,6 +24,7 @@ export default function BankCardManager({ token, accounts = [] }) {
   const [dialog, setDialog] = useState(null);
   const [ledgerCard, setLedgerCard] = useState(null);
   const [boundCard, setBoundCard] = useState(null);
+  const [renewalCard, setRenewalCard] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [formError, setFormError] = useState('');
@@ -81,10 +82,11 @@ export default function BankCardManager({ token, accounts = [] }) {
     {error && <p className="error" role="alert">{error}</p>}
     {loading ? <p className="muted">正在加载银行卡…</p> : <DataTable searchQuery={query} label="银行卡列表" className="bank-card-table" columns={['名称', '卡平台', '卡类型 / 卡号', 'CVC', '持卡人', '有效期', '可用 / 余额 · USD', '绑定账号', '近 10 天续费 · USD', '本月续费余额差 · USD', '状态', '钱包地址二维码', '备注', '操作']} empty={!data.cards.length && '暂无银行卡，添加后可在账号浏览器中选择。'}>
       {data.cards.map(card => <tr className="bank-card-row" key={card.id}>
-        <td className="table-text"><strong>{card.label}</strong></td><td className="table-text">{card.platform || '未设置'}</td><td className="table-mono">{card.brand} · **** **** **** {card.last4}</td><td>{card.has_cvc ? '***' : '未填写'}</td><td className="table-text">{card.cardholder}</td><td>{String(card.exp_month).padStart(2, '0')}/{String(card.exp_year).slice(-2)}</td><td>{formatCardUSD(card.balance_usd_minor-(card.reserved_usd_minor||0))}<small className="cell-secondary">余额 {formatCardUSD(card.balance_usd_minor)}</small></td><td>{card.renewal ? <button className="text-btn card-bound-count" aria-label={`查看 ${card.label} 尾号 ${card.last4} 的绑定账号`} onClick={() => setBoundCard(card)}>{card.renewal.bound_count} 个</button> : <span className="muted">—</span>}</td><td><CardUpcomingRenewals summary={card.renewal?.next_10_days} /></td><td><CardRenewalDifference summary={card.renewal} /></td><td>{card.deleted_at ? '已删除' : ({active:'正常',frozen:'冻结',invalid:'失效'}[card.status] || '正常')}</td><td className="bank-card-wallet">{card.wallet_qr_image ? <ImagePreview src={card.wallet_qr_image} alt="钱包地址二维码" /> : '—'}</td><td className="table-text bank-card-notes">{card.notes || '—'}</td>
+        <td className="table-text"><strong>{card.label}</strong></td><td className="table-text">{card.platform || '未设置'}</td><td className="table-mono">{card.brand} · **** **** **** {card.last4}</td><td>{card.has_cvc ? '***' : '未填写'}</td><td className="table-text">{card.cardholder}</td><td>{String(card.exp_month).padStart(2, '0')}/{String(card.exp_year).slice(-2)}</td><td>{formatCardUSD(card.balance_usd_minor-(card.reserved_usd_minor||0))}<small className="cell-secondary">余额 {formatCardUSD(card.balance_usd_minor)}</small></td><td>{card.renewal ? <button className="text-btn card-bound-count" aria-label={`查看 ${card.label} 尾号 ${card.last4} 的绑定账号`} onClick={() => setBoundCard(card)}>{card.renewal.bound_count} 个</button> : <span className="muted">—</span>}</td><td><CardUpcomingRenewals summary={card.renewal?.next_10_days} label={`查看 ${card.label} 尾号 ${card.last4} 的近 10 天续费账号`} onClick={() => setRenewalCard(card)} /></td><td><CardRenewalDifference summary={card.renewal} /></td><td>{card.deleted_at ? '已删除' : ({active:'正常',frozen:'冻结',invalid:'失效'}[card.status] || '正常')}</td><td className="bank-card-wallet">{card.wallet_qr_image ? <ImagePreview src={card.wallet_qr_image} alt="钱包地址二维码" /> : '—'}</td><td className="table-text bank-card-notes">{card.notes || '—'}</td>
         <td className="table-actions"><div className="row-actions"><button className="outline small" disabled={busy || data.can_finance===false} onClick={() => setLedgerCard(card)}>余额 / 对账单</button><button className="outline small" onClick={()=>setOperations(card)}>运营 / 核对</button><button className="outline small" disabled={busy || archived || data.can_manage===false || data.can_numbers===false} onClick={() => edit(card)}>编辑</button><button className="text-btn danger" disabled={busy || archived || data.can_manage===false} onClick={() => { setDialog({ type: 'delete', card }); setFormError(''); }}>删除</button></div></td>
       </tr>)}
     </DataTable>}
+    {renewalCard && <BankCardAccounts key={renewalCard.id} card={renewalCard} token={token} upcoming onOpenBrowser={onOpenBrowser} onClose={() => setRenewalCard(null)} />}
     {boundCard && <BankCardAccounts card={boundCard} token={token} onClose={() => setBoundCard(null)} />}
     {operations && <CardOperations card={operations} token={token} onClose={()=>setOperations(null)} onChange={()=>setRevision(v=>v+1)}/>}
     {ledgerCard && <BankCardLedger card={ledgerCard} token={token} accounts={accounts} onChange={() => setRevision(value => value + 1)} onClose={() => setLedgerCard(null)} />}

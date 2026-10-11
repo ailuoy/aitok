@@ -148,6 +148,7 @@ type cardBoundAccount struct {
 	RenewalEnabled bool    `json:"renewal_enabled"`
 	RenewalAmount  *int64  `json:"renewal_usd_minor"`
 	InMonth        bool    `json:"in_month"`
+	HasSession     bool    `json:"has_session"`
 }
 
 func (s *Server) bankCardAccounts(w http.ResponseWriter, r *http.Request, user, id int64, admin bool) {
@@ -162,6 +163,11 @@ func (s *Server) bankCardAccounts(w http.ResponseWriter, r *http.Request, user, 
 	page, size, valid := pageParameters(r)
 	if !valid {
 		reply(w, map[string]string{"error": "页码无效"}, 400)
+		return
+	}
+	window := r.URL.Query().Get("renewal_window")
+	if window != "" && window != "next_10_days" {
+		reply(w, map[string]string{"error": "续费时间范围无效"}, 400)
 		return
 	}
 	tx, err := s.db.BeginTx(r.Context(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
@@ -185,7 +191,16 @@ func (s *Server) bankCardAccounts(w http.ResponseWriter, r *http.Request, user, 
 		cardError(w, err)
 		return
 	}
-	rows, err := tx.QueryContext(r.Context(), `SELECT a.id,a.label,a.email,COALESCE(a.subscription_package_id,0),a.renewal_date::text,a.renewal_enabled`+boundCardAccounts+` ORDER BY a.renewal_date ASC NULLS LAST,a.id DESC LIMIT $2 OFFSET $3`, []int64{id}, size, (page-1)*size)
+	nextStart, nextEnd := cardRenewalNext10Days(now)
+	filter := boundCardAccounts
+	args := []any{[]int64{id}, size, (page - 1) * size}
+	total := cards[0].Renewal.BoundCount
+	if window == "next_10_days" {
+		filter += ` AND a.renewal_enabled AND a.renewal_date >= $4::date AND a.renewal_date < $5::date`
+		args = append(args, nextStart, nextEnd)
+		total = cards[0].Renewal.Next10Days.RenewalCount
+	}
+	rows, err := tx.QueryContext(r.Context(), `SELECT a.id,a.label,a.email,COALESCE(a.subscription_package_id,0),a.renewal_date::text,a.renewal_enabled,COALESCE(a.session_ciphertext,'')<>''`+filter+` ORDER BY a.renewal_date ASC NULLS LAST,a.id DESC LIMIT $2 OFFSET $3`, args...)
 	if err != nil {
 		cardError(w, err)
 		return
@@ -195,7 +210,7 @@ func (s *Server) bankCardAccounts(w http.ResponseWriter, r *http.Request, user, 
 	start, end := cardRenewalMonth(now)
 	for rows.Next() {
 		var account cardBoundAccount
-		if err := rows.Scan(&account.ID, &account.Label, &account.Email, &account.PackageID, &account.RenewalDate, &account.RenewalEnabled); err != nil {
+		if err := rows.Scan(&account.ID, &account.Label, &account.Email, &account.PackageID, &account.RenewalDate, &account.RenewalEnabled, &account.HasSession); err != nil {
 			cardError(w, err)
 			return
 		}
@@ -217,5 +232,5 @@ func (s *Server) bankCardAccounts(w http.ResponseWriter, r *http.Request, user, 
 		cardError(w, err)
 		return
 	}
-	reply(w, map[string]any{"accounts": accounts, "total": cards[0].Renewal.BoundCount, "page": page, "page_size": size, "renewal": cards[0].Renewal, "available_usd_minor": card.BalanceUSDMinor - card.Reserved}, 200)
+	reply(w, map[string]any{"accounts": accounts, "total": total, "page": page, "page_size": size, "renewal": cards[0].Renewal, "today": nextStart, "available_usd_minor": card.BalanceUSDMinor - card.Reserved}, 200)
 }
