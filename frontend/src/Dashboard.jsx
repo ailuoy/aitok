@@ -13,7 +13,7 @@ import AccountProxySelect from './AccountProxySelect';
 import LocalBrowserSession from './LocalBrowserSession';
 import BrowserStatusRefresh from './BrowserStatusRefresh';
 import ProxyManager from './ProxyManager';
-import { browserEnvironmentID, launcherPort, launcherRequest } from './localBrowser';
+import { launcherRequest } from './localBrowser';
 import { Link, navigate, canonicalAdminPath } from './router';
 import UserManager from './UserManager';
 import DataTable from './DataTable';
@@ -154,20 +154,28 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     catch (error) { setError(error.message); }
   }
   const refreshProxies = useCallback(async () => {
-    try { const data = await launcherRequest('/proxies', { port: localPort }); if (localPort === launcherPort()) { setProxyConfig(data); setProxyError(''); } }
-    catch (error) { if (localPort === launcherPort()) { setProxyConfig(null); setProxyError(error.message); } }
-  }, [localPort]);
-  useEffect(() => { setProxyConfig(null); if (admin) refreshProxies(); }, [refreshProxies, tab, admin]);
+    if (!admin) return;
+    try { setProxyConfig(await request('/proxies', token)); setProxyError(''); }
+    catch (error) { setProxyConfig(null); setProxyError(error.message); }
+  }, [token, admin]);
+  useEffect(() => {
+    setProxyConfig(null);
+    if (!admin) return;
+    const controller = new AbortController();
+    request('/proxies', token, { signal: controller.signal }).then(data => {
+      if (!controller.signal.aborted) { setProxyConfig(data); setProxyError(''); }
+    }).catch(error => {
+      if (!controller.signal.aborted) setProxyError(error.message);
+    });
+    return () => controller.abort();
+  }, [token, tab, admin]);
   async function bindProxy(account, proxyID) {
-    const port = localPort;
     setProxyBindingError('');
     setBindingAccount(account.id);
     try {
-      const data = await launcherRequest('/browsers/' + encodeURIComponent(browserEnvironmentID(user.id, account.id)) + '/proxy', { port, method: 'PATCH', body: { proxy_id: proxyID || null } });
-      if (port !== launcherPort()) return;
-      setProxyConfig(data);
-      setMessage('代理选择已保存，下次打开账号时使用'); setError('');
-    } catch (error) { if (port === launcherPort()) { setProxyBindingError(error.message); setError(error.message); } }
+      setProxyConfig(await request('/accounts/' + account.id + '/proxy', token, { method: 'PATCH', body: { proxy_id: proxyID || null } }));
+      setMessage('共享代理选择已保存，所有电脑下次打开此账号时使用'); setError('');
+    } catch (error) { setProxyBindingError(error.message); setError(error.message); }
     finally { setBindingAccount(null); }
   }
   const refresh = useCallback(async (syncPending = false) => {
@@ -241,18 +249,19 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   }
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
   const activeCount = accounts.filter(a => a.renewal_date && a.renewal_date > today).length;
-  const displayedPage = admin && accountSort.key === 'proxy' ? accountProxyPage(accounts, { config: proxyConfig, environmentID: id => browserEnvironmentID(user.id, id), query: accountQuery, group: groupFilter, paymentCard: paymentCardFilter, renewalStatus, today, direction: accountSort.direction, page: accountPageIndex, pageSize }) : accountPage;
+  const displayedPage = admin && accountSort.key === 'proxy' ? accountProxyPage(accounts, { config: proxyConfig, query: accountQuery, group: groupFilter, paymentCard: paymentCardFilter, renewalStatus, today, direction: accountSort.direction, page: accountPageIndex, pageSize }) : accountPage;
   const visibleAccounts = displayedPage.accounts;
   const localBrowsers = useLocalBrowsers(admin ? accounts : [], user?.id, token, setAccounts);
   return <main className="dashboard">
     {admin && tab === 'accounts' && <div className="stats"><div><span>{admin ? '全部账号' : '我的账号'}</span><b>{accounts.length}</b></div><div><span>有效会员账号</span><b>{activeCount}</b></div><div><span>我的钱包</span><button className="balance-link" onClick={() => navigate('/admin/wallet')}><b>{wallet?.balance ?? '—'}</b> 代币 <Coins size={16} /></button></div></div>}
 
-    {error && <p className="error" role="alert">{error}<button className="text-btn" onClick={() => refresh().catch(e => setError(e.message))}>重试</button></p>}
+    {error && <p className="error" role="alert">{error}<button className="text-btn" onClick={() => Promise.all([refresh(), refreshProxies()]).catch(e => setError(e.message))}>重试</button></p>}
     {message && <p className="success" role="status">{message}</p>}
     {localBrowsers.loginError && <p className="notice" role="status">{localBrowsers.loginError}</p>}
-    {tab === 'consumption-orders' ? <ConsumptionOrders token={token} /> : tab==='payment-exceptions' ? <PaymentExceptions token={token}/> : tab === 'orders' || tab==='packages' ? <RechargeManager key={tab} token={token} accounts={accounts} packagesOnly={tab==='packages'}/> : ['notices','audit','proxy-activity'].includes(tab) ? <OperationHistory key={tab} token={token} mode={tab}/> : tab === 'users' ? user.role === 'super_admin' ? <UserManager token={token} /> : <section className="account-section"><h2>无权访问用户列表</h2><p className="muted">只有超级管理员可以管理用户角色。</p><Link to="/admin/accounts" className="outline small">返回账号管理</Link></section> : tab === 'addresses' ? <AddressManager token={token} /> : tab === 'bank-cards' ? <BankCardManager token={token} accounts={accounts} onOpenBrowser={account => open('local-browser', account)} /> : tab === 'proxies' ? <ProxyManager config={proxyConfig} error={proxyError} refresh={refreshProxies} onChange={setProxyConfig} /> : tab === 'wallet' ? <WalletPanel wallet={wallet} token={token} refresh={refresh} user={user || {}} notice={notice} /> : <section className="account-section">
-      <div className="section-title account-list-title"><h2>{admin ? '全部 ChatGPT 账号' : '你的 ChatGPT 账号'}</h2><div className="browser-buttons">{admin && <BlankBrowser key={localPort} port={localPort} />}<button className="text-btn" onClick={() => refresh().catch(e => setError(e.message))}><RefreshCw size={15} />刷新</button>{admin && <BrowserStatusRefresh className="small" reminderKey={`${localPort}:${visibleAccounts.map(account => account.id).join(',')}`} disabled={localBrowsers.refreshing} onClick={() => localBrowsers.refresh(visibleAccounts).then(() => setError('')).catch(e => setError(e.message))}>{localBrowsers.refreshing ? '正在刷新…' : '刷新浏览器状态'}</BrowserStatusRefresh>}<button className="primary small" onClick={() => open('add')}><Plus size={15} />添加账号</button></div></div>
+    {tab === 'consumption-orders' ? <ConsumptionOrders token={token} /> : tab==='payment-exceptions' ? <PaymentExceptions token={token}/> : tab === 'orders' || tab==='packages' ? <RechargeManager key={tab} token={token} accounts={accounts} packagesOnly={tab==='packages'}/> : ['notices','audit','proxy-activity'].includes(tab) ? <OperationHistory key={tab} token={token} mode={tab}/> : tab === 'users' ? user.role === 'super_admin' ? <UserManager token={token} /> : <section className="account-section"><h2>无权访问用户列表</h2><p className="muted">只有超级管理员可以管理用户角色。</p><Link to="/admin/accounts" className="outline small">返回账号管理</Link></section> : tab === 'addresses' ? <AddressManager token={token} /> : tab === 'bank-cards' ? <BankCardManager token={token} accounts={accounts} onOpenBrowser={account => open('local-browser', account)} /> : tab === 'proxies' ? <ProxyManager token={token} config={proxyConfig} error={proxyError} refresh={refreshProxies} onChange={setProxyConfig} /> : tab === 'wallet' ? <WalletPanel wallet={wallet} token={token} refresh={refresh} user={user || {}} notice={notice} /> : <section className="account-section">
+      <div className="section-title account-list-title"><h2>{admin ? '全部 ChatGPT 账号' : '你的 ChatGPT 账号'}</h2><div className="browser-buttons">{admin && <BlankBrowser key={localPort} port={localPort} token={token} />}<button className="text-btn" onClick={() => Promise.all([refresh(), refreshProxies()]).catch(e => setError(e.message))}><RefreshCw size={15} />刷新</button>{admin && <BrowserStatusRefresh className="small" reminderKey={`${localPort}:${visibleAccounts.map(account => account.id).join(',')}`} disabled={localBrowsers.refreshing} onClick={() => localBrowsers.refresh(visibleAccounts).then(() => setError('')).catch(e => setError(e.message))}>{localBrowsers.refreshing ? '正在刷新…' : '刷新浏览器状态'}</BrowserStatusRefresh>}<button className="primary small" onClick={() => open('add')}><Plus size={15} />添加账号</button></div></div>
       <div className="address-search"><input aria-label="搜索账号" placeholder="搜索账号邮箱或名称" value={accountQuery} onChange={e=>setAccountQuery(e.target.value)}/>{admin && <><button className="outline small" onClick={()=>downloadCSV('/accounts/export?'+new URLSearchParams({q:accountQuery,group:groupFilter==='all'?'':groupFilter===''?'none':groupFilter,renewal_status:renewalStatus,payment_card_id:paymentCardFilter,sort:accountSort.key === 'proxy' ? 'id' : accountSort.key,direction:accountSort.direction}),token,'账号清单.csv').catch(e=>setError(e.message))}>导出清单</button></>}</div><div className="account-toolbar">{admin && <><Select label="筛选账号分组" value={groupFilter} onChange={setGroupFilter} options={[{ value: 'all', label: '全部分组 · ' + accounts.length }, { value: '', label: '未分组 · ' + accounts.filter(account => !account.group_id).length }, ...groups.map(group => ({ value: String(group.id), label: group.name + ' · ' + group.account_count }))]} /><button className="outline small" onClick={() => setGroupManager(true)}>管理分组</button></>}<div className="account-renewal-filters" role="group" aria-label="按续费时间筛选">{[{ value: 'safe', label: '正常（>10 天）' }, { value: 'soon', label: '即将续费（0–10 天）' }, { value: 'overdue', label: '已逾期' }].map(status => <button key={status.value} type="button" className="outline small" data-status={status.value} aria-pressed={renewalStatus === status.value} onClick={() => { setRenewalStatus(current => current === status.value ? '' : status.value); setAccountPageIndex(1); }}>{status.label}</button>)}</div>{admin && <Select label="按付款卡筛选账号" value={paymentCardFilter} onChange={setPaymentCardFilter} options={[{ value: '', label: '全部付款卡' }, { value: 'none', label: '未绑定付款卡' }, ...filterCards.values()]} searchPlaceholder="搜索卡片名称或尾号…" />}<span className="muted">{displayedPage.total} 个账号</span></div>
+      {admin && proxyError && <p className="error" role="alert">共享代理加载失败：{proxyError}<button className="text-btn" onClick={refreshProxies}>重试</button></p>}
       <DataTable searchQuery={accountQuery} label="ChatGPT 账号列表" className={admin ? 'accounts-table' : 'accounts-table user-accounts-table'} sort={accountSort} onSort={sortAccounts} stickyActions={admin} columns={[{ label: '账号', key: 'account' }, '累计消费 USD', ...(admin ? [{ label: '所属用户', key: 'owner' }, '产品选型', { label: '分组', key: 'group' }, { label: 'SOCKS5', key: 'proxy', disabled: !proxyConfig }, { label: '续订日期', key: 'renewal_date' }, { label: '是否续订', key: 'renewal_enabled' }, '状态', { label: '付款卡', key: 'payment_card' }, '账单地址'] : [{ label: '续费日期', key: 'renewal_date' }, '套餐类型']), { label: '上次登录（UTC+8）', key: 'last_login_at' }, ...(admin ? ['操作'] : [])]} empty={!visibleAccounts.length && (accounts.length ? (accountQuery || renewalStatus || paymentCardFilter ? '没有匹配的账号。' : '此分组暂无账号。') : <div className="empty"><KeyRound size={24} /><h3>还没有添加账号</h3><p>粘贴 Session JSON，保存你的 ChatGPT 账号。</p><button className="outline" onClick={() => open('add')}>添加第一个账号</button></div>)}>
         {visibleAccounts.map(account => <tr className={'account-row' + (highlightedAccounts.has(account.id) ? ' account-row-highlighted' : '')} key={account.id} onDoubleClick={event => toggleAccountHighlight(event, account.id)}>
           <td className="table-text"><strong>{account.label}</strong>{account.label !== account.email && <small className="cell-secondary">{account.email}</small>}{admin && <AccountNotes account={account} token={token} onChange={updateAccount} onUpdateSession={() => open('session', account)} />}</td>

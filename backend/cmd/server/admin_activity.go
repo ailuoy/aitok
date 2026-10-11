@@ -134,7 +134,7 @@ func (s *Server) auditFilter(next http.Handler) http.Handler {
 		mutation := r.Method != "GET" && r.Method != "HEAD"
 		// 定时同步与页面轮询不制造操作噪音；用户主动访问、筛选由前端事件覆盖。
 		background := r.URL.Path == "/api/proxy-activity" || strings.HasSuffix(r.URL.Path, "/login")
-		sensitiveRead := strings.HasSuffix(r.URL.Path, "/export") || (strings.HasPrefix(r.URL.Path, "/api/card-operations/") && r.URL.Query().Get("export") == "1") || auditCardDetails.MatchString(r.URL.Path) || (r.URL.Path == "/api/bank-cards" && r.URL.Query().Get("include_numbers") == "1")
+		sensitiveRead := (strings.HasPrefix(r.URL.Path, "/api/proxies/") && r.Method == "GET") || strings.HasSuffix(r.URL.Path, "/export") || (strings.HasPrefix(r.URL.Path, "/api/card-operations/") && r.URL.Query().Get("export") == "1") || auditCardDetails.MatchString(r.URL.Path) || (r.URL.Path == "/api/bank-cards" && r.URL.Query().Get("include_numbers") == "1")
 		if ctx.Recorded && status < 400 {
 			return
 		} // 业务事务内已有完整审计，不重复追加成功记录。
@@ -165,6 +165,7 @@ func safeAuditResource(path string) string {
 	known["desktop-auth"] = true
 	known["two-factor"] = true
 	known["notes"] = true
+	known["proxies"], known["proxy"], known["test-result"] = true, true, true
 	known["subscription-package"] = true
 	known["usage-status"] = true
 	parts := strings.Split(strings.Trim(path, "/"), "/")

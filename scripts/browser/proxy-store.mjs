@@ -2,12 +2,8 @@ import { mkdir, open, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from 'node:crypto';
 import { parseProxy } from './proxy.mjs';
-
-export function proxyURL(proxy) {
-  const host = proxy.host.includes(':') ? `[${proxy.host}]` : proxy.host;
-  const auth = proxy.username ? `${encodeURIComponent(proxy.username)}:${encodeURIComponent(proxy.password)}@` : '';
-  return `socks5://${auth}${host}:${proxy.port}`;
-}
+import { proxyURL } from '../../shared/proxy-url.mjs';
+export { proxyURL };
 
 // 代理密码与账号绑定只保存在本机；列表不返回密码，编辑通过专用详情接口读取。
 export class ProxyStore {

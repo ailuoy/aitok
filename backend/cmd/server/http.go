@@ -42,6 +42,8 @@ func (s *Server) routes(options ...khttp.ServerOption) *khttp.Server {
 	server.HandleFunc("/api/audit", s.audit)
 	server.HandleFunc("/api/admin-activity", s.adminActivity)
 	server.HandleFunc("/api/proxy-activity", s.proxyActivity)
+	server.HandleFunc("/api/proxies", s.sharedProxies)
+	server.HandlePrefix("/api/proxies/", http.HandlerFunc(s.sharedProxies))
 	server.HandleFunc("/api/payment-exceptions", s.paymentExceptions)
 	server.HandleFunc("/api/notices", s.notices)
 	server.HandleFunc("/api/logout", s.logout)

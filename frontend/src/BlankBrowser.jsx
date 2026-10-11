@@ -3,16 +3,18 @@ import { Monitor } from 'lucide-react';
 import Dialog from './Dialog';
 import Select from './Select';
 import { launcherPort, launcherRequest } from './localBrowser';
+import { request } from './api';
+import { requireSharedProxyLauncher } from './sharedProxies';
 
-export default function BlankBrowser({ port }) {
+export default function BlankBrowser({ port, token }) {
   const [open, setOpen] = useState(false), [proxies, setProxies] = useState([]), [proxyID, setProxyID] = useState('');
   const [busy, setBusy] = useState(false), [loading, setLoading] = useState(false), [error, setError] = useState('');
   async function load() {
     setLoading(true); setError('');
     try {
-      const health = await launcherRequest('/health', { port });
+      const health = await requireSharedProxyLauncher(port);
       if (!health.blank_browser) throw new Error('请安装并重启支持空白浏览器的新版桌面助手');
-      const config = await launcherRequest('/proxies', { port });
+      const config = await request('/proxies', token);
       setProxies(config.proxies);
       setProxyID(current => config.proxies.some(proxy => proxy.id === current) ? current : '');
     } catch (error) { setProxies([]); setError(error.message); }
@@ -24,7 +26,8 @@ export default function BlankBrowser({ port }) {
     setBusy(true); setError('');
     try {
       if (port !== launcherPort()) throw new Error('本机端口已更改，请关闭弹窗后重试');
-      await launcherRequest('/blank-browsers', { port, method: 'POST', body: { proxy_id: proxyID } });
+      const proxy = await request('/proxies/' + proxyID, token);
+      await launcherRequest('/blank-browsers', { port, method: 'POST', body: { shared_proxy: proxy } });
       setOpen(false);
     } catch (error) { setError(error.message); }
     finally { setBusy(false); }

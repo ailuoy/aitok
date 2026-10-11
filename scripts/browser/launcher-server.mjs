@@ -8,6 +8,10 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
   const testing = new Set();
   const approvals = new Map();
   const runningProxies = new Map();
+  const sharedProxy = value => {
+    if (!value || typeof value.id !== 'string' || !/^[1-9][0-9]*$/.test(value.id)) throw new Error('共享代理配置无效，请刷新后重试');
+    return { ...store.prepare(null, value), id: value.id };
+  };
   if (store && browser.on) browser.on('activity', event => {
     if (event.action === 'login' && event.logged_in_at) {
       void store.recordLogin(event.environment_id, event.logged_in_at).catch(() => console.error('账号登录时间保存失败，请检查本机配置目录'));
@@ -48,7 +52,7 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
     }
     try {
       if (request.method === 'GET' && request.url === '/health') {
-        send(200, { status: 'ok', version: 2, origin, fingerprint: 'native-noise-v1', blank_browser: Boolean(authorize && browser.startBlank) }); return;
+        send(200, { status: 'ok', version: 2, origin, fingerprint: 'native-noise-v1', shared_proxies: true, blank_browser: Boolean(authorize && browser.startBlank) }); return;
       }
       const authorizedUser = authorize ? await authorize() : null;
       let input;
@@ -70,9 +74,9 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
       if (request.method === 'POST' && request.url === '/blank-browsers') {
         if (!authorizedUser) { send(403, { error: '请先在桌面助手中授权登录' }); return; }
         if (!browser.startBlank) throw new Error('请更新并重启桌面助手以打开空白浏览器');
-        if (typeof input.proxy_id !== 'string' || !input.proxy_id) throw new Error('请选择一个已保存的代理');
-        const proxy = { ...store.get(input.proxy_id) };
-        const url = store.url(proxy.id);
+        if (!Object.hasOwn(input, 'shared_proxy') && (typeof input.proxy_id !== 'string' || !input.proxy_id)) throw new Error('请选择一个已保存的代理');
+        const proxy = Object.hasOwn(input, 'shared_proxy') ? sharedProxy(input.shared_proxy) : { ...store.get(input.proxy_id) };
+        const url = proxyURL(proxy);
         // 标识由助手生成，不能指定其他用户、现有账号资料或注入 Session。
         const id = `${origin}:user:${authorizedUser.id}:blank:${randomUUID()}`;
         runningProxies.set(id, { proxy, email: '' });
@@ -97,6 +101,17 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
       }
       if(request.method==='GET' && request.url?.startsWith('/activity-export?')) { const cursor=Number(new URL(request.url,'http://localhost').searchParams.get('cursor')||0);if(!Number.isSafeInteger(cursor)||cursor<0){send(400,{error:'游标无效'});return}await store.queue;send(200,store.exportActivity(cursor));return; }
       if (request.url === '/proxies' && request.method === 'GET') { send(200, store.list()); return; }
+      if (request.url === '/shared-proxies/test' && request.method === 'POST') {
+        if (testing.size >= 5) { send(429, { error: '代理正在测试，请稍后重试' }); return; }
+        const value = store.prepare(null, input.proxy || {});
+        const key = randomUUID(); testing.add(key);
+        try {
+          const result = await probeProxy(proxyURL(value));
+          if (input.proxy?.id) await store.recordUsage(sharedProxy(input.proxy), { action: input.action === 'get_ip' ? 'get_ip' : 'test', ok: result.ok, exit_ip: result.exit_ip, matches: result.matches });
+          send(200, { result });
+        } finally { testing.delete(key); }
+        return;
+      }
       if (request.url === '/proxies/parse' && request.method === 'POST') {
         const lines = typeof input.text === 'string' ? input.text.split(/\r?\n/).map(line => line.trim()).filter(Boolean) : [];
         if (!lines.length || lines.length > 100) { send(400, { error: '请粘贴 1 到 100 行代理，每行一条' }); return; }
@@ -165,16 +180,19 @@ export function createLauncher({ origin, browser, store, probeProxy = testProxy,
         send(200, await browser.resetFingerprint(decodeURIComponent(fingerprintRoute[1]))); return;
       }
       if (request.method === 'POST' && request.url === '/browsers') {
-        const proxyID = store?.data.bindings[input.environment_id];
-        const proxyURL = proxyID ? store.url(proxyID) : '';
+        const shared = Object.hasOwn(input, 'shared_proxy');
+        const proxyID = shared ? null : store?.data.bindings[input.environment_id];
+        const proxy = shared ? (input.shared_proxy === null ? null : sharedProxy(input.shared_proxy)) : proxyID ? { ...store.get(proxyID) } : null;
+        const selectedURL = proxy ? proxyURL(proxy) : '';
         if (runningProxies.has(input.environment_id)) throw new Error('该环境已经打开，请关闭后再打开');
-        if (proxyID) runningProxies.set(input.environment_id, { proxy: { ...store.get(proxyID) }, email: input.expected_email });
+        if (proxy) runningProxies.set(input.environment_id, { proxy, email: input.expected_email });
         try {
-          const status = await browser.start({ ...input, proxy_url: proxyURL, assistant_endpoint: origin + '/api/browser-assistant' });
-          if (proxyID) await store.recordUsage(store.get(proxyID), { action: 'open', ok: true, environment_id: input.environment_id, email: input.expected_email });
+          const { shared_proxy, ...browserInput } = input;
+          const status = await browser.start({ ...browserInput, proxy_url: selectedURL, assistant_endpoint: origin + '/api/browser-assistant' });
+          if (proxy) await store.recordUsage(proxy, { action: 'open', ok: true, environment_id: input.environment_id, email: input.expected_email });
           send(200, status);
         } catch (error) {
-          if (proxyID) await store.recordUsage(store.get(proxyID), { action: 'open', ok: false, environment_id: input.environment_id, email: input.expected_email });
+          if (proxy) await store.recordUsage(proxy, { action: 'open', ok: false, environment_id: input.environment_id, email: input.expected_email });
           runningProxies.delete(input.environment_id);
           throw error;
         }

@@ -15,9 +15,9 @@ test('付款卡筛选在 SOCKS5 排序分页前生效，并与分组、关键词
   assert.deepEqual(accountProxyPage(accounts, { ...options, paymentCard: '9', group: '1', query: 'USER1', renewalStatus: 'soon' }).accounts.map(account => account.id), [1]);
 });
 
-test('本机 SOCKS5 对完整筛选结果排序后分页，同代理排序稳定且不修改原数据', () => {
+test('共享 SOCKS5 对完整筛选结果排序后分页，同代理排序稳定且不修改原数据', () => {
   const accounts = [1, 2, 3, 4, 5].map(id => ({ id, label: `账号${id}`, email: `user${id}@example.com`, group_id: id < 5 ? 1 : null }));
-  const options = { config: { proxies: [{ id: 'a', name: '代理2', host: 'a.example' }, { id: 'b', name: '代理10', host: 'b.example' }], bindings: { 'env:1': 'b', 'env:2': 'a', 'env:4': 'a', 'env:5': 'b' } }, environmentID: id => `env:${id}`, query: '', group: 'all', direction: 'asc', pageSize: 2 };
+  const options = { config: { proxies: [{ id: 'a', name: '代理2', host: 'a.example' }, { id: 'b', name: '代理10', host: 'b.example' }], bindings: { '1': 'b', '2': 'a', '4': 'a', '5': 'b' } }, environmentID: id => `env:${id}`, query: '', group: 'all', direction: 'asc', pageSize: 2 };
   const pages = [1, 2, 3].map(page => accountProxyPage(accounts, { ...options, page }));
   assert.deepEqual(pages.flatMap(page => page.accounts.map(account => account.id)), [3, 4, 2, 5, 1]);
   assert.ok(pages.every(page => page.total === 5));

@@ -5,11 +5,23 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once, EventEmitter } from 'node:events';
 import net from 'node:net';
-import { ProxyStore } from './proxy-store.mjs';
+import { ProxyStore, proxyURL } from './proxy-store.mjs';
 import { testProxy, proxyFailure } from './proxy-test.mjs';
 import { ProxyError } from './proxy.mjs';
 import { parseProxy } from './proxy.mjs';
 import { createLauncher } from '../session-browser.mjs';
+
+test('导出 SOCKS5 地址可重新导入，保留特殊认证字符、IPv6 和无认证配置', () => {
+  for (const proxy of [
+    { host: '203.0.113.10', port: 1080, username: '', password: '' },
+    { host: 'proxy.example', port: 10000, username: 'user:@ /中文', password: 'p:a@ss%?#\n' },
+    { host: '2001:db8::1', port: 45001, username: 'user', password: 'secret' },
+  ]) {
+    const line = proxyURL(proxy);
+    assert.ok(!/[\r\n]/.test(line));
+    assert.deepEqual(parseProxy(line), proxy);
+  }
+});
 
 test('代理加密保存、编辑保留密码、绑定重载及删除约束', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'aitok-proxies-'));

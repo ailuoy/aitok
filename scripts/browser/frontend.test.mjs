@@ -41,7 +41,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let localFingerprint = null;
   let localState = 'closed', exportCount = 0, exportExpired = false;
   let proxies = [], bindings = {}, testCount = 0, draftFails = false, proxyPassword = '', accountDeletes = 0;
-  let proxyBindingFails = false, proxiesUnavailable = false;
+  let proxyBindingFails = false, proxiesUnavailable = false, localUnavailable = false, proxyDetailFails = false;
   let browserState = 'closed';
   let groups = [], loginWrites = 0, authenticatedAt;
   let savedProxy = '';
@@ -98,13 +98,16 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       let responseCode = request.method === 'OPTIONS' ? 204 : 200;
       if (['http://127.0.0.1:15684', 'http://127.0.0.1:15685'].includes(url.origin)) {
         localRequests.push(request);
-        if (url.pathname === '/activity-export') data = {device_id:'test-device',events:[],next_cursor:0};
-        else if (url.pathname === '/health') data = { status: 'ok', version: 2, fingerprint: 'native-noise-v1', blank_browser: true };
+        if (localUnavailable) { responseCode = 503; data = { error: '模拟本机助手未启动' }; }
+        else if (url.pathname === '/activity-export') data = {device_id:'test-device',events:[],next_cursor:0};
+        else if (url.pathname === '/health') data = { status: 'ok', version: 2, fingerprint: 'native-noise-v1', blank_browser: true, shared_proxies: true };
         else if (url.pathname === '/blank-browsers' && request.method === 'POST') {
           if (blankFail) { responseCode = 503; data = { error: '模拟空白浏览器启动失败' }; }
           else { blankLaunches.push(JSON.parse(request.postData)); data = { state: 'opened', environment_id: 'blank-test' }; }
         }
         else if (url.pathname.endsWith('/fingerprint')) { if (request.method === 'POST') fingerprintResets++; localFingerprint = { id: 'test-fingerprint', generation: 2, mode: 'native-noise-v1', created_at: '2026-09-17T00:30:00Z' }; data = { state: 'closed', fingerprint: localFingerprint, message: '已重新生成账号指纹，下次打开生效' }; }
+        else if (url.pathname === '/proxies') data = { proxies: [{ id: 'legacy-export' }], bindings: {} };
+        else if (url.pathname === '/proxies/legacy-export') data = { id: 'legacy-export', name: '本机旧代理', host: '2001:db8::1', port: 1080, username: 'local:user', password: 'p@ss:#%' };
         else if (url.pathname === '/proxies/parse') data = { items: [{ line: 1, proxy: { host: '203.0.113.10', port: 1080, username: 'proxy-user', password: 'proxy-secret', name: 'Imported' } }] };
         else if (url.pathname === '/proxy-history') {
           // 模拟未重启的旧启动器，忽略 page_size，前端需合并旧分页。
@@ -112,35 +115,35 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
           const records = Array.from({ length: 61 }, (_, i) => ({ id: 'usage-' + i, action: 'open', ok: true, email: account.email, created_at: '2026-09-15T00:30:00Z' }));
           data = { records: records.slice((page - 1) * 20, page * 20), total: records.length, page, page_size: 20 };
         }
-        else if (url.pathname.startsWith('/proxies')) {
+        else if (url.pathname === '/shared-proxies/test') {
           const input = request.postData ? JSON.parse(request.postData) : {};
-          if (request.method === 'POST' && url.pathname === '/proxies') { proxyPassword = input.password; proxies.push({ ...input, password: undefined, has_password: Boolean(input.password), id: 'proxy-1' }); }
-          if (request.method === 'PATCH') { proxyPassword = input.password; proxies[0] = { ...proxies[0], ...input, password: undefined }; }
-          if (request.method === 'POST' && url.pathname !== '/proxies/test' && url.pathname.endsWith('/test')) {
-            const matches = ++testCount % 2 === 1;
-            proxies[0].last_test = { ok: true, matches, exit_ip: matches ? '203.0.113.10' : '198.51.100.1', proxy_ips: ['203.0.113.10'], latency_ms: 25, tested_at: new Date().toISOString() };
-          }
-          if (request.method === 'DELETE') {
-            if (Object.values(bindings).includes('proxy-1')) { responseCode = 400; data = { error: '此代理仍有账号使用' }; }
-            else proxies = [];
-          }
-          if (responseCode === 200 || responseCode === 204) data = { proxies, bindings };
-          if (request.method === 'GET' && url.pathname === '/proxies/proxy-1') data = { ...proxies[0], password: proxyPassword };
-          if (request.method === 'POST' && url.pathname === '/proxies/test') data = { result: draftFails ? { ok: false, error: '代理认证失败' } : { ok: true, matches: true, exit_ip: '203.0.113.10' }, test_token: draftFails ? null : 'draft-token' };
-          if (proxiesUnavailable && request.method !== 'OPTIONS') { responseCode = 503; data = { error: '模拟本机代理配置读取失败' }; }
-        } else if (url.pathname.endsWith('/proxy')) {
-          if (request.method === 'PATCH' && !proxyBindingFails) {
-            const id = decodeURIComponent(url.pathname.split('/')[2]);
-            const { proxy_id } = JSON.parse(request.postData);
-            if (proxy_id) bindings[id] = proxy_id; else delete bindings[id];
-          }
-          data = { proxies, bindings };
-          if (proxyBindingFails && request.method === 'PATCH') { responseCode = 400; data = { error: '模拟代理绑定保存失败' }; }
+          const matches = input.action === 'get_ip' ? false : true;
+          data = { result: draftFails ? { ok: false, error: '代理认证失败' } : { ok: true, matches, exit_ip: matches ? '203.0.113.10' : '198.51.100.1', proxy_ips: ['203.0.113.10'], latency_ms: 25, tested_at: new Date().toISOString() } };
         } else {
           if (request.method === 'POST') { localLaunches.push(JSON.parse(request.postData)); localState = 'opened'; }
           if (request.method === 'DELETE') localState = 'closed';
           data = { state: localState, authenticated_at: authenticatedAt, fingerprint: localFingerprint };
         }
+      } else if (url.pathname.startsWith('/api/proxies')) {
+        const input = request.postData ? JSON.parse(request.postData) : {};
+        if (request.method === 'POST' && url.pathname === '/api/proxies') { proxyPassword = input.password; proxies.push({ ...input, password: undefined, has_password: Boolean(input.password), id: '1' }); }
+        if (request.method === 'PATCH') { proxyPassword = input.password; proxies[0] = { ...proxies[0], ...input, password: undefined }; }
+        if (request.method === 'POST' && url.pathname.endsWith('/test-result')) proxies[0].last_test = input.last_test;
+        if (request.method === 'DELETE') {
+          if (Object.values(bindings).includes('1')) { responseCode = 409; data = { error: '此代理仍有账号使用' }; }
+          else proxies = [];
+        }
+        if (responseCode === 200 || responseCode === 204) data = { proxies, bindings };
+        if (request.method === 'GET' && url.pathname === '/api/proxies/1') data = { ...proxies[0], password: proxyPassword };
+        if (proxyDetailFails && url.pathname === '/api/proxies/1') { responseCode = 503; data = { error: '模拟代理详情读取失败' }; }
+        if (proxiesUnavailable && request.method !== 'OPTIONS') { responseCode = 503; data = { error: '模拟共享代理配置读取失败' }; }
+      } else if (url.pathname === '/api/accounts/1/proxy') {
+        if (request.method === 'PATCH' && !proxyBindingFails) {
+          const { proxy_id } = JSON.parse(request.postData);
+          if (proxy_id) bindings['1'] = proxy_id; else delete bindings['1'];
+        }
+        data = { proxies, bindings };
+        if (proxyBindingFails && request.method === 'PATCH') { responseCode = 400; data = { error: '模拟代理绑定保存失败' }; }
       } else if (url.pathname === '/api/two-factor') {
         const input = request.postData ? JSON.parse(request.postData) : {};
         if (input.action === 'setup') data = {secret:'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ',otpauth_url:'otpauth://totp/AiTok:test?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&issuer=AiTok'};
@@ -331,7 +334,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
       } else if (url.pathname === '/api/accounts/1/browser-session') {
         if (request.method === 'POST') exportCount++;
         if (exportExpired) { responseCode = 422; data = { error: 'Session 已过期，请更新' }; }
-        else data = { account_id: 1, session: { accessToken: 'local-test-access', user: { email: account.email } }, assistant_token: 'local-test-assistant' };
+        else data = { shared_proxy: bindings['1'] ? { ...proxies[0], password: proxyPassword } : null, account_id: 1, session: { accessToken: 'local-test-access', user: { email: account.email } }, assistant_token: 'local-test-assistant' };
       } else if (url.pathname === '/api/me') data = { user, accounts: [account] };
       else if (url.pathname === '/api/accounts') {
         if (request.method === 'POST') imported.push(JSON.parse(request.postData));
@@ -1537,6 +1540,27 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
   await navigateAdmin('proxies');
   await wait('Boolean(document.querySelector(".proxy-manager"))');
+  await evaluate(`(() => {
+    window.proxyDownloads = [];
+    document.addEventListener('click', event => {
+      const link = event.target.closest('a[download]');
+      if (!link?.download.startsWith('socks5-')) return;
+      event.preventDefault();
+      fetch(link.href).then(response => response.text()).then(text => window.proxyDownloads.push({ name: link.download, text }));
+    }, true);
+  })()`);
+  await click('导出代理');
+  assert.equal(await evaluate('document.querySelector("dialog [aria-label=导出代理来源]").textContent'), '本机已有代理');
+  await click('下载 TXT');
+  await wait('window.proxyDownloads.length === 1 && !document.querySelector("dialog")');
+  assert.equal(await evaluate('window.proxyDownloads[0].text'), 'socks5://local%3Auser:p%40ss%3A%23%25@[2001:db8::1]:1080\n');
+  assert.match(await evaluate('window.proxyDownloads[0].name'), /^socks5-local-.*\.txt$/);
+  await click('导出代理');
+  await select('导出代理来源', '共享代理');
+  await click('下载 TXT');
+  await wait('document.querySelector("dialog").innerText.includes("暂无可导出的共享代理")');
+  assert.equal(await evaluate('window.proxyDownloads.length'), 1);
+  await click('取消');
 
   await click('导入代理');
   await fill('dialog textarea', 'socks5://203.0.113.10:1080:proxy-user:proxy-secret', 'HTMLTextAreaElement');
@@ -1561,6 +1585,20 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await click('保存代理');
   await wait('document.querySelector(".proxy-row")?.innerText.includes("美国代理")');
   assert.equal(await evaluate('document.querySelector(".proxy-row").tagName'), 'TR');
+  // 共享导出不依赖本机助手，详情读取失败不生成残缺文件。
+  localUnavailable = true;
+  await click('导出代理');
+  assert.equal(await evaluate('document.querySelector("dialog [aria-label=导出代理来源]").textContent'), '共享代理');
+  proxyDetailFails = true;
+  await click('下载 TXT');
+  await wait('document.querySelector("dialog").innerText.includes("模拟代理详情读取失败")');
+  assert.equal(await evaluate('window.proxyDownloads.length'), 1);
+  proxyDetailFails = false;
+  await click('下载 TXT');
+  await wait('window.proxyDownloads.length === 2 && !document.querySelector("dialog")');
+  assert.equal(await evaluate('window.proxyDownloads[1].text'), 'socks5://proxy-user:proxy-secret@203.0.113.10:1080\n');
+  assert.match(await evaluate('window.proxyDownloads[1].name'), /^socks5-shared-.*\.txt$/);
+  localUnavailable = false;
   await click('测试');
   await wait('Boolean(document.querySelector(".proxy-result.match"))');
   await click('使用记录');
@@ -1602,10 +1640,23 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   blankFail = false;
   await click('打开浏览器');
   await wait('!document.querySelector("dialog")');
-  assert.deepEqual(blankLaunches, [{ proxy_id: 'proxy-1' }]);
+  assert.equal(blankLaunches[0].shared_proxy.id, '1');
+  assert.equal(blankLaunches[0].shared_proxy.password, proxyPassword);
   await select('账号 chat@example.com 的 SOCKS5', '美国代理已编辑 · 203.0.113.10', '美国');
   await wait('document.body.innerText.includes("代理选择已保存")');
-  assert.equal(Object.values(bindings)[0], 'proxy-1');
+  assert.equal(Object.values(bindings)[0], '1');
+  assert.deepEqual(Object.keys(bindings), ['1'], '绑定仅按 ChatGPT 账号区分');
+  localUnavailable = true;
+  await navigateAdmin('proxies');
+  await wait('Boolean(document.querySelector(".proxy-row"))');
+  await navigateAdmin('accounts');
+  await wait('document.querySelector(".account-proxy button")?.textContent === "美国代理已编辑 · 203.0.113.10"');
+  await select('账号 chat@example.com 的 SOCKS5', '直连（不使用代理）');
+  await wait('document.querySelector(".account-proxy button")?.textContent === "直连（不使用代理）"');
+  assert.equal(Object.values(bindings).length, 0, '助手离线仍可保存共享选择');
+  await select('账号 chat@example.com 的 SOCKS5', '美国代理已编辑 · 203.0.113.10');
+  await wait('document.querySelector(".account-proxy button")?.textContent === "美国代理已编辑 · 203.0.113.10"');
+  localUnavailable = false;
   await click('浏览器管理');
   await wait('document.querySelector(".browser-status-row strong")?.textContent === "未打开"');
   assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").textContent'), '美国代理已编辑 · 203.0.113.10');
@@ -1728,10 +1779,10 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector(".account-actions").innerText.includes("打开账号")');
   proxiesUnavailable = true;
   await cdp.send('Page.reload', {}, sessionId);
-  await wait('document.querySelector(".account-proxy button")?.textContent === "请先连接本机助手"');
+  await wait('document.querySelector(".account-proxy button")?.textContent === "共享代理未加载"');
   await click('浏览器管理');
-  await wait('document.querySelector("dialog").innerText.includes("模拟本机代理配置读取失败")');
-  assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").textContent'), '请先连接本机助手');
+  await wait('document.querySelector("dialog").innerText.includes("模拟共享代理配置读取失败")');
+  assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").textContent'), '共享代理未加载');
   assert.equal(await evaluate('document.querySelector("dialog button[aria-label=网络连接]").disabled'), true);
   await evaluate('document.querySelector("dialog button[aria-label=关闭]").click()');
   proxiesUnavailable = false;

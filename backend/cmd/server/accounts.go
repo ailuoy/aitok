@@ -207,6 +207,10 @@ func (s *Server) accountAction(w http.ResponseWriter, r *http.Request) {
 		s.setAccountUsageStatus(w, r, id, aid)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "proxy" {
+		s.bindSharedProxy(w, r, id, aid)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "notes" {
 		s.accountNotes(w, r, aid)
 		return

@@ -45,11 +45,13 @@ export async function openLocalAccount(account, userID, token, totpCode, { loadA
   const port = launcherPort();
   const health = await launcherRequest('/health', { port });
   if (health.version !== 2) throw new Error('请重启最新版本机启动器');
+  if (!health.shared_proxies) throw new Error('请更新并重启支持共享代理的桌面助手');
   if (health.fingerprint !== 'native-noise-v1') throw new Error('请更新并重启支持独立指纹的本机助手');
   const id = browserEnvironmentID(userID, account.id);
   const status = await launcherRequest('/browsers/' + encodeURIComponent(id), { port });
   if (!['closed', 'unavailable'].includes(status.state)) return status;
   const credentials = await request(`/accounts/${account.id}/browser-session`, token, { method: 'POST', totpCode });
+  if (!Object.hasOwn(credentials, 'shared_proxy')) throw new Error('服务端尚未支持共享代理，请更新服务端后重试');
   if (port !== launcherPort()) throw new Error('本机连接端口已更改，请重新打开账号');
-  return launcherRequest('/browsers', { port, method: 'POST', body: { environment_id: id, session: credentials.session, expected_email: account.email, ...(loadAssistant ? { assistant_token: credentials.assistant_token } : {}) } });
+  return launcherRequest('/browsers', { port, method: 'POST', body: { environment_id: id, session: credentials.session, shared_proxy: credentials.shared_proxy, expected_email: account.email, ...(loadAssistant ? { assistant_token: credentials.assistant_token } : {}) } });
 }

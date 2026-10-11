@@ -78,6 +78,7 @@ export function localActivityControl(path, method) {
   if (['/browsers', '/blank-browsers'].includes(path) && method === 'POST') return 'open_browser';
   if (/^\/browsers\/[^/]+$/.test(path) && method === 'DELETE') return 'close_browser';
   if (path === '/proxies/parse' && method === 'POST') return 'proxy_import';
+  if (path === '/shared-proxies/test' && method === 'POST') return 'proxy_test';
   if (/^\/proxies(?:\/[^/]+)?\/test$/.test(path) && method === 'POST') return 'proxy_test';
   if (path === '/proxies' && method === 'POST') return 'proxy_create';
   if (/^\/proxies\/[^/]+$/.test(path)) return { GET: 'proxy_read', PATCH: 'proxy_update', DELETE: 'proxy_delete' }[method];

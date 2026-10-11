@@ -60,13 +60,14 @@ CREATE TABLE IF NOT EXISTS chatgpt_accounts (
   subscription_package_id BIGINT CHECK (subscription_package_id > 0),
   usage_status TEXT NOT NULL DEFAULT 'in_use' CHECK (usage_status IN ('in_use','discarded')),
   discard_reason TEXT NOT NULL DEFAULT '' CHECK (length(discard_reason) <= 2000),
+  socks5_proxy_id BIGINT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   deleted_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS chatgpt_accounts_billing_address_idx ON chatgpt_accounts(billing_address_id) WHERE deleted_at IS NULL AND billing_address_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS chatgpt_accounts_payment_card_idx ON chatgpt_accounts(payment_card_id) WHERE deleted_at IS NULL AND payment_card_id IS NOT NULL;
-COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、管理员长文本备注、使用中或废弃状态及最近废弃理由、当前订阅产品选型、上次登录、续订意愿及提醒、人工续订日期、默认付款卡、账单地址及有订单凭据的订阅核验状态；使用状态仅作管理标记，恢复使用保留最近废弃理由；产品选型可人工维护，订单开通同步对应套餐；绑定仅供助手默认选择，不代表官网绑卡或自动扣款。';
+COMMENT ON TABLE chatgpt_accounts IS 'ChatGPT 账号：所属用户、加密 Session、分组、管理员长文本备注、使用中或废弃状态及最近废弃理由、当前订阅产品选型、上次登录、续订意愿及提醒、人工续订日期、默认付款卡、账单地址及有订单凭据的订阅核验状态；使用状态仅作管理标记，恢复使用保留最近废弃理由；产品选型可人工维护，订单开通同步对应套餐；绑定仅供助手默认选择，不代表官网绑卡或自动扣款。 SOCKS5 代理通过 socks5_proxy_id 关联全站共享配置，选择不按登录用户或设备区分。';
 CREATE INDEX IF NOT EXISTS chatgpt_accounts_subscription_package_idx ON chatgpt_accounts(subscription_package_id) WHERE deleted_at IS NULL AND subscription_package_id IS NOT NULL;
 
 -- 邮箱验证码：按邮箱及用途保存验证码哈希和过期时间。
@@ -470,3 +471,18 @@ CREATE TABLE IF NOT EXISTS order_wallet_debits (
 COMMENT ON TABLE order_wallet_debits IS '账号消费订单：按实收美元快照扣除当前绑定用户的钱包，金额单位为美分及百分之一代币，保留付款人和账号快照；每订单全历史仅扣款一次。';
 CREATE INDEX IF NOT EXISTS order_wallet_debits_user_idx ON order_wallet_debits(user_id,id DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS order_wallet_debits_account_idx ON order_wallet_debits(account_id,user_id) WHERE deleted_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS socks5_proxies (
+  id BIGSERIAL PRIMARY KEY,
+  name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
+  host TEXT NOT NULL CHECK (length(host) BETWEEN 1 AND 253),
+  port INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+  username TEXT NOT NULL DEFAULT '',
+  password_ciphertext TEXT NOT NULL DEFAULT '',
+  last_test JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ
+);
+COMMENT ON TABLE socks5_proxies IS '全站共享 SOCKS5 代理；无登录用户或设备归属，密码加密保存，测试结果仅为本机助手上报，不代表服务端网络验证。';
+CREATE INDEX IF NOT EXISTS chatgpt_accounts_socks5_proxy_idx ON chatgpt_accounts(socks5_proxy_id) WHERE deleted_at IS NULL AND socks5_proxy_id IS NOT NULL;

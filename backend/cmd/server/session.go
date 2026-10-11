@@ -215,7 +215,12 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		}
 	}
 	if launch {
-		reply(w, map[string]any{"account_id": accountID, "session": session.BrowserJSON, "expires_at": session.ExpiresAt, "assistant_token": s.assistantToken(userID, accountID)}, 200)
+		proxy, proxyErr := s.accountSharedProxy(r.Context(), accountID)
+		if proxyErr != nil {
+			reply(w, map[string]string{"error": "读取共享代理失败，请检查代理配置"}, 503)
+			return
+		}
+		reply(w, map[string]any{"shared_proxy": proxy, "account_id": accountID, "session": session.BrowserJSON, "expires_at": session.ExpiresAt, "assistant_token": s.assistantToken(userID, accountID)}, 200)
 		return
 	}
 	stored.SessionJSON = raw

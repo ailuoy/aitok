@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { launcherRequest } from './localBrowser';
+import { request } from './api';
+import { testSharedProxy } from './sharedProxies';
 import Dialog from './Dialog';
 
-export default function ProxyImport({ onClose, onChange }) {
+export default function ProxyImport({ token, onClose, onChange }) {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [results, setResults] = useState([]);
@@ -17,9 +19,9 @@ export default function ProxyImport({ onClose, onChange }) {
         let message = item.error;
         if (!message) {
           try {
-            const tested = await launcherRequest('/proxies/test', { method: 'POST', body: item.proxy });
+            const tested = await testSharedProxy(item.proxy);
             if (!tested.result.ok) throw new Error(tested.result.error || '测试失败');
-            onChange(await launcherRequest('/proxies', { method: 'POST', body: { ...item.proxy, test_token: tested.test_token } }));
+            onChange(await request('/proxies', token, { method: 'POST', body: { ...item.proxy, last_test: tested.result } }));
           } catch (error) { message = error.message; }
         }
         if (message) failedLines.push(text.split(/\r?\n/).map(line => line.trim()).filter(Boolean)[item.line - 1]);

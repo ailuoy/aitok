@@ -159,8 +159,8 @@ func TestAllTablesHaveTimestampsWithoutDatabaseLogic(t *testing.T) {
 		tables = append(tables, name)
 	}
 	rows.Close()
-	if len(tables) != 22 {
-		t.Fatalf("应有22张表，实际%d", len(tables))
+	if len(tables) != 23 {
+		t.Fatalf("应有23张表，实际%d", len(tables))
 	}
 	for _, table := range tables {
 		var count int
