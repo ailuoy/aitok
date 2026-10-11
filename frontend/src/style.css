@@ -345,7 +345,8 @@ button,input,textarea{font-family:inherit}
 .data-table .text-btn{font-size:11px;padding:5px 3px}
 .data-table .icon-btn{padding:5px;display:inline-flex}
 .data-table .proxy-result{font-size:11px;min-width:160px;gap:3px}
-.data-table .account-product{min-width:240px;width:260px}
+.data-table .account-product{min-width:144px;width:144px}
+.data-table .account-product .custom-select{width:120px}
 .data-table .account-status-cell{min-width:150px;width:170px}
 .account-usage-status{display:grid;gap:5px}
 .account-usage-status[data-status=discarded] .select-trigger{color:var(--danger)}
