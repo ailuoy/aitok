@@ -47,6 +47,23 @@ test('IP 检查完成且一致才新开 Billing 标签，失败或关闭中不�
   }
 });
 
+test('自动更新不打开纯净度检测页，仍等待出口核对成功后打开 ChatGPT', async () => {
+  for (const matches of [true, false]) {
+    let finish;
+    const calls = [];
+    const browser = new SessionBrowser({ chrome: '', directory: '', checkIP: () => new Promise(resolve => { finish = resolve; }) });
+    browser.verifyLogin = async () => {};
+    const environment = { state: 'checking_ip', session: {}, refresh: {}, hasLoginCookie: true, cdp: { send: async (method, params) => { calls.push({ method, params }); return {}; } } };
+    const opening = browser.openBilling(environment, 'page', 'socks5://203.0.113.1:1080');
+    assert.deepEqual(calls, []);
+    finish({ ok: true, matches, exit_ip: '203.0.113.1', proxy_ips: ['203.0.113.1'] });
+    await opening;
+    clearInterval(environment.verifyTimer);
+    assert.deepEqual(calls, matches ? [{ method: 'Target.createTarget', params: { url: 'https://chatgpt.com/' } }] : []);
+    assert.equal(environment.state, matches ? 'opened' : 'ip_check_failed');
+  }
+});
+
 test('Chromium 先展示 IP 页面，成功后保留原标签并新开账单页；失败保留窗口', { skip: !process.env.AITOK_BROWSER_SMOKE, timeout: 30000 }, async t => {
   const requests = [];
   const server = http.createServer((request, response) => {

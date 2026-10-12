@@ -13,7 +13,8 @@ export function loginCheckSource() {
 }
 
 async function checkLogin(isVerificationPage) {
-  if (location.origin !== 'https://chatgpt.com' || document.readyState !== 'complete') return null;
+  // DOM 就绪即可检查真实会话，不等待图片等资源，避免慢资源阻塞 Session 更新。
+  if (location.origin !== 'https://chatgpt.com' || document.readyState === 'loading') return null;
   if (isVerificationPage()) return { challenge: true };
   try {
     const response = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(8000) });

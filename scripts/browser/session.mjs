@@ -212,7 +212,7 @@ export class SessionBrowser extends EventEmitter {
   async openBilling(environment, pageSession, proxyURL) {
     try {
       const ipCheck = this.checkIP(environment.cdp, pageSession, proxyURL, { url: this.startURL, signal: environment.controller?.signal });
-      if (this.cleanipURL) void environment.cdp.send('Target.createTarget', { url: this.cleanipURL }).catch(() => {});
+      if (this.cleanipURL && !environment.refresh) void environment.cdp.send('Target.createTarget', { url: this.cleanipURL }).catch(() => {});
       const result = await ipCheck;
       if (!environment.session || environment.state === 'closing') return;
       environment.ipCheck = result;
