@@ -41,6 +41,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   let localFingerprint = null;
   let localState = 'closed', exportCount = 0, exportExpired = false;
   let sessionUpdate;
+  let batchRows = null;
+  const batchStates = new Map();
   let proxies = [], bindings = {}, testCount = 0, draftFails = false, proxyPassword = '', accountDeletes = 0;
   let proxyBindingFails = false, proxiesUnavailable = false, localUnavailable = false, proxyDetailFails = false;
   let browserState = 'closed';
@@ -107,6 +109,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
           else { blankLaunches.push(JSON.parse(request.postData)); data = { state: 'opened', environment_id: 'blank-test' }; }
         }
         else if (url.pathname.endsWith('/fingerprint')) { if (request.method === 'POST') fingerprintResets++; localFingerprint = { id: 'test-fingerprint', generation: 2, mode: 'native-noise-v1', created_at: '2026-09-17T00:30:00Z' }; data = { state: 'closed', fingerprint: localFingerprint, message: '已重新生成账号指纹，下次打开生效' }; }
+        else if (batchRows && url.pathname.startsWith('/browsers')) {
+          const input = request.postData ? JSON.parse(request.postData) : {};
+          const id = Number(/:account:(\d+)$/.exec(input.environment_id || decodeURIComponent(url.pathname.split('/')[2] || ''))?.[1]);
+          if (request.method === 'POST') { localLaunches.push(input); batchStates.set(id, { state: 'opened', session_update: { state: 'waiting', message: '等待登录后自动更新' } }); }
+          if (request.method === 'DELETE') batchStates.set(id, { state: 'closed' });
+          data = batchStates.get(id) || { state: 'closed' };
+        }
         else if (url.pathname === '/proxies') data = { proxies: [{ id: 'legacy-export' }], bindings: {} };
         else if (url.pathname === '/proxies/legacy-export') data = { id: 'legacy-export', name: '本机旧代理', host: '2001:db8::1', port: 1080, username: 'local:user', password: 'p@ss:#%' };
         else if (url.pathname === '/proxies/parse') data = { items: [{ line: 1, proxy: { host: '203.0.113.10', port: 1080, username: 'proxy-user', password: 'proxy-secret', name: 'Imported' } }] };
@@ -332,11 +341,14 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
           data = input;
         }
       } else if (url.pathname === '/api/accounts/1' && request.method === 'DELETE') { accountDeletes++;
+      } else if (batchRows && /^\/api\/accounts\/\d+\/browser-session$/.test(url.pathname)) {
+        const id = Number(url.pathname.split('/')[3]);
+        data = { shared_proxy: null, account_id: id, session: { accessToken: 'batch-test-access', user: { email: batchRows.find(row => row.id === id).email } }, assistant_token: 'batch-test-assistant' };
       } else if (url.pathname === '/api/accounts/1/browser-session') {
         if (request.method === 'POST') exportCount++;
         if (exportExpired && url.searchParams.get('mode') !== 'refresh') { responseCode = 422; data = { error: 'Session 已过期，请更新' }; }
         else data = { shared_proxy: bindings['1'] ? { ...proxies[0], password: proxyPassword } : null, account_id: 1, session: { accessToken: 'local-test-access', user: { email: account.email } }, assistant_token: 'local-test-assistant' };
-      } else if (url.pathname === '/api/me') data = { user, accounts: [account] };
+      } else if (url.pathname === '/api/me') data = { user, accounts: batchRows || [account] };
       else if (url.pathname === '/api/accounts') {
         if (request.method === 'POST') imported.push(JSON.parse(request.postData));
         const group=url.searchParams.get('group');
@@ -348,6 +360,10 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const matchesCard=!paymentCard || (paymentCard==='none' ? !account.payment_card_id : String(account.payment_card_id)===paymentCard);
         const accountRows=matchesCard && matchesStatus && (!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
         data = { accounts: accountRows, account, total:accountRows.length, page:1, page_size:20 };
+        if (batchRows) {
+          const rows = batchRows.filter(row => row.email.includes(url.searchParams.get('q') || ''));
+          data = { accounts: rows, total: rows.length, page: 1, page_size: 20 };
+        }
       } else if (url.pathname === '/api/wallet') data = walletData;
       else if (url.pathname === '/api/wallet/topups' && request.method === 'POST') {
         const input = JSON.parse(request.postData); walletTopups.push(input);
@@ -579,7 +595,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await select(statusSelector, '使用中');
   await wait('document.querySelector(".account-usage-status")?.dataset.status === "in_use" && !document.querySelector(".account-usage-status button[role=combobox]").disabled');
   const productLabel = `PLUS · ${rechargePackages[0].name} · ${rechargePackages[0].region} · ${rechargePackages[0].months}个月`;
-  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th")).slice(1, 5).map(th => th.textContent.trim())'), ['累计消费 USD', '所属用户', '产品选型', '分组']);
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th")).slice(2, 6).map(th => th.textContent.trim())'), ['累计消费 USD', '所属用户', '产品选型', '分组']);
   await select('账号 chat@example.com 的产品选型', productLabel, rechargePackages[0].region);
   await wait('document.querySelector(".account-product button").innerText === "PLUS" && !document.querySelector(".account-product button").disabled');
   assert.equal(account.subscription_package_id, rechargePackages[0].id);
@@ -1816,6 +1832,59 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.querySelector(".account-row")?.innerText.includes("不足 1 天")');
   assert.ok(await evaluate('document.querySelector(".account-section").innerText.includes("距上次更新 Session")'));
   exportExpired = false;
+  // 批量更新：表头全选与半选、串行执行、失败继续、成功时间回写、停止后不再启动。
+  batchRows = [1, 2, 3].map(id => ({ ...account, id, label: `批量账号 ${id}`, email: `batch${id}@test.local`, session_updated_at: null }));
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelectorAll(".account-row").length === 3');
+  assert.equal(await evaluate('document.querySelector(".account-actions-heading button").disabled'), true);
+  await evaluate('document.querySelector(".account-row input[type=checkbox]").click()');
+  assert.equal(await evaluate('document.querySelector("input[aria-label=全选当前页账号]").indeterminate'), true);
+  await evaluate('document.querySelector("input[aria-label=全选当前页账号]").click()');
+  assert.equal(await evaluate('document.querySelectorAll(".account-row input:checked").length'), 3);
+  await writeFile(join(directory, 'batch-session-selection.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  const beforeBatch = localLaunches.length;
+  await click('批量更新 Session（3）');
+  await wait('document.querySelector("dialog")?.innerText.includes("等待登录后自动更新")');
+  assert.equal(localLaunches.length, beforeBatch + 1, '首个账号结束前不能启动后续账号');
+  assert.equal(localLaunches.at(-1).environment_id.endsWith(':account:1'), true);
+  batchStates.set(1, { state: 'ip_check_failed', message: '模拟出口 IP 检查失败' });
+  await wait('document.querySelector("dialog .local-browser-session")?.innerText.includes("batch2@test.local")');
+  await wait('document.querySelector("dialog .local-browser-session")?.innerText.includes("等待登录后自动更新")');
+  assert.equal(localLaunches.length, beforeBatch + 2);
+  assert.ok(await evaluate('document.querySelector(".batch-session-results").innerText.includes("模拟出口 IP 检查失败")'));
+  const batchUpdatedAt = new Date().toISOString();
+  batchRows[1].session_updated_at = batchUpdatedAt;
+  batchStates.set(2, { state: 'closed', session_update: { state: 'saved', session_updated_at: batchUpdatedAt, message: '已保存' } });
+  // 第三个账号原本已打开，批量流程必须报错且保留原窗口，不再启动第二份。
+  batchStates.set(3, { state: 'opened' });
+  await wait('document.querySelector("dialog")?.innerText.includes("全部处理完毕")');
+  assert.ok(await evaluate('document.querySelector("dialog").innerText.includes("成功 1，失败 2")'));
+  await writeFile(join(directory, 'batch-session-results.png'), Buffer.from((await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId)).data, 'base64'));
+  assert.equal(localLaunches.length, beforeBatch + 2);
+  assert.ok(localLaunches.slice(beforeBatch).every(input => input.refresh_session && input.assistant_token === 'batch-test-assistant'));
+  assert.equal(otpHeaders.at(-1), undefined);
+  await click('完成');
+  await wait('!document.querySelector("dialog")');
+  assert.ok(await evaluate('Array.from(document.querySelectorAll(".account-row")).find(row => row.innerText.includes("batch2@test.local")).innerText.includes("不足 1 天")'));
+  // 更换筛选条件清除勾选，避免将隐藏的账号带入下一次批量更新。
+  await fill('input[aria-label=搜索账号]', 'batch2');
+  await wait('document.querySelectorAll(".account-row").length === 1');
+  assert.equal(await evaluate('document.querySelector(".account-actions-heading button").disabled'), true);
+  await fill('input[aria-label=搜索账号]', '');
+  await wait('document.querySelectorAll(".account-row").length === 3');
+  batchStates.clear();
+  await evaluate('document.querySelector("input[aria-label=全选当前页账号]").click()');
+  await click('批量更新 Session（3）');
+  await wait('document.querySelector("dialog")?.innerText.includes("等待登录后自动更新")');
+  const beforeStop = localLaunches.length;
+  await click('停止后续更新');
+  batchStates.set(1, { state: 'closed', session_update: { state: 'saved', session_updated_at: batchUpdatedAt, message: '已保存' } });
+  await delay(2200);
+  assert.equal(localLaunches.length, beforeStop, '停止后即使当前账号完成也不能启动下一项');
+  await click('完成');
+  batchRows = null; batchStates.clear();
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelectorAll(".account-row").length === 1');
   await navigateAdmin('proxies');
   await wait('Boolean(document.querySelector(".proxy-row"))');
   const deletesBefore = localRequests.filter(request => request.method === 'DELETE').length;
@@ -1986,8 +2055,9 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   const auditPayload=JSON.stringify(adminActivities);
   for (const secret of ['proxy-secret','4242424242424242','local-test-access']) assert.equal(auditPayload.includes(secret),false);
   assert.ok(adminActivities.every(e=>e.page.startsWith('/admin/') && !e.page.includes('?')));
-  assert.equal(otpHeaders.length, 5);
-  assert.ok(otpHeaders.slice(0, -1).every(code=>code === '654321'));
+  assert.equal(otpHeaders.length, 8);
+  assert.ok(otpHeaders.slice(0, 4).every(code=>code === '654321'));
+  assert.ok(otpHeaders.slice(4).every(code=>code === undefined), '单个和批量自动更新都无需验证码');
   assert.equal(requests.some(url => new URL(url).pathname === '/api/accounts/1/browser'), false, '两个浏览器入口必须共用本机环境');
   assert.deepEqual(errors, []);
   t.diagnostic(`页面截图：${directory}`);

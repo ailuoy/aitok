@@ -3,7 +3,7 @@ import LauncherConnection from './LauncherConnection';
 import { browserEnvironmentID, launcherRequest, openLocalAccount } from './localBrowser';
 import useLauncherPort from './useLauncherPort';
 
-export default function SessionRefresh({ account, userID, token, onStatus, onUpdated, onComplete, onManual }) {
+export default function SessionRefresh({ account, userID, token, onStatus, onUpdated, onComplete, onManual, onFailure }) {
   const port = useLauncherPort();
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
@@ -12,9 +12,12 @@ export default function SessionRefresh({ account, userID, token, onStatus, onUpd
   const [starting, setStarting] = useState(false);
   const startingRef = useRef(false);
   const autoStarted = useRef(false);
-  const callbacks = useRef({ onStatus, onUpdated, onComplete });
-  callbacks.current = { onStatus, onUpdated, onComplete };
+  const mounted = useRef(true);
+  const callbacks = useRef({ onStatus, onUpdated, onComplete, onFailure });
+  callbacks.current = { onStatus, onUpdated, onComplete, onFailure };
   const path = '/browsers/' + encodeURIComponent(browserEnvironmentID(userID, account.id));
+
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
   useEffect(() => {
     if (autoStarted.current) return;
@@ -38,12 +41,21 @@ export default function SessionRefresh({ account, userID, token, onStatus, onUpd
         if (next.state === 'closed') {
           setTask(null);
           if (next.session_update?.state === 'saved') callbacks.current.onComplete();
-          else setError(next.session_update?.message || '浏览器已关闭，未完成 Session 更新');
+          else {
+            const message = next.session_update?.message || '浏览器已关闭，未完成 Session 更新';
+            setError(message); callbacks.current.onFailure?.(message);
+          }
+          return;
+        }
+        if (callbacks.current.onFailure && (['failed', 'cancelled'].includes(next.session_update?.state) || ['ip_check_failed', 'rejected'].includes(next.state))) {
+          setTask(null);
+          callbacks.current.onFailure(next.session_update?.state === 'failed' ? next.session_update.message : next.message || 'Session 更新未完成');
           return;
         }
       } catch (error) {
         if (controller.signal.aborted) return;
         setError(error.message);
+        if (callbacks.current.onFailure) { setTask(null); callbacks.current.onFailure(error.message); return; }
       }
       timer = setTimeout(poll, 2000);
     };
@@ -56,9 +68,10 @@ export default function SessionRefresh({ account, userID, token, onStatus, onUpd
     startingRef.current = true; setStarting(true); setError('');
     try {
       const next = await openLocalAccount(account, userID, token, undefined, { loadAssistant: false, refreshSession: true });
+      if (!mounted.current) return;
       setStatus(next); callbacks.current.onStatus(account.id, next); setTask({ port });
-    } catch (error) { setError(error.message); }
-    finally { startingRef.current = false; setStarting(false); }
+    } catch (error) { if (mounted.current) { setError(error.message); callbacks.current.onFailure?.(error.message); } }
+    finally { startingRef.current = false; if (mounted.current) setStarting(false); }
   }
 
   async function close() {
@@ -77,7 +90,7 @@ export default function SessionRefresh({ account, userID, token, onStatus, onUpd
     {error && <p className="error" role="alert">{error}</p>}
     {!task && !starting && <button className="primary" onClick={start}>重新更新 Session</button>}
     {task && <button className="outline" disabled={closing} onClick={close}>{closing ? '正在关闭…' : '关闭浏览器'}</button>}
-    {!task && !starting && <button className="text-btn" onClick={onManual}>手动导入 Session</button>}
+    {!task && !starting && onManual && <button className="text-btn" onClick={onManual}>手动导入 Session</button>}
     {!task && !starting && <LauncherConnection />}
   </div>;
 }

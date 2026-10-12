@@ -37,6 +37,7 @@ import { accountProxyPage } from './accountProxyPage.mjs';
 import RenewalCountdown from './RenewalCountdown';
 import { formatUTC8 } from './time';
 import SessionRefresh from './SessionRefresh';
+import BatchSessionRefresh from './BatchSessionRefresh';
 import SessionUpdateAge from './SessionUpdateAge';
 
 import useLauncherPort from './useLauncherPort';
@@ -44,6 +45,9 @@ import useLauncherPort from './useLauncherPort';
 export default function Dashboard({ user, token, accounts, setAccounts, route }) {
   const localPort = useLauncherPort();
   const [pageSize, setPageSize] = useState(20);
+  const [selectedAccounts, setSelectedAccounts] = useState(() => new Set());
+  const [batchAccounts, setBatchAccounts] = useState(null);
+  useEffect(() => { setBatchAccounts(null); }, [user?.id, token, localPort]);
   const [highlightedAccounts, setHighlightedAccounts] = useState(() => new Set());
   function toggleAccountHighlight(event, id) {
     if (!event.currentTarget.contains(event.target) || event.target.closest('button, a, input, textarea, select, [role="combobox"], [contenteditable]')) return;
@@ -97,6 +101,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   const [groupFilter, setGroupFilter] = useState('all');
   const [renewalStatus, setRenewalStatus] = useState('');
   const [paymentCardFilter, setPaymentCardFilter] = useState('');
+  useEffect(() => { setSelectedAccounts(new Set()); }, [user?.id, tab, accountPageIndex, pageSize, accountQuery, groupFilter, renewalStatus, paymentCardFilter, accountSort]);
   const filterCards = new Map(paymentCards.map(card => [String(card.id), { value: String(card.id), label: `${card.label} · •••• ${card.last4}` }]));
   for (const account of accounts) {
     const id = String(account.payment_card_id || '');
@@ -253,6 +258,14 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
   const activeCount = accounts.filter(a => a.renewal_date && a.renewal_date > today).length;
   const displayedPage = admin && accountSort.key === 'proxy' ? accountProxyPage(accounts, { config: proxyConfig, query: accountQuery, group: groupFilter, paymentCard: paymentCardFilter, renewalStatus, today, direction: accountSort.direction, page: accountPageIndex, pageSize }) : accountPage;
   const visibleAccounts = displayedPage.accounts;
+  const selectedVisibleAccounts = visibleAccounts.filter(account => selectedAccounts.has(account.id));
+  function selectAccount(id, checked) {
+    setSelectedAccounts(current => {
+      const next = new Set(current);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
   const localBrowsers = useLocalBrowsers(admin ? accounts : [], user?.id, token, setAccounts);
   return <main className="dashboard">
     {admin && tab === 'accounts' && <div className="stats"><div><span>{admin ? '全部账号' : '我的账号'}</span><b>{accounts.length}</b></div><div><span>有效会员账号</span><b>{activeCount}</b></div><div><span>我的钱包</span><button className="balance-link" onClick={() => navigate('/admin/wallet')}><b>{wallet?.balance ?? '—'}</b> 代币 <Coins size={16} /></button></div></div>}
@@ -264,8 +277,9 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
       <div className="section-title account-list-title"><h2>{admin ? '全部 ChatGPT 账号' : '你的 ChatGPT 账号'}</h2><div className="browser-buttons">{admin && <BlankBrowser key={localPort} port={localPort} token={token} />}<button className="text-btn" onClick={() => Promise.all([refresh(), refreshProxies()]).catch(e => setError(e.message))}><RefreshCw size={15} />刷新</button>{admin && <BrowserStatusRefresh className="small" reminderKey={`${localPort}:${visibleAccounts.map(account => account.id).join(',')}`} disabled={localBrowsers.refreshing} onClick={() => localBrowsers.refresh(visibleAccounts).then(() => setError('')).catch(e => setError(e.message))}>{localBrowsers.refreshing ? '正在刷新…' : '刷新浏览器状态'}</BrowserStatusRefresh>}<button className="primary small" onClick={() => open('add')}><Plus size={15} />添加账号</button></div></div>
       <div className="address-search"><input aria-label="搜索账号" placeholder="搜索账号邮箱或名称" value={accountQuery} onChange={e=>setAccountQuery(e.target.value)}/>{admin && <><button className="outline small" onClick={()=>downloadCSV('/accounts/export?'+new URLSearchParams({q:accountQuery,group:groupFilter==='all'?'':groupFilter===''?'none':groupFilter,renewal_status:renewalStatus,payment_card_id:paymentCardFilter,sort:accountSort.key === 'proxy' ? 'id' : accountSort.key,direction:accountSort.direction}),token,'账号清单.csv').catch(e=>setError(e.message))}>导出清单</button></>}</div><div className="account-toolbar">{admin && <><Select label="筛选账号分组" value={groupFilter} onChange={setGroupFilter} options={[{ value: 'all', label: '全部分组 · ' + accounts.length }, { value: '', label: '未分组 · ' + accounts.filter(account => !account.group_id).length }, ...groups.map(group => ({ value: String(group.id), label: group.name + ' · ' + group.account_count }))]} /><button className="outline small" onClick={() => setGroupManager(true)}>管理分组</button></>}<div className="account-renewal-filters" role="group" aria-label="按续费时间筛选">{[{ value: 'safe', label: '正常（>10 天）' }, { value: 'soon', label: '即将续费（0–10 天）' }, { value: 'overdue', label: '已逾期' }].map(status => <button key={status.value} type="button" className="outline small" data-status={status.value} aria-pressed={renewalStatus === status.value} onClick={() => { setRenewalStatus(current => current === status.value ? '' : status.value); setAccountPageIndex(1); }}>{status.label}</button>)}</div>{admin && <Select label="按付款卡筛选账号" value={paymentCardFilter} onChange={setPaymentCardFilter} options={[{ value: '', label: '全部付款卡' }, { value: 'none', label: '未绑定付款卡' }, ...filterCards.values()]} searchPlaceholder="搜索卡片名称或尾号…" />}<span className="muted">{displayedPage.total} 个账号</span></div>
       {admin && proxyError && <p className="error" role="alert">共享代理加载失败：{proxyError}<button className="text-btn" onClick={refreshProxies}>重试</button></p>}
-      <DataTable searchQuery={accountQuery} label="ChatGPT 账号列表" className={admin ? 'accounts-table' : 'accounts-table user-accounts-table'} sort={accountSort} onSort={sortAccounts} stickyActions={admin} columns={[{ label: '账号', key: 'account' }, '累计消费 USD', ...(admin ? [{ label: '所属用户', key: 'owner' }, '产品选型', { label: '分组', key: 'group' }, { label: 'SOCKS5', key: 'proxy', disabled: !proxyConfig }, { label: '续订日期', key: 'renewal_date' }, { label: '是否续订', key: 'renewal_enabled' }, '状态', { label: '付款卡', key: 'payment_card' }, '账单地址'] : [{ label: '续费日期', key: 'renewal_date' }, '套餐类型']), { label: '上次登录（UTC+8）', key: 'last_login_at' }, ...(admin ? ['距上次更新 Session（UTC+8）', '操作'] : [])]} empty={!visibleAccounts.length && (accounts.length ? (accountQuery || renewalStatus || paymentCardFilter ? '没有匹配的账号。' : '此分组暂无账号。') : <div className="empty"><KeyRound size={24} /><h3>还没有添加账号</h3><p>粘贴 Session JSON，保存你的 ChatGPT 账号。</p><button className="outline" onClick={() => open('add')}>添加第一个账号</button></div>)}>
+      <DataTable searchQuery={accountQuery} label="ChatGPT 账号列表" className={admin ? 'accounts-table' : 'accounts-table user-accounts-table'} sort={accountSort} onSort={sortAccounts} stickyActions={admin} columns={[...(admin ? [{ id: 'selection', className: 'account-selection', label: <input type="checkbox" aria-label="全选当前页账号" checked={visibleAccounts.length > 0 && selectedVisibleAccounts.length === visibleAccounts.length} ref={element => { if (element) element.indeterminate = selectedVisibleAccounts.length > 0 && selectedVisibleAccounts.length < visibleAccounts.length; }} disabled={!visibleAccounts.length} onChange={event => setSelectedAccounts(event.target.checked ? new Set(visibleAccounts.map(account => account.id)) : new Set())} /> }] : []), { label: '账号', key: 'account' }, '累计消费 USD', ...(admin ? [{ label: '所属用户', key: 'owner' }, '产品选型', { label: '分组', key: 'group' }, { label: 'SOCKS5', key: 'proxy', disabled: !proxyConfig }, { label: '续订日期', key: 'renewal_date' }, { label: '是否续订', key: 'renewal_enabled' }, '状态', { label: '付款卡', key: 'payment_card' }, '账单地址'] : [{ label: '续费日期', key: 'renewal_date' }, '套餐类型']), { label: '上次登录（UTC+8）', key: 'last_login_at' }, ...(admin ? ['距上次更新 Session（UTC+8）', { id: 'actions', label: <div className="account-actions-heading"><span>操作</span><button type="button" className="outline small" disabled={!selectedVisibleAccounts.length || Boolean(batchAccounts)} onClick={() => setBatchAccounts([...selectedVisibleAccounts])}>批量更新 Session{selectedVisibleAccounts.length ? `（${selectedVisibleAccounts.length}）` : ''}</button></div> }] : [])]} empty={!visibleAccounts.length && (accounts.length ? (accountQuery || renewalStatus || paymentCardFilter ? '没有匹配的账号。' : '此分组暂无账号。') : <div className="empty"><KeyRound size={24} /><h3>还没有添加账号</h3><p>粘贴 Session JSON，保存你的 ChatGPT 账号。</p><button className="outline" onClick={() => open('add')}>添加第一个账号</button></div>)}>
         {visibleAccounts.map(account => <tr className={'account-row' + (highlightedAccounts.has(account.id) ? ' account-row-highlighted' : '')} key={account.id} onDoubleClick={event => toggleAccountHighlight(event, account.id)}>
+          {admin && <td className="account-selection"><input type="checkbox" aria-label={`选择账号 ${account.email}`} checked={selectedAccounts.has(account.id)} onChange={event => selectAccount(account.id, event.target.checked)} /></td>}
           <td className="table-text"><strong>{account.label}</strong>{account.label !== account.email && <small className="cell-secondary">{account.email}</small>}{admin && <AccountNotes account={account} token={token} onChange={updateAccount} onUpdateSession={() => open('session', account)} />}</td>
           <td><strong>{formatCardUSD(account.spent_usd_minor || 0)}</strong></td>
           {admin && <td className="table-text"><div className="account-owner"><span>{account.owner_email || '—'}</span><button className="text-btn account-owner-bind" aria-label={`绑定账号 ${account.email} 的所属用户`} onClick={() => setOwnerAccount(account)}>绑定用户</button></div></td>}
@@ -283,6 +297,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
         </tr>)}
       </DataTable><Pagination page={accountPageIndex} pageSize={pageSize} total={displayedPage.total} onPageChange={setAccountPageIndex} onPageSizeChange={setPageSize} disabled={false} />
     </section>}
+    {batchAccounts && admin && <BatchSessionRefresh accounts={batchAccounts} userID={user.id} token={token} onStatus={localBrowsers.update} onUpdated={updateAccount} onClose={() => setBatchAccounts(null)} />}
     {quickOrderAccount && admin && <RechargeManager key={quickOrderAccount.id} token={token} quickAccount={quickOrderAccount} onQuickClose={() => setQuickOrderAccount(null)} onQuickCreated={() => {
       setQuickOrderAccount(null); setMessage('月订单已创建，续订日期已增加一个月');
       request('/accounts', token).then(data => { setAccounts(data.accounts); setError(''); }).catch(error => setError('订单已创建，账号列表刷新失败：' + error.message));

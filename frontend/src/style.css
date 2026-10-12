@@ -353,6 +353,11 @@ button,input,textarea{font-family:inherit}
 .account-usage-status>.text-btn{justify-self:start;padding:0;font-size:11px}
 .account-discard-reason{margin:0;max-width:220px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:11px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .accounts-table{min-width:1790px}.proxy-table{min-width:1120px}.address-table{min-width:1050px}
+.accounts-table .account-selection{width:48px;min-width:48px;text-align:center}
+.account-selection input[type=checkbox]{width:18px;height:18px;margin:0;vertical-align:middle;accent-color:var(--accent);cursor:pointer}
+.account-actions-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.batch-session-results{display:grid;gap:10px;padding:0;list-style:none;max-height:240px;overflow:auto}
+.batch-session-results li{display:grid;gap:4px;margin:0;overflow-wrap:anywhere}
 .table-sort{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;white-space:nowrap;cursor:pointer}
 .table-sort:hover,.table-sort:focus-visible{color:var(--accent)}
 .table-sort:focus-visible{outline:2px solid currentColor;outline-offset:4px;border-radius:2px}
