@@ -110,7 +110,7 @@ CLOUDFLARE_EMAIL_API_BASE_URL=https://api.cloudflare.com/client/v4
 
 管理员在账号列表点击“打开账号”，通过本机桌面助手使用已保存的 Session JSON 打开独立 ChatGPT 窗口；原有登录鉴权和逐次 2FA 保持生效。没有保存 Session 的账号会禁用此按钮。网站后端可以继续运行在 Docker 中。
 
-1. 部署匹配的前后端后，在访问网页的电脑上安装 AiTok 助手和 Chrome / Edge。桌面助手内置运行环境，不需要 Node.js、项目源码或终端；macOS 提供 Apple Silicon / Intel 安装包，Windows 提供 x64 安装程序。打包与安装说明见 [desktop/README.md](desktop/README.md)。
+1. 部署匹配的前后端后，在访问网页的电脑上安装 AiTok 助手和 Chrome / Edge。桌面助手内置运行环境，不需要 Node.js、项目源码或终端；macOS 仅打包 Apple Silicon ARM64，Windows 提供 x64 安装程序，各自包含生产版和测试版。打包与安装说明见 [desktop/README.md](desktop/README.md)。
 2. 分别安装线上版或测试版：线上版固定连接 `https://toktopup.com`（本机端口 `15683`），测试版固定连接 `http://localhost:15680`（本机端口 `15684`）。点击「授权登录」，在后台登录并确认后，助手显示登录账号并启动站点。两版可同时运行，配置与加密登录状态独立；退出助手登录会关闭对应账号窗口，后台打开账号仍需逐次 2FA。
 3. 在后台点击“打开账号”。窗口同时打开 `https://api.ipify.org/` 和 `https://cleanip.io/`，通过 ipify 读取浏览器实际出口 IP；与所选 SOCKS5 主机 IP 一致后，保留 IP 标签并新开 `https://chatgpt.com/#settings/Billing`。直连账号获取有效 IP 后直接继续。IP 不一致或获取失败时保留窗口并提示原因，不自动打开 ChatGPT。不需要配对密钥，也无需在弹窗中再次点击；浏览器询问本地网络访问权限时选择允许。
 4. 浏览器打开后，账号卡片按钮自动变为“关闭浏览器”，点击即可结束该环境；也可在弹窗点击“关闭账号窗口”。刷新网页会同步现有窗口状态，手动关闭窗口后按钮自动恢复“打开账号”。更新 Session 或代理后重新打开即可生效。页面刷新后无需重新配对。关闭浏览器后，管理弹窗会自动收起。

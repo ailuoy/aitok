@@ -1,5 +1,10 @@
 # 项目维护规范
 
+## 桌面助手打包范围
+
+- 后续仅打包 macOS ARM64 的 `.dmg` 和 Windows x64 的 `.exe`，各自生成 `production`、`test` 两个环境，共四类安装包；不再生成 macOS x64 安装包。
+- 使用 `desktop` 中的 `npm run dist:mac`、`npm run dist:win`，架构由脚本固定，默认包含两个环境。版本号沿用 `desktop/package.json`，不因打包架构调整自动升级。
+
 ## 数据库表结构（强制）
 
 - 每张表必须包含独立的 `id` 字段，统一使用 `BIGSERIAL PRIMARY KEY`，保证每行数据都有非空、表内唯一且创建后不变的 ID；业务字段主键或联合主键不能替代 `id`。业务唯一性及幂等约束须通过独立的唯一约束或唯一索引继续保留。

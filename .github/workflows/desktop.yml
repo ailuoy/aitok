@@ -12,9 +12,6 @@ jobs:
           - os: macos-latest
             platform: mac
             arch: arm64
-          - os: macos-latest
-            platform: mac
-            arch: x64
           - os: windows-latest
             platform: win
             arch: x64
@@ -32,7 +29,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npm run test:smoke
-      - run: npm run dist:${{ matrix.platform }} -- --${{ matrix.arch }}
+      - run: npm run dist:${{ matrix.platform }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4

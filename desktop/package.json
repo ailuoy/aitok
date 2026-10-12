@@ -13,8 +13,8 @@
     "test": "node --test test/*.test.mjs",
     "test:smoke": "npm run build && electron test/smoke.mjs",
     "pack": "npm run build && electron-builder --dir",
-    "dist:mac": "node package.mjs --mac",
-    "dist:win": "node package.mjs --win"
+    "dist:mac": "node package.mjs --mac --arm64",
+    "dist:win": "node package.mjs --win --x64"
   },
   "devDependencies": {
     "electron": "44.4.1",

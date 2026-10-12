@@ -137,7 +137,11 @@ export class SessionBrowser extends EventEmitter {
         ...(proxy ? [`--proxy-server=${environment.proxy.url}`] : ['--no-proxy-server']),
         ...(this.headless ? ['--headless=new'] : []), 'about:blank',
       ];
-      const child = spawn(this.chrome, args, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], windowsHide: false });
+      // Intel 版助手在 Apple Silicon 上会让通用版 Chrome 继承 Rosetta 架构。
+      // 显式优先原生 ARM；Intel 电脑或仅有 Intel 的浏览器仍可回退 x86_64。
+      const command = process.platform === 'darwin' ? '/usr/bin/arch' : this.chrome;
+      const launchArgs = process.platform === 'darwin' ? ['-arm64', '-x86_64', this.chrome, ...args] : args;
+      const child = spawn(command, launchArgs, { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], windowsHide: false });
       environment.child = child;
       const cleanup = () => {
         if (environment.cleaned) return;

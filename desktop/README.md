@@ -1,6 +1,6 @@
 # AiTok 桌面助手
 
-支持 macOS（Apple Silicon / Intel）与 Windows x64。应用内置 Electron / Node 运行环境，使用电脑上安装的 Chrome 或 Edge，复用项目现有 Session、SOCKS5、账号助手与操作记录功能。
+安装包仅提供 macOS Apple Silicon（ARM64）与 Windows x64，各自包含测试版和生产版。应用内置 Electron / Node 运行环境，使用电脑上安装的 Chrome 或 Edge，复用项目现有 Session、SOCKS5、账号助手与操作记录功能。
 
 ## 0.0.6
 
@@ -40,8 +40,9 @@
 
 ## 安装与使用
 
-- macOS：选择对应 CPU 架构的 DMG，将「AiTok 助手」拖到 Applications，再打开。
+- macOS Apple Silicon（M 系列）：使用 `mac-arm64.dmg`，将「AiTok 助手」拖到 Applications，再打开。
 - Windows：运行 x64 `.exe` 安装程序，按向导完成安装。
+- 后续不再打包 macOS Intel 版。Apple Silicon 误装旧 Intel 版会通过 Rosetta 转译运行；浏览器启动流程显式优先 ARM 架构，并保留 Intel 回退，避免通用版 Chrome 继承助手的转译架构。
 - 测试版固定连接 `http://localhost:15680`（助手端口 `15684`），线上版固定连接 `https://toktopup.com`（助手端口 `15683`）。打开应用后点击「授权登录」，在后台完成登录并确认授权，再返回助手使用。访问 `127.0.0.1` 与 `localhost` 属于不同来源，后台地址须与对应版本一致。
 - 后台须同步部署本轮前后端，提供 `/desktop/authorize` 授权页及 `/api/desktop-auth`、`/api/desktop-auth/session` 接口；本次授权功能无需数据库结构迁移。
 - 在后台网页点击“打开账号”。若修改助手端口，在网页账号弹窗或 SOCKS5 管理的「本机助手连接」中保存相同端口，可点击“测试连接”。浏览器询问本地网络权限时选择允许。
@@ -70,12 +71,16 @@ npm start
 ```bash
 npm test                 # 隔离配置、启停、多站点和持久化测试
 npm run test:smoke       # 在有桌面的环境测试真实 Electron 窗口，不使用业务账号
-npm run dist:mac -- --arm64 # 一次生成测试版、线上版两个 DMG
-npm run dist:mac -- --x64
-npm run dist:win -- --x64
+npm run dist:mac           # 固定 ARM64，生成测试版、生产版两个 DMG
+npm run dist:win           # 固定 x64，生成测试版、生产版两个 EXE
 ```
 
-默认打包测试版和线上版；可加 `--channel=test` 或 `--channel=production` 单独生成一个环境。安装包名称含 `test` / `production`，当前版本号为 0.0.6。
+默认打包测试版和生产版；可加 `-- --channel=test` 或 `-- --channel=production` 单独生成一个环境。当前版本号为 0.0.6，每次完整打包仅生成以下四类产物，版本号随 `package.json` 更新：
+
+- `AiTok-Assistant-0.0.6-production-mac-arm64.dmg`
+- `AiTok-Assistant-0.0.6-test-mac-arm64.dmg`
+- `AiTok-Assistant-0.0.6-production-win-x64.exe`
+- `AiTok-Assistant-0.0.6-test-win-x64.exe`
 
 `desktop/dist` 只接收最终安装包：macOS 仅生成 `.dmg`，Windows 生成 `.exe`。不生成 ZIP、DMG 差分更新文件，也不创建 `verified` 目录或额外校验清单。发布打包使用独立临时目录，成功后复制安装包，结束时清理临时目录；不会将解包目录、运行库缓存或调试文件放入 `dist`。当前无自动更新功能。打包失败不会覆盖已有安装包，已有其他版本和平台的安装包保留。
 
