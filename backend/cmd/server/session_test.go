@@ -113,6 +113,13 @@ func TestAccountSessionIntegration(t *testing.T) {
 	call("PATCH", path+"/session", 3, map[string]string{"session_json": strings.ReplaceAll(raw, "2099", "2020")}, 200)
 	call("POST", path+"/browser-session", 3, nil, 422)
 	call("POST", path+"/browser-session?mode=refresh", 3, nil, 200)
+	if _, err := db.Exec(`UPDATE chatgpt_accounts SET usage_status='discarded' WHERE id=$1`, result.Account.ID); err != nil {
+		t.Fatal(err)
+	}
+	call("POST", path+"/browser-session?mode=refresh", 3, nil, 409)
+	if _, err := db.Exec(`UPDATE chatgpt_accounts SET usage_status='in_use' WHERE id=$1`, result.Account.ID); err != nil {
+		t.Fatal(err)
+	}
 	call("POST", path+"/browser-session?mode=refresh", 1, nil, 403)
 	// 自动更新免 TOTP，普通打开仍要求验证。
 	r := httptest.NewRequest("POST", path+"/browser-session?mode=refresh", nil)

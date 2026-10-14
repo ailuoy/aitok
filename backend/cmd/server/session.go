@@ -179,6 +179,17 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "读取账号失败"}, 500)
 		return
 	}
+	if refresh {
+		var usageStatus string
+		if err = s.db.QueryRowContext(r.Context(), `SELECT COALESCE(to_jsonb(a)->>'usage_status','in_use') FROM chatgpt_accounts a WHERE a.id=$1 AND a.deleted_at IS NULL`, accountID).Scan(&usageStatus); err != nil {
+			reply(w, map[string]string{"error": "读取账号状态失败"}, 500)
+			return
+		}
+		if usageStatus == "discarded" {
+			reply(w, map[string]string{"error": "废弃账号不参与自动更新 Session"}, 409)
+			return
+		}
+	}
 	var raw string
 	stored, decodeErr := decodeAccountCredentials(encrypted)
 	if launch {
