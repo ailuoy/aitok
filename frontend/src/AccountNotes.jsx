@@ -18,7 +18,7 @@ export default function AccountNotes({ account, token, onChange, onUpdateSession
   return <div className="account-notes">
     {account.notes && <p className="account-notes-preview">{account.notes}</p>}
     <button className="text-btn" aria-label={`编辑 ${account.email} 的备注`} onClick={() => { setNotes(account.notes || ''); setError(''); setEditing(true); }}>{account.notes ? '编辑备注' : '添加备注'}</button>
-    {editing && <Dialog title="账号备注" className="account-notes-dialog" onClose={() => { if (!busy) setEditing(false); }}>
+    {editing && <Dialog accountID={account.id} title="账号备注" className="account-notes-dialog" onClose={() => { if (!busy) setEditing(false); }}>
       <form onSubmit={save}><p className="muted">{account.label} · {account.email}</p>
         <label>备注<textarea name="notes" rows={12} maxLength={20000} value={notes} onChange={event => setNotes(event.target.value)} placeholder="记录账号用途、操作记录及其他信息，支持多行文本" autoFocus disabled={busy} /></label>
         <small className="muted">{Array.from(notes).length} / 20000 字，可留空</small>

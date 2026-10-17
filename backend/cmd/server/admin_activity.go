@@ -29,11 +29,12 @@ var auditControls = map[string]string{
 }
 
 type adminActivity struct {
-	Key     string `json:"request_key"`
-	Page    string `json:"page"`
-	Kind    string `json:"kind"`
-	Control string `json:"control"`
-	Result  string `json:"result"`
+	Key       string `json:"request_key"`
+	Page      string `json:"page"`
+	Kind      string `json:"kind"`
+	Control   string `json:"control"`
+	Result    string `json:"result"`
+	AccountID int64  `json:"account_id,omitempty"`
 }
 
 // 客户端只允许提交固定动作枚举；身份、时间及结果来源由服务端确定。
@@ -78,12 +79,32 @@ func (s *Server) adminActivity(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
+	if in.AccountID < 0 || (in.AccountID > 0 && in.Kind == "page_view") {
+		w.WriteHeader(400)
+		return
+	}
+	if in.AccountID > 0 {
+		var allowed bool
+		err = s.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL AND (user_id=$2 OR $3))`, in.AccountID, user, s.permitted(r.Context(), user, "accounts")).Scan(&allowed)
+		if err != nil {
+			operationError(w, err)
+			return
+		}
+		if !allowed {
+			w.WriteHeader(403)
+			return
+		}
+	}
 	if !s.allowAttempt(r.Context(), "admin-activity:"+strconv.FormatInt(user, 10), 300, time.Minute) {
 		w.Header().Set("Retry-After", "60")
 		w.WriteHeader(429)
 		return
 	}
-	data, _ := json.Marshal(map[string]any{"source": "browser", "page": in.Page, "kind": in.Kind, "control": in.Control, "result": in.Result})
+	payload := map[string]any{"source": "browser", "page": in.Page, "kind": in.Kind, "control": in.Control, "result": in.Result}
+	if in.AccountID > 0 {
+		payload["account_id"] = in.AccountID
+	}
+	data, _ := json.Marshal(payload)
 	var id int64
 	err = s.db.QueryRowContext(r.Context(), `INSERT INTO operation_events(actor_id,entity_type,entity_id,action,request_key,after_data) VALUES($1,'admin_ui',$1,$2,$3,$4) ON CONFLICT(entity_type,entity_id,request_key) DO NOTHING RETURNING id`, user, action, in.Key, data).Scan(&id)
 	if err == sql.ErrNoRows {

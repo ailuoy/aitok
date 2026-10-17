@@ -213,7 +213,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         data=url.pathname==='/api/orders/1'?{order:rechargeOrders[0],events:operationWrites.filter(v=>v.action).map((input,index)=>({id:index+1,actor_id:3,action:input.action,created_at:'2026-09-15T00:00:00Z',after_data:{input}}))}:{orders:rechargeOrders,sources:[...new Set(rechargeOrders.map(o=>o.order_source).filter(Boolean))],total:rechargeOrders.length,can_manage:true,can_finance:true,can_refund:true};
       } else if (url.pathname==='/api/notices') data={notices:[]};
       else if (url.pathname==='/api/audit') data={events:[
-        {id:2,actor:'audit@example.com',actor_id:3,entity_type:'admin_request',entity_id:0,action:'DELETE /api/accounts/1',created_at:'2026-09-15T00:00:00Z',after_data:{source:'server',page:'/admin/accounts',resource:'/api/accounts/1',result:'failure',status:403}},
+        {id:2,actor:'audit@example.com',actor_id:3,account_email:account.email,entity_type:'admin_request',entity_id:0,action:'DELETE /api/accounts/1',created_at:'2026-09-15T00:00:00Z',after_data:{source:'server',page:'/admin/accounts',resource:'/api/accounts/1',result:'failure',status:403}},
         {id:1,actor:'audit@example.com',actor_id:3,entity_type:'admin_ui',entity_id:3,action:'访问页面',created_at:'2026-09-15T00:00:00Z',after_data:{source:'browser',page:'/admin/accounts',result:'visited'}},
       ]};
       else if (url.pathname==='/api/proxy-activity') data={events:[],records:[]};
@@ -2038,6 +2038,12 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   for (const text of ['前端上报','后端执行','已访问','失败','audit@example.com','/admin/accounts']) {
     assert.equal(await evaluate(`document.querySelector('.admin-content').innerText.includes(${JSON.stringify(text)})`),true);
   }
+  assert.ok(await evaluate('Array.from(document.querySelectorAll("th")).some(th => th.textContent === "账号邮箱")'));
+  assert.ok(await evaluate(`document.querySelector('.admin-content').innerText.includes(${JSON.stringify(account.email)})`));
+  await fill('input[aria-label="按账号邮箱搜索审计"]', 'chat@example.com');
+  await wait('document.querySelector("input[aria-label=\\"按账号邮箱搜索审计\\"]").value === "chat@example.com"');
+  await delay(200);
+  assert.ok(requests.some(raw => { const url = new URL(raw); return url.pathname === '/api/audit' && url.searchParams.get('account_email') === 'chat@example.com' && url.searchParams.get('page') === '1'; }));
   const auditShot = await cdp.send('Page.captureScreenshot', { format: 'png' }, sessionId);
   await writeFile(join(directory, 'admin-audit.png'), Buffer.from(auditShot.data, 'base64'));
   await cdp.send('Page.navigate', { url: 'http://127.0.0.1:' + server.address().port + '/wallet?reference=legacy' }, sessionId);
@@ -2048,10 +2054,12 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.ok(adminActivities.some(e => e.kind==='page_view' && e.page==='/admin/accounts'));
   assert.ok(adminActivities.some(e => e.kind==='page_view' && e.page==='/admin/orders'));
   assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='proxy_test' && e.result==='failure'));
-  assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='open_browser' && e.result==='success'));
-  assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='browser_fingerprint' && e.result==='success'));
+  assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='open_browser' && e.result==='success' && e.account_id===1));
+  assert.ok(adminActivities.some(e => e.kind==='local_request' && e.control==='browser_fingerprint' && e.result==='success' && e.account_id===1));
+  assert.ok(adminActivities.some(e => e.kind==='click' && e.control==='select' && e.account_id===1));
   assert.ok(adminActivities.some(e => e.kind==='click' && e.control==='delete'));
-  assert.ok(adminActivities.every(e=>Object.keys(e).every(k=>['request_key','page','kind','control','result'].includes(k))));
+  assert.ok(adminActivities.every(e=>Object.keys(e).every(k=>['request_key','page','kind','control','result','account_id'].includes(k))));
+  assert.ok(adminActivities.every(e=>e.account_id===undefined || (Number.isSafeInteger(e.account_id) && e.account_id>0)));
   const auditPayload=JSON.stringify(adminActivities);
   for (const secret of ['proxy-secret','4242424242424242','local-test-access']) assert.equal(auditPayload.includes(secret),false);
   assert.ok(adminActivities.every(e=>e.page.startsWith('/admin/') && !e.page.includes('?')));

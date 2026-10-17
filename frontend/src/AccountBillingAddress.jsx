@@ -34,7 +34,7 @@ function AddressBinding({ account, token, onChange, onClose }) {
     } catch (error) { setError(error.message); }
     finally { writing.current = false; setBusy(false); }
   }
-  return <Dialog title="绑定账单地址" className="account-address-dialog" onClose={() => { if (!writing.current) onClose(); }}>
+  return <Dialog accountID={account.id} title="绑定账单地址" className="account-address-dialog" onClose={() => { if (!writing.current) onClose(); }}>
     <p className="muted">{account.email}</p>
     <p>当前地址：{account.billing_address_label || (account.billing_address_id ? '原地址不可用' : '未绑定')}</p>
     <div className="browser-buttons"><button className="primary" disabled={busy} onClick={() => bind({ random: true })}>随机绑定</button><button className="outline" disabled={busy || !account.billing_address_id} onClick={() => bind({ billing_address_id: null })}>解除绑定</button></div>

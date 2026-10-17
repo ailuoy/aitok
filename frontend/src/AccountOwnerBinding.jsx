@@ -32,7 +32,7 @@ export default function AccountOwnerBinding({ account, token, onBound, onClose }
     finally { working.current = false; setBusy(''); }
   }
 
-  return <Dialog title="绑定所属用户" className="account-owner-dialog" onClose={() => { if (!working.current) onClose(); }}>
+  return <Dialog accountID={account.id} title="绑定所属用户" className="account-owner-dialog" onClose={() => { if (!working.current) onClose(); }}>
     <form onSubmit={lookup}>
       <p className="muted">账号：{account.label} · {account.email}<br />当前所属用户：{account.owner_email || '—'}</p>
       <label>注册用户邮箱<input name="owner_email" type="email" inputMode="email" autoComplete="off" spellCheck={false} autoFocus required maxLength={254} value={email} disabled={Boolean(busy)} placeholder="请输入完整的注册邮箱" onChange={event => { setEmail(event.target.value); setMatched(null); setError(''); }} /></label>

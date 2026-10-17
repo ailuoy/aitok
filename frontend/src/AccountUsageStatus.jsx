@@ -30,7 +30,7 @@ export default function AccountUsageStatus({ account, token, onChange, onError }
       {account.discard_reason && <p className="account-discard-reason" title={account.discard_reason}>{account.discard_reason}</p>}
       <button type="button" className="text-btn" disabled={busy} onClick={editReason}>{account.discard_reason ? '编辑废弃理由' : '添加废弃理由'}</button>
     </>}
-    {editing && <Dialog title={status === 'discarded' ? '废弃理由' : '废弃账号'} className="account-status-dialog" onClose={() => { if (!busy) setEditing(false); }}>
+    {editing && <Dialog accountID={account.id} title={status === 'discarded' ? '废弃理由' : '废弃账号'} className="account-status-dialog" onClose={() => { if (!busy) setEditing(false); }}>
       <form onSubmit={event => { event.preventDefault(); save('discarded', reason); }}>
         <p className="muted">{account.label} · {account.email}</p>
         <label>废弃理由（选填）<textarea name="discard_reason" rows={5} maxLength={2000} value={reason} onChange={event => setReason(event.target.value)} placeholder="填写废弃原因，支持多行文本" autoFocus disabled={busy} /></label>

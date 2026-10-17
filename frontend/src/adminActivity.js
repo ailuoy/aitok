@@ -6,7 +6,7 @@ export const adminPage = () => pagePattern.test(location.pathname) ? location.pa
 export const adminAuditHeaders = () => adminPage() ? { 'X-Aitok-Page': adminPage() } : {};
 export const activityContext = () => active && adminPage() ? { ...active, page: adminPage() } : null;
 
-// 只发送动作枚举，绝不采集输入框、选项值、按钮原文、查询参数或剪贴板。
+// 只发送动作枚举及明确标记的关联账号 ID，不采集输入值、邮箱、按钮原文或凭据。
 export async function recordAdminActivity(context, event) {
   if (!context) return;
   const body = JSON.stringify({ request_key: crypto.randomUUID(), page: context.page, ...event });
@@ -45,6 +45,11 @@ function controlFor(element) {
   return labels.find(([pattern]) => pattern.test(text))?.[1] || 'button';
 }
 
+function accountFor(element) {
+  const id = Number(element.closest('[data-audit-account-id]')?.dataset.auditAccountId);
+  return Number.isSafeInteger(id) && id > 0 ? { account_id: id } : {};
+}
+
 export function installAdminActivity(token, userID) {
   const session = { token, userID };
   active = session;
@@ -53,12 +58,12 @@ export function installAdminActivity(token, userID) {
     if (!element || element.matches(':disabled,[aria-disabled="true"]')) return;
     // 页面跳转由 page_view 记录一次；其他链接不上传目标 URL。
     if (element.matches('a') && pagePattern.test(element.getAttribute('href') || '')) return;
-    void recordAdminActivity(activityContext(), { kind: 'click', control: controlFor(element), result: 'triggered' });
+    void recordAdminActivity(activityContext(), { kind: 'click', control: controlFor(element), result: 'triggered', ...accountFor(element) });
   };
-  const submit = () => { void recordAdminActivity(activityContext(), { kind: 'submit', control: 'form', result: 'triggered' }); };
+  const submit = event => { void recordAdminActivity(activityContext(), { kind: 'submit', control: 'form', result: 'triggered', ...accountFor(event.target) }); };
   const change = event => {
     if (event.target.matches('input[type="checkbox"],input[type="radio"],select')) {
-      void recordAdminActivity(activityContext(), { kind: 'change', control: 'toggle', result: 'triggered' });
+      void recordAdminActivity(activityContext(), { kind: 'change', control: 'toggle', result: 'triggered', ...accountFor(event.target) });
     }
   };
   document.addEventListener('click', click, true);

@@ -293,13 +293,34 @@ func (s *Server) audit(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "页码无效"}, 400)
 		return
 	}
-	const filter = ` FROM operation_events e LEFT JOIN users u ON u.id=e.actor_id WHERE e.deleted_at IS NULL AND strpos(lower(concat_ws(' ',e.entity_type,e.action,u.email,e.actor_id::text,e.after_data->>'page',e.after_data->'_request'->>'page')),lower($1))>0`
+	email := strings.TrimSpace(r.URL.Query().Get("account_email"))
+	if len([]rune(email)) > 200 {
+		reply(w, map[string]string{"error": "账号邮箱搜索不能超过 200 个字符"}, 400)
+		return
+	}
+	// 只从明确的业务关联解析账号，不能把操作者邮箱或任意快照正文当作目标账号。
+	const filter = ` FROM operation_events e
+LEFT JOIN users u ON u.id=e.actor_id AND u.deleted_at IS NULL
+LEFT JOIN recharge_orders o ON o.id::text=CASE WHEN e.entity_type='order' THEN e.entity_id::text WHEN e.entity_type='admin_request' THEN substring(e.after_data->>'resource' from '^/api/orders/([0-9]{1,19})(/|$)') END AND o.deleted_at IS NULL
+LEFT JOIN chatgpt_accounts a ON a.id::text=CASE
+ WHEN e.entity_type='account' THEN e.entity_id::text
+ WHEN e.entity_type='order' THEN o.account_id::text
+ WHEN e.entity_type='admin_ui' THEN e.after_data->>'account_id'
+ WHEN e.entity_type='admin_request' THEN COALESCE(substring(e.after_data->>'resource' from '^/api/accounts/([0-9]{1,19})(/|$)'),o.account_id::text)
+ END AND a.deleted_at IS NULL
+CROSS JOIN LATERAL (SELECT COALESCE(a.email,o.account_email,
+ CASE WHEN e.entity_type='account' THEN COALESCE(e.after_data->>'email',e.before_data->>'email')
+ WHEN e.entity_type='order' THEN COALESCE(e.after_data->>'account_email',e.after_data->'order'->>'account_email',e.before_data->>'account_email') END,'') AS account_email) account
+WHERE e.deleted_at IS NULL
+ AND strpos(lower(concat_ws(' ',e.entity_type,e.action,u.email,e.actor_id::text,e.after_data->>'page',e.after_data->'_request'->>'page',account.account_email)),lower($1))>0
+ AND strpos(lower(account.account_email),lower($2))>0`
 	var total int
-	if err := s.db.QueryRowContext(r.Context(), `SELECT count(*)`+filter, r.URL.Query().Get("q")).Scan(&total); err != nil {
+	// 计数与列表复用同一筛选条件，保持组合搜索与分页总数一致。
+	if err := s.db.QueryRowContext(r.Context(), `SELECT count(*)`+filter, r.URL.Query().Get("q"), email).Scan(&total); err != nil {
 		operationError(w, err)
 		return
 	}
-	rows, err := jsonRows(r.Context(), s.db, `SELECT to_jsonb(e)||jsonb_build_object('actor',CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE COALESCE(u.email,'历史用户') END)`+filter+` ORDER BY e.id DESC LIMIT $3 OFFSET $2`, r.URL.Query().Get("q"), (p-1)*size, size)
+	rows, err := jsonRows(r.Context(), s.db, `SELECT to_jsonb(e)||jsonb_build_object('account_email',account.account_email,'actor',CASE WHEN u.email='__superadmin__' THEN '超级管理员' ELSE COALESCE(u.email,'历史用户') END)`+filter+` ORDER BY e.id DESC LIMIT $3 OFFSET $4`, r.URL.Query().Get("q"), email, size, (p-1)*size)
 	if err != nil {
 		operationError(w, err)
 		return

@@ -18,6 +18,9 @@ export const browserEnvironmentID = (userID, accountID) => `${window.location.or
 
 export async function launcherRequest(path, { method = 'GET', body, signal, port = launcherPort() } = {}) {
   const context = activityContext(), control = localActivityControl(path, method);
+  // 只从本机浏览器的结构化环境标识解析账号 ID，不上传路径、邮箱或请求正文。
+  const environment = path.startsWith('/browsers/') ? decodeURIComponent(path.split('/')[2]) : path === '/browsers' ? body?.environment_id : '';
+  const accountID = Number(/:account:([0-9]+)$/.exec(environment || '')?.[1]);
   let result = 'failure';
   try {
     let response;
@@ -37,7 +40,7 @@ export async function launcherRequest(path, { method = 'GET', body, signal, port
     result = data.result?.ok === false || savedTest?.ok === false ? 'failure' : 'success';
     return data;
   } finally {
-    if (control) void recordAdminActivity(context, { kind: 'local_request', control, result });
+    if (control) void recordAdminActivity(context, { kind: 'local_request', control, result, ...(Number.isSafeInteger(accountID) && accountID > 0 ? { account_id: accountID } : {}) });
   }
 }
 

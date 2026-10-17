@@ -29,7 +29,7 @@ export default function OrderWalletDebit({ order, token, onClose, onComplete }) 
     } catch (e) { setError(e.message); }
     finally { writing.current = false; setBusy(false); }
   }
-  return <Dialog className="wallet-debit-dialog" title="钱包扣款" onClose={() => { if (!busy) onClose(); }}>
+  return <Dialog accountID={order.account_id} className="wallet-debit-dialog" title="钱包扣款" onClose={() => { if (!busy) onClose(); }}>
     <form onSubmit={submit}>
       {quote ? <>
         <div className="wallet-debit-account"><strong>{quote.account_email}</strong><span className="muted">扣款用户：{quote.user_email}</span></div>
