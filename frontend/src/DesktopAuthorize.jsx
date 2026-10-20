@@ -25,7 +25,7 @@ export default function DesktopAuthorize({ token, user, route }) {
     <h2>{done ? '授权成功' : '授权登录 AiTok 助手'}</h2>
     {done ? <p role="status">可以返回桌面助手，此页面可以关闭。</p> : <>
       <p>当前账号：{user.username || user.email}</p><p>{channel === 'test' ? '测试版' : '线上版'} · {location.origin}</p>
-      <p>确认后将此账号的登录身份交给本机助手，打开账号仍需两步验证。</p>
+      <p>确认后将此账号的登录身份交给本机助手，使用 Session 打开账号无需再次验证。</p>
       {!callback && <p className="error" role="alert">授权链接无效，请从桌面助手重新发起登录。</p>}
       {!allowed && <p className="error" role="alert">桌面助手需要管理员账号授权。</p>}
       {error && <p className="error" role="alert">{error}</p>}

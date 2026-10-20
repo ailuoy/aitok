@@ -90,9 +90,6 @@ func (s *Server) accountBrowser(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "仅管理员可以操作后台电脑的浏览器"}, 403)
 		return
 	}
-	if r.Method == "POST" && !s.consumeTOTP(w, r, userID, r.Header.Get("X-Aitok-TOTP"), false) {
-		return
-	}
 	var encrypted, email string
 	err = s.db.QueryRowContext(r.Context(), `SELECT COALESCE(session_ciphertext,''),email FROM chatgpt_accounts WHERE id=$1 AND deleted_at IS NULL`, accountID).Scan(&encrypted, &email)
 	if errors.Is(err, sql.ErrNoRows) {

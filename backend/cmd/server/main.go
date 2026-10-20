@@ -126,9 +126,18 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var in struct{ Email, Username, Password string }
+	w.Header().Set("Cache-Control", "no-store")
+	var in struct {
+		Email, Username, Password string
+		Challenge                 string `json:"challenge"`
+		TOTPCode                  string `json:"totp_code"`
+	}
 	if jsonBody(r, &in) != nil {
 		reply(w, map[string]string{"error": "请求格式错误"}, 400)
+		return
+	}
+	if in.Challenge != "" {
+		s.verifyLoginTOTP(w, r, in.Challenge, in.TOTPCode)
 		return
 	}
 	identity := strings.TrimSpace(in.Username)
@@ -161,7 +170,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	reply(w, map[string]string{"token": s.token(id)}, 200)
+	s.finishLogin(w, r, id)
 }
 
 func validEmail(value string) bool {
@@ -255,6 +264,7 @@ func (s *Server) verifyCode(email, purpose, code string) bool {
 	return err == nil && tx.Commit() == nil && valid
 }
 func (s *Server) loginCode(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	var in struct{ Email, Code string }
 	if jsonBody(r, &in) != nil || !s.verifyCode(strings.ToLower(in.Email), "login", in.Code) {
 		reply(w, map[string]string{"error": "验证码无效或已过期"}, 401)
@@ -269,7 +279,7 @@ func (s *Server) loginCode(w http.ResponseWriter, r *http.Request) {
 		reply(w, map[string]string{"error": "登录失败"}, 500)
 		return
 	}
-	reply(w, map[string]string{"token": s.token(id)}, 200)
+	s.finishLogin(w, r, id)
 }
 func (s *Server) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Email, Code, Password string }

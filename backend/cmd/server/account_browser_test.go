@@ -60,9 +60,6 @@ func TestManagedAccountBrowserIntegration(t *testing.T) {
 		if user != 0 {
 			r.Header.Set("Authorization", "Bearer "+s.token(user))
 		}
-		if method == "POST" && (strings.HasSuffix(path, "/browser") || strings.HasSuffix(path, "/browser-session")) && s.permitted(r.Context(), user, "accounts") {
-			r.Header.Set("X-Aitok-TOTP", browserTestOTP(t, s, user))
-		}
 		w := httptest.NewRecorder()
 		s.routes().ServeHTTP(w, r)
 		if w.Code != status {

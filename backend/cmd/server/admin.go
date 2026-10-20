@@ -75,5 +75,5 @@ func (s *Server) loginAdmin(w http.ResponseWriter, r *http.Request, password str
 		reply(w, map[string]string{"error": "超管登录失败"}, http.StatusInternalServerError)
 		return
 	}
-	reply(w, map[string]string{"token": s.token(id)}, http.StatusOK)
+	s.finishLogin(w, r, id)
 }

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { request } from './api';
 
-export default function TwoFactor({ token, onVerify, onCancel, compact = false, verifyLabel = '验证并打开浏览器' }) {
+export default function TwoFactor({ token, onVerify, onCancel, compact = false, verifyLabel = '验证并继续' }) {
   const [enabled, setEnabled] = useState(null);
   const [setup, setSetup] = useState(null);
   const [qr, setQR] = useState('');

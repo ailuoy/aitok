@@ -67,7 +67,7 @@ export default function SessionRefresh({ account, userID, token, onStatus, onUpd
     if (startingRef.current) return;
     startingRef.current = true; setStarting(true); setError('');
     try {
-      const next = await openLocalAccount(account, userID, token, undefined, { loadAssistant: false, refreshSession: true });
+      const next = await openLocalAccount(account, userID, token, { loadAssistant: false, refreshSession: true });
       if (!mounted.current) return;
       setStatus(next); callbacks.current.onStatus(account.id, next); setTask({ port });
     } catch (error) { if (mounted.current) { setError(error.message); callbacks.current.onFailure?.(error.message); } }

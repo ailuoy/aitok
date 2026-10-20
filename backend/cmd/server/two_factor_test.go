@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -192,8 +191,8 @@ func TestRoleBoundaryAndTwoFactor(t *testing.T) {
 		t.Fatal("已移除的批量导入接口仍可访问")
 	}
 	for _, path := range []string{"/api/accounts/1/browser-session", "/api/accounts/1/browser"} {
-		if status, _ := call(2, "POST", path, nil, ""); status != 403 {
-			t.Fatal("未绑定验证器启动未拦截")
+		if status, _ := call(2, "POST", path, map[string]any{}, ""); status != 400 && status != 422 {
+			t.Fatal("浏览器启动不应要求绑定验证器")
 		}
 	}
 	if status, _ := call(3, "POST", "/api/two-factor", map[string]string{"action": "setup", "password": "wrong"}, ""); status != 403 {
@@ -231,7 +230,7 @@ func TestRoleBoundaryAndTwoFactor(t *testing.T) {
 	if status, _ = call(3, "POST", "/api/two-factor", map[string]string{"action": "confirm", "code": previous}, ""); status != 200 {
 		t.Fatalf("确认绑定: %d", status)
 	}
-	if status, _ = call(3, "POST", "/api/accounts/1/browser-session", nil, previous); status != 403 {
+	if status, _ = call(3, "POST", "/api/two-factor", map[string]string{"action": "confirm", "code": previous}, ""); status != 409 {
 		t.Fatal("绑定验证码可重放")
 	}
 	if status, _ = call(3, "POST", "/api/two-factor", map[string]string{"action": "setup", "password": "test-admin-password"}, ""); status != 409 {
@@ -244,33 +243,18 @@ func TestRoleBoundaryAndTwoFactor(t *testing.T) {
 	if status != 200 || out["session"] == nil {
 		t.Fatalf("管理员打开他人账号: %d", status)
 	}
-	if status, _ = call(3, "POST", "/api/accounts/1/browser", nil, current); status != 403 {
-		t.Fatal("可在另一入口重放验证码")
+	if status, _ = call(3, "POST", "/api/accounts/1/browser", map[string]any{}, ""); status != 503 {
+		t.Fatal("后台启动不应再次校验验证码")
 	}
-	// 并发请求只能一个消费成功；不连接任何真实浏览器。
-	code := totpCode(secret, now.Unix()/30+1)
-	var wg sync.WaitGroup
-	results := make(chan int, 2)
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			status, _ := call(3, "POST", "/api/accounts/1/browser-session", nil, code)
-			results <- status
-		}()
-	}
-	wg.Wait()
-	close(results)
-	success := 0
-	for status := range results {
-		if status == 200 {
-			success++
-		} else if status != 403 {
-			t.Fatalf("并发验证: %d", status)
+	// 浏览器导出不会消费或限流 TOTP，连续打开多个账号无需等待新验证码。
+	for i := 0; i < 12; i++ {
+		if status, _ := call(3, "POST", "/api/accounts/1/browser-session", nil, ""); status != 200 {
+			t.Fatalf("连续打开账号不应受 2FA 限流影响: %d", status)
 		}
 	}
-	if success != 1 {
-		t.Fatal("并发重复启动")
+	var last int64
+	if err := db.QueryRow(`SELECT totp_last_step FROM users WHERE id=3`).Scan(&last); err != nil || last != now.Unix()/30-1 {
+		t.Fatal("浏览器打开不应消费验证码", err)
 	}
 	// 旧助手凭证在角色降级后失效，即使没有重新登录。
 	assistant := s.assistantToken(2, 2)
@@ -281,12 +265,6 @@ func TestRoleBoundaryAndTwoFactor(t *testing.T) {
 	handler.ServeHTTP(w, r)
 	if w.Code != 401 {
 		t.Fatal("降权后旧助手仍可用")
-	}
-	for i := 0; i < 12; i++ {
-		status, _ = call(3, "POST", "/api/accounts/1/browser-session", nil, "000000")
-	}
-	if status != 429 {
-		t.Fatal("验证码暴力尝试未限流")
 	}
 	var leak bool
 	db.QueryRow(`SELECT EXISTS(SELECT 1 FROM operation_events WHERE after_data::text LIKE $1 OR before_data::text LIKE $1)`, "%"+secret+"%").Scan(&leak)
@@ -300,7 +278,7 @@ func TestRoleBoundaryAndTwoFactor(t *testing.T) {
 	}
 }
 
-// 旧浏览器功能用例每次独立配置验证器，重放和并发保护由安全用例独立验证。
+// 敏感操作用例独立配置验证器，重放和并发保护由登录安全用例验证。
 func browserTestOTP(t *testing.T, s *Server, user int64) string {
 	t.Helper()
 	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(strings.Repeat("b", 20)))

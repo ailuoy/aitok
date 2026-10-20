@@ -164,12 +164,6 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 	refresh := launch && r.URL.Query().Get("mode") == "refresh"
 	var encrypted, email string
 	var err error
-	// 管理员主动自动更新免 TOTP；普通打开浏览器仍逐次验证。
-	if launch && !refresh {
-		if !s.consumeTOTP(w, r, userID, r.Header.Get("X-Aitok-TOTP"), false) {
-			return
-		}
-	}
 	encrypted, email, err = s.managedAccount(r.Context(), userID, accountID)
 	if errors.Is(err, sql.ErrNoRows) {
 		reply(w, map[string]string{"error": "账号不存在"}, 404)

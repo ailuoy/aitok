@@ -54,12 +54,17 @@ func readTOTP(ciphertext string, user int64) (string, error) {
 	return strings.TrimPrefix(raw, totpEnvelope(user)), nil
 }
 
-// 验证与消费时间步同事务，两个浏览器入口并发请求也不能复用验证码。
+// 验证与消费时间步同事务，登录及敏感操作的并发请求不能复用验证码。
 func (s *Server) consumeTOTP(w http.ResponseWriter, r *http.Request, user int64, code string, confirm bool) bool {
 	if !s.permitted(r.Context(), user, "accounts") {
 		reply(w, map[string]string{"error": "仅管理员可以验证 2FA"}, 403)
 		return false
 	}
+	return s.consumeUserTOTP(w, r, user, code, confirm, true)
+}
+
+// 登录验证按用户身份执行，管理员降为普通用户后仍可使用已绑定的验证器登录。
+func (s *Server) consumeUserTOTP(w http.ResponseWriter, r *http.Request, user int64, code string, confirm, adminOnly bool) bool {
 	if !s.allowAttempt(r.Context(), "totp:"+strconv.FormatInt(user, 10), 10, 5*time.Minute) {
 		reply(w, map[string]string{"error": "验证过于频繁，请 5 分钟后重试"}, 429)
 		return false
@@ -73,7 +78,7 @@ func (s *Server) consumeTOTP(w http.ResponseWriter, r *http.Request, user int64,
 	var active, pending string
 	var enabled, expires sql.NullTime
 	var last int64
-	err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(totp_ciphertext,''),COALESCE(totp_pending_ciphertext,''),totp_enabled_at,totp_pending_expires_at,totp_last_step FROM users WHERE id=$1 AND deleted_at IS NULL AND NOT disabled AND (role='admin' OR email=$2) FOR UPDATE`, user, adminIdentity).Scan(&active, &pending, &enabled, &expires, &last)
+	err = tx.QueryRowContext(r.Context(), `SELECT COALESCE(totp_ciphertext,''),COALESCE(totp_pending_ciphertext,''),totp_enabled_at,totp_pending_expires_at,totp_last_step FROM users WHERE id=$1 AND deleted_at IS NULL AND NOT disabled AND (NOT $2 OR role='admin' OR email=$3) FOR UPDATE`, user, adminOnly, adminIdentity).Scan(&active, &pending, &enabled, &expires, &last)
 	if err != nil {
 		operationError(w, err)
 		return false

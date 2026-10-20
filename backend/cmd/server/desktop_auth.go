@@ -25,7 +25,7 @@ type desktopClaims struct {
 
 var desktopStatePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
 
-// 桌面凭证仅用于确认助手登录身份，不能替代后台登录或账号导出的逐次 2FA。
+// 桌面凭证仅用于确认助手登录身份，不能替代后台登录。
 func (s *Server) desktopAuthorize(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {

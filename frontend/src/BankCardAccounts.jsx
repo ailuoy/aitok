@@ -44,7 +44,7 @@ export default function BankCardAccounts({ card, token, onClose, upcoming = fals
     return () => controller.abort();
   }, [card.id, token, page, pageSize, revision, upcoming]);
   return <Dialog className="card-accounts-dialog" title={`${card.label} · 尾号 ${card.last4} ${upcoming ? '近 10 天续费账号' : '绑定账号'}`} onClose={onClose}>
-    <p className="muted">{upcoming ? '按北京时间统计含今天在内未来 10 天已开启续订的账号，按续费日期由近到远排列。金额按当前套餐预估；打开浏览器需要本机助手和两步验证。' : '本月按北京时间自然月统计，包含已开启续订且续费日期在本月的账号（含本月已逾期）。按当前套餐价格预估一次续费，可用余额已扣除预授权占用。'}</p>
+    <p className="muted">{upcoming ? '按北京时间统计含今天在内未来 10 天已开启续订的账号，按续费日期由近到远排列。金额按当前套餐预估；打开浏览器需要本机助手。' : '本月按北京时间自然月统计，包含已开启续订且续费日期在本月的账号（含本月已逾期）。按当前套餐价格预估一次续费，可用余额已扣除预授权占用。'}</p>
     {error && <p className="error" role="alert">{error}<button className="text-btn" onClick={() => setRevision(value => value + 1)}>重试</button></p>}
     {loading ? <p className="muted" role="status">{upcoming ? '正在加载续费账号…' : '正在加载绑定账号…'}</p> : !error && data && <>
       <div className="card-ledger-summary"><div><span>{upcoming ? '近 10 天续费账号' : '绑定账号'}</span><strong>{data.total} 个</strong></div><div><span>可用余额 · USD</span><strong>{formatCardUSD(data.available_usd_minor)}</strong></div><div><span>{upcoming ? '预计续费 · USD' : `${data.renewal.month} 续费余额差`}</span>{upcoming ? <><strong>{formatCardUSD(data.renewal.next_10_days.required_usd_minor)}</strong>{data.renewal.next_10_days.unknown_count > 0 && <small className="muted">已知金额 · {data.renewal.next_10_days.unknown_count} 个账号待核算</small>}</> : <CardRenewalDifference summary={data.renewal} />}</div></div>

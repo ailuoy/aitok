@@ -23,6 +23,7 @@ test('后台登录后返回授权页，确认后真实回调客户端并恢复�
   server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>{server.closeAllConnections();server.close();});
   const origin=`http://127.0.0.1:${server.address().port}`;
   let opened,grant;
+  const loginRequests=[];
   const user={id:7,email:'admin@example.test',role:'admin'};
   const auth=new DesktopAuth({profile:{origin,channel:'test'},path:join(directory,'login.json'),encryption:{isEncryptionAvailable:()=>true,encryptString:value=>Buffer.from(value),decryptString:value=>value.toString()},openExternal:async url=>{opened=url},request:async()=>new Response(JSON.stringify(grant))});
   t.after(()=>auth.close());await auth.login();
@@ -34,7 +35,12 @@ test('后台登录后返回授权页，确认后真实回调客户端并恢复�
     if(message.method!=='Fetch.requestPaused')return;
     const {requestId,request}=message.params,path=new URL(request.url).pathname;let data={},status=200;
     if(path==='/api/me')data={user,accounts:[]};
-    else if(path==='/api/login')data={token:'web-only-test-token'};
+    else if(path==='/api/login'){
+      const input=JSON.parse(request.postData||'{}');if(request.method==='POST')loginRequests.push(input);
+      if(!input.challenge)data={two_factor_required:true,challenge:'login-only-challenge'};
+      else if(input.challenge!=='login-only-challenge'||input.totp_code!=='654321'){status=403;data={error:'验证码无效或已使用'};}
+      else data={token:'web-only-test-token'};
+    }
     else if(path==='/api/desktop-auth'){
       const input=JSON.parse(request.postData||'{}');
       grant={user,state:input.state,channel:input.channel,origin,expires_at:Math.floor(Date.now()/1000)+3600};data={token:'desktop-only-test-token'};
@@ -48,7 +54,17 @@ test('后台登录后返回授权页，确认后真实回调客户端并恢复�
   await wait(()=>evaluate('Boolean(document.querySelector("input[type=password]"))'));
   assert.ok(await evaluate('location.pathname==="/login" && new URLSearchParams(location.search).get("next").startsWith("/desktop/authorize?")'));
   await evaluate(`(() => { const set=(input,value)=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}));};set(document.querySelector('input[autocomplete=username]'),'admin@example.test');set(document.querySelector('input[type=password]'),'test-password');document.querySelector('form').requestSubmit();})()`);
+  await wait(()=>evaluate('Boolean(document.querySelector("input[aria-label=验证器验证码]"))'));
+  assert.equal(await evaluate('localStorage.getItem("token")'),null,'通过 2FA 前不能保存正式登录令牌');
+  assert.equal(auth.snapshot().status,'pending');
+  const verify=async code=>evaluate(`(() => { const input=document.querySelector('input[aria-label=验证器验证码]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(code)});input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('form').requestSubmit();})()`);
+  await verify('123456');
+  await wait(()=>evaluate('document.querySelector(".auth-card .error")?.textContent.includes("验证码无效")'));
+  assert.equal(await evaluate('document.querySelectorAll(".auth-card .error").length'),1,'登录错误仅显示一次');
+  assert.equal(await evaluate('localStorage.getItem("token")'),null);
+  await verify('654321');
   await wait(()=>evaluate('document.body.textContent.includes("确认授权登录")'));
+  assert.deepEqual(loginRequests.slice(1),[{challenge:'login-only-challenge',totp_code:'123456'},{challenge:'login-only-challenge',totp_code:'654321'}]);
   assert.equal(auth.snapshot().status,'pending','登录后台后仍需主动确认授权');
   await evaluate('document.querySelector(".auth-card button.primary").click()');
   await wait(()=>evaluate('document.body.textContent.includes("授权成功")'));

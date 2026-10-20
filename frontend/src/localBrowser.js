@@ -44,7 +44,7 @@ export async function launcherRequest(path, { method = 'GET', body, signal, port
   }
 }
 
-export async function openLocalAccount(account, userID, token, totpCode, { loadAssistant = true, refreshSession = false } = {}) {
+export async function openLocalAccount(account, userID, token, { loadAssistant = true, refreshSession = false } = {}) {
   const port = launcherPort();
   const health = await launcherRequest('/health', { port });
   if (health.version !== 2) throw new Error('请重启最新版本机启动器');
@@ -57,7 +57,7 @@ export async function openLocalAccount(account, userID, token, totpCode, { loadA
     if (refreshSession) throw new Error('此账号浏览器已打开，请先关闭，再更新 Session');
     return status;
   }
-  const credentials = await request(`/accounts/${account.id}/browser-session${refreshSession ? '?mode=refresh' : ''}`, token, { method: 'POST', totpCode });
+  const credentials = await request(`/accounts/${account.id}/browser-session${refreshSession ? '?mode=refresh' : ''}`, token, { method: 'POST' });
   if (!Object.hasOwn(credentials, 'shared_proxy')) throw new Error('服务端尚未支持共享代理，请更新服务端后重试');
   if (port !== launcherPort()) throw new Error('本机连接端口已更改，请重新打开账号');
   return launcherRequest('/browsers', { port, method: 'POST', body: { environment_id: id, session: credentials.session, shared_proxy: credentials.shared_proxy, expected_email: account.email, ...(refreshSession ? { refresh_session: true } : {}), ...(loadAssistant || refreshSession ? { assistant_token: credentials.assistant_token } : {}) } });

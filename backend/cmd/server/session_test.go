@@ -82,9 +82,6 @@ func TestAccountSessionIntegration(t *testing.T) {
 		body, _ := json.Marshal(input)
 		r := httptest.NewRequest(method, path, strings.NewReader(string(body)))
 		r.Header.Set("Authorization", "Bearer "+s.token(user))
-		if method == "POST" && r.URL.Query().Get("mode") != "refresh" && (strings.HasSuffix(r.URL.Path, "/browser") || strings.HasSuffix(r.URL.Path, "/browser-session")) && s.permitted(r.Context(), user, "accounts") {
-			r.Header.Set("X-Aitok-TOTP", browserTestOTP(t, s, user))
-		}
 		w := httptest.NewRecorder()
 		s.routes().ServeHTTP(w, r)
 		if w.Code != status {
@@ -121,7 +118,7 @@ func TestAccountSessionIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	call("POST", path+"/browser-session?mode=refresh", 1, nil, 403)
-	// 自动更新免 TOTP，普通打开仍要求验证。
+	// 普通打开和自动更新均复用登录身份，不再逐次验证 TOTP。
 	r := httptest.NewRequest("POST", path+"/browser-session?mode=refresh", nil)
 	r.Header.Set("Authorization", "Bearer "+s.token(3))
 	w = httptest.NewRecorder()
@@ -133,8 +130,8 @@ func TestAccountSessionIntegration(t *testing.T) {
 	r.Header.Set("Authorization", "Bearer "+s.token(3))
 	w = httptest.NewRecorder()
 	s.routes().ServeHTTP(w, r)
-	if w.Code == 200 {
-		t.Fatal("普通打开仍应要求 TOTP")
+	if w.Code != 422 || !strings.Contains(w.Body.String(), "Session 已过期") {
+		t.Fatal("普通打开应直接检查 Session 有效期", w.Code)
 	}
 	call("PATCH", path+"/session", 3, map[string]string{"session_json": raw}, 200)
 	call("POST", path+"/browser-session", 3, nil, 200)
