@@ -265,5 +265,5 @@ func (s *Server) accountSession(w http.ResponseWriter, r *http.Request, userID, 
 		reply(w, map[string]string{"error": "更新 Session 失败"}, 500)
 		return
 	}
-	reply(w, map[string]any{"message": "Session 已更新", "session_updated_at": updatedAt}, 200)
+	reply(w, map[string]any{"message": "Session 已更新", "session_updated_at": updatedAt, "session_expires_at": session.ExpiresAt}, 200)
 }

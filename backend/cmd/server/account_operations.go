@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Server) insertAccount(ctx context.Context, user int64, label, email, encrypted string) (Account, error) {
-	a := Account{UserID: user, Label: label, Email: email, HasSession: true, UsageStatus: "in_use"}
+	a := Account{UserID: user, Label: label, Email: email, HasSession: true, UsageStatus: "in_use", SessionExpiresAt: accountSessionExpiry(encrypted)}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return a, err
@@ -129,7 +129,11 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request, user int64,
 		projection = `jsonb_build_object('id',a.id,'label',a.label,'email',a.email,'renewal_date',a.renewal_date,'verified_plan',a.verified_plan,'subscription_plan',` + accountSubscriptionPlan + `,'last_login_at',a.last_login_at)`
 	}
 	projection += `||jsonb_build_object('spent_usd_minor',` + accountSpentUSD + `)`
-	rows, err := jsonRows(r.Context(), s.db, "SELECT "+projection+filter+` ORDER BY `+order+` LIMIT $6 OFFSET $7`, append(args, limit, offset)...)
+	sessionColumn := `''`
+	if admin && !export {
+		sessionColumn = `COALESCE(a.session_ciphertext,'')`
+	}
+	rows, err := accountJSONRows(r.Context(), s.db, admin && !export, "SELECT "+projection+","+sessionColumn+filter+` ORDER BY `+order+` LIMIT $6 OFFSET $7`, append(args, limit, offset)...)
 	if err != nil {
 		operationError(w, err)
 		return

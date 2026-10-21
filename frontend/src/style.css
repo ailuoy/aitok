@@ -384,6 +384,10 @@ button,input,textarea{font-family:inherit}
 .user-accounts-table { min-width: 0; width: 100%; table-layout: fixed; }
 .user-accounts-table th, .user-accounts-table td { white-space: normal; overflow-wrap: anywhere; }
 .user-accounts-table .last-login { min-width: 0; }
+.session-countdown { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.session-countdown[data-status="expired"] { color: var(--danger); }
+.session-countdown[data-status="soon"] { color: var(--number); }
+.session-countdown[data-status="unknown"] { color: var(--muted); }
 .user-accounts-table .table-sort { max-width: 100%; white-space: normal; text-align: left; }
 .user-accounts-table .table-sort svg { flex-shrink: 0; }
 

@@ -443,6 +443,18 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   };
   await wait('document.body.innerText.includes("工作账号")');
   await wait('location.pathname === "/admin/accounts"');
+  await wait('document.querySelector(".session-countdown")?.textContent === "到期时间未知"');
+  account.session_expires_at = new Date(Date.now() + 2500).toISOString();
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".session-countdown")?.textContent.startsWith("剩余 ")');
+  await wait('document.querySelector(".session-countdown")?.textContent === "已过期"');
+  assert.equal(await evaluate('document.querySelector(".session-countdown").dataset.status'), 'expired');
+  account.session_expires_at = new Date(Date.now() + (86400 + 23 * 3600 + 183) * 1000).toISOString();
+  await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".session-countdown")?.textContent.startsWith("剩余 1天23小时")');
+  const countdownBefore = await evaluate('document.querySelector(".session-countdown").textContent');
+  await wait(`document.querySelector(".session-countdown")?.textContent !== ${JSON.stringify(countdownBefore)}`);
+  assert.ok(await evaluate('document.querySelector(".session-countdown").title.includes("Session 到期")'));
   const noteText = '账号使用记录\n' + '多行长文本内容'.repeat(200) + '\n<img src=x onerror="window.notesExecuted=true">';
   await click('添加备注');
   await fill('dialog textarea[name=notes]', noteText, 'HTMLTextAreaElement');
@@ -1828,11 +1840,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(localLaunches.at(-1).refresh_session, true);
   assert.equal(localLaunches.at(-1).assistant_token, 'local-test-assistant');
   account.session_updated_at = new Date().toISOString();
+  account.session_expires_at = new Date(Date.now() + 3600000).toISOString();
   sessionUpdate = { state: 'saved', session_updated_at: account.session_updated_at, message: '已保存' };
   localState = 'closed';
   await wait('!document.querySelector("dialog")');
   await wait('document.querySelector(".account-row")?.innerText.includes("不足 1 天")');
-  assert.ok(await evaluate('document.querySelector(".account-section").innerText.includes("距上次更新 Session")'));
+  assert.ok(await evaluate('document.querySelector(".account-section").innerText.includes("Session（UTC+8）")'));
+  await wait('document.querySelector(".session-countdown")?.textContent.startsWith("剩余 ") && document.querySelector(".session-countdown").dataset.status === "soon"');
   exportExpired = false;
   // 批量更新：表头全选与半选、串行执行、失败继续、成功时间回写、停止后不再启动。
   batchRows = [1, 2, 3].map(id => ({ ...account, id, label: `批量账号 ${id}`, email: `batch${id}@test.local`, session_updated_at: null }));
