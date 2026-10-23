@@ -153,8 +153,15 @@ func recordOrderPosting(r *http.Request, tx *sql.Tx, user int64, o *RechargeOrde
 	if in.OrderSource != "" {
 		o.OrderSource = in.OrderSource
 	}
-	// 开通结果与扣款同事务提交；续订日期仅由管理员手动设置，记账不改写。
-	if _, err := tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET verified_plan=$2,verified_at=$3,subscription_ends_at=$4,subscription_package_id=$5,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, o.AccountID, o.Package.Plan, postedAt, end, subscriptionPackageID); err != nil {
+	// 续订日期沿用账号原日期顺延，提前或补录都不能改为录入日；未设置时使用订单到期日。
+	renewalDate := end
+	if previous != nil {
+		renewalDate = addMonthsClamped(*previous, o.Package.Months).Format("2006-01-02")
+	}
+	if _, err := tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET verified_plan=$2,verified_at=$3,subscription_ends_at=$4,subscription_package_id=$5,renewal_date=$6,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, o.AccountID, o.Package.Plan, postedAt, end, subscriptionPackageID, renewalDate); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(r.Context(), `INSERT INTO renewal_date_audit(account_id,admin_id,previous_date,renewal_date) VALUES($1,$2,$3,$4)`, o.AccountID, user, previous, renewalDate); err != nil {
 		return err
 	}
 	o.VerifiedAt = &postedAt

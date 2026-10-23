@@ -14,6 +14,7 @@ func TestUnifiedOrderRecording(t *testing.T) {
 	db := walletTestDB(t)
 	_, err := db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES(1,'record@test.local','','admin'),(2,'user@test.local','','user');
 INSERT INTO chatgpt_accounts(id,user_id,label,email,payment_card_id) VALUES(1,1,'Account','account@test.local',1),(2,1,'Second','second@test.local',1),(3,1,'Third','third@test.local',1);
+UPDATE chatgpt_accounts SET renewal_date='2026-10-22',updated_at=NOW() WHERE id IN(2,3);
 INSERT INTO recharge_packages(id,name,plan,region,currency,original_amount_minor,sale_usd_minor,months,enabled) VALUES(1,'Plus','plus','PH','PHP',100000,20000,1,true);
 INSERT INTO bank_cards(id,user_id,label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,balance_usd_minor) VALUES(1,1,'Card','Tester','encrypted','fingerprint','4242','Visa',12,2035,10000);
 INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at,created_at,updated_at) VALUES('PHP','USD',0.02,'test',NOW(),NOW(),NOW()),('PHP','CNY',0.14,'test',NOW(),NOW(),NOW());`)
@@ -112,7 +113,7 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 	if err = db.QueryRow(`SELECT (SELECT count(*) FROM recharge_orders),(SELECT count(*) FROM bank_card_ledger),(SELECT balance_usd_minor FROM bank_cards WHERE id=1)`).Scan(&orders, &ledger, &balance); err != nil || orders != 1 || ledger != 1 || balance != 80000 {
 		t.Fatal("交易号重复未整体回滚", orders, ledger, balance, err)
 	}
-	if err = db.QueryRow(`SELECT (SELECT count(*) FROM chatgpt_accounts WHERE verified_at IS NOT NULL),(SELECT count(*) FROM renewal_date_audit)`).Scan(&activated, &audits); err != nil || activated != 1 || audits != 0 {
+	if err = db.QueryRow(`SELECT (SELECT count(*) FROM chatgpt_accounts WHERE verified_at IS NOT NULL),(SELECT count(*) FROM renewal_date_audit)`).Scan(&activated, &audits); err != nil || activated != 1 || audits != 1 {
 		t.Fatal("交易号重复不能开通其他账号", activated, audits, err)
 	}
 	input["account_id"], input["request_key"] = 1, "unified-create-0001"
@@ -193,11 +194,11 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 		t.Fatal("订单和扣款重复或缺失", orders, ledger, balance, err)
 	}
 	var consistent int
-	err = db.QueryRow(`SELECT count(*) FROM recharge_orders o JOIN bank_card_ledger l ON l.order_id=o.id JOIN chatgpt_accounts a ON a.id=o.account_id WHERE o.fulfillment_status='completed' AND o.period_start=(l.created_at AT TIME ZONE 'Asia/Shanghai')::date AND o.period_end=(o.period_start+INTERVAL '1 month')::date AND l.period_start=o.period_start AND l.period_end=o.period_end AND o.verified_at=l.created_at AND a.verified_at=o.verified_at AND a.verified_plan='plus' AND a.subscription_package_id=o.package_id AND a.subscription_ends_at=o.period_end AND a.renewal_date IS NULL`).Scan(&consistent)
+	err = db.QueryRow(`SELECT count(*) FROM recharge_orders o JOIN bank_card_ledger l ON l.order_id=o.id JOIN chatgpt_accounts a ON a.id=o.account_id WHERE o.fulfillment_status='completed' AND o.period_start=(l.created_at AT TIME ZONE 'Asia/Shanghai')::date AND o.period_end=(o.period_start+INTERVAL '1 month')::date AND l.period_start=o.period_start AND l.period_end=o.period_end AND o.verified_at=l.created_at AND a.verified_at=o.verified_at AND a.verified_plan='plus' AND a.subscription_package_id=o.package_id AND a.subscription_ends_at=o.period_end AND a.renewal_date=CASE WHEN a.id=1 THEN o.period_end ELSE DATE '2026-11-22' END`).Scan(&consistent)
 	if err != nil || consistent != 3 {
-		t.Fatal("订单、流水和账号须按实际扣款时间同步开通", consistent, err)
+		t.Fatal("订单及流水按扣款时间开通，普通录入和补录的续订日期沿用原日期顺延", consistent, err)
 	}
-	if err = db.QueryRow(`SELECT count(*) FROM renewal_date_audit`).Scan(&audits); err != nil || audits != 0 {
+	if err = db.QueryRow(`SELECT count(*) FROM renewal_date_audit`).Scan(&audits); err != nil || audits != 3 {
 		t.Fatal("重复请求不能重复开通或写入续费审计", audits, err)
 	}
 	var wallets int

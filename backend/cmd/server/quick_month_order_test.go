@@ -12,7 +12,7 @@ import (
 func TestQuickMonthOrder(t *testing.T) {
 	db := walletTestDB(t)
 	_, err := db.Exec(`INSERT INTO users(id,email,password_hash,role) VALUES(1,'monthly@test.local','','admin'),(2,'member@test.local','','user');
-INSERT INTO chatgpt_accounts(id,user_id,label,email,payment_card_id,subscription_package_id,renewal_date) VALUES(1,1,'Month end','month@test.local',1,1,'2030-01-31'),(2,1,'No date','undated@test.local',1,1,NULL),(3,1,'Overdue','overdue@test.local',1,1,'2020-09-18'),(4,1,'Today','today@test.local',1,1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date);
+INSERT INTO chatgpt_accounts(id,user_id,label,email,payment_card_id,subscription_package_id,renewal_date) VALUES(1,1,'Month end','month@test.local',1,1,'2030-01-31'),(2,1,'No date','undated@test.local',1,1,NULL),(3,1,'Overdue','overdue@test.local',1,1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date-1),(4,1,'Today','today@test.local',1,1,(NOW() AT TIME ZONE 'Asia/Shanghai')::date);
 INSERT INTO recharge_packages(id,name,plan,region,currency,original_amount_minor,sale_usd_minor,months,enabled) VALUES(1,'Monthly Plus','plus','PH','USD',2000,2000,1,true);
 INSERT INTO bank_cards(id,user_id,label,cardholder,number_ciphertext,number_fingerprint,last4,brand,exp_month,exp_year,balance_usd_minor) VALUES(1,1,'Card','Tester','encrypted','fingerprint','4242','Visa',12,2035,0);
 INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at,created_at,updated_at) VALUES('PHP','USD',0.02,'test',NOW(),NOW(),NOW()),('PHP','CNY',0.14,'test',NOW(),NOW(),NOW());`)
@@ -69,29 +69,28 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 	call("POST", "/api/orders/record", input, 1, 200)
 	var start, end, accountEnd string
 	var balance int64
-	if err = db.QueryRow(`SELECT a.renewal_date::text,a.subscription_ends_at::text,o.period_start::text,o.period_end::text,c.balance_usd_minor FROM chatgpt_accounts a JOIN recharge_orders o ON o.account_id=a.id JOIN bank_cards c ON c.id=o.card_id WHERE a.id=1`).Scan(&date, &accountEnd, &start, &end, &balance); err != nil || date != "2030-01-31" || accountEnd != "2030-02-28" || start != date || end != accountEnd || balance != 8000 {
-		t.Fatal("订单周期须从原续订日期起算一个月，账号续订日期保持不变", date, accountEnd, start, end, balance, err)
+	if err = db.QueryRow(`SELECT a.renewal_date::text,a.subscription_ends_at::text,o.period_start::text,o.period_end::text,c.balance_usd_minor FROM chatgpt_accounts a JOIN recharge_orders o ON o.account_id=a.id JOIN bank_cards c ON c.id=o.card_id WHERE a.id=1`).Scan(&date, &accountEnd, &start, &end, &balance); err != nil || date != "2030-02-28" || accountEnd != date || start != "2030-01-31" || end != date || balance != 8000 {
+		t.Fatal("订单周期和续订日期均须从原续订日期顺延一个月，月末截断", date, accountEnd, start, end, balance, err)
 	}
 	// 另一个旧弹框使用新请求标识，也不能再延长一个月。
 	input["request_key"] = "quick-month-stale-form"
 	input["reference"] = "quick-month-stale-reference"
 	call("POST", "/api/orders/record", input, 1, 409)
-	if err = db.QueryRow(`SELECT (SELECT count(*) FROM recharge_orders),(SELECT count(*) FROM bank_card_ledger),(SELECT count(*) FROM renewal_date_audit)`).Scan(&orders, &entries, &audits); err != nil || orders != 1 || entries != 1 || audits != 0 {
-		t.Fatal("重放或重叠周期不能重复记账或修改续订日期", orders, entries, audits, err)
+	if err = db.QueryRow(`SELECT (SELECT count(*) FROM recharge_orders),(SELECT count(*) FROM bank_card_ledger),(SELECT count(*) FROM renewal_date_audit)`).Scan(&orders, &entries, &audits); err != nil || orders != 1 || entries != 1 || audits != 1 {
+		t.Fatal("重放或旧表单不能重复记账、顺延日期或生成审计", orders, entries, audits, err)
 	}
 	input["account_id"], input["expected_renewal_date"] = 2, ""
 	input["request_key"], input["reference"] = "quick-month-undated", "quick-month-undated-reference"
 	call("POST", "/api/orders/record", input, 1, 201)
 	var postedAt time.Time
-	var unset *string
-	if err = db.QueryRow(`SELECT a.renewal_date::text,o.period_start::text,o.period_end::text,l.created_at FROM chatgpt_accounts a JOIN recharge_orders o ON o.account_id=a.id JOIN bank_card_ledger l ON l.order_id=o.id WHERE a.id=2`).Scan(&unset, &start, &end, &postedAt); err != nil {
+	if err = db.QueryRow(`SELECT a.renewal_date::text,o.period_start::text,o.period_end::text,l.created_at FROM chatgpt_accounts a JOIN recharge_orders o ON o.account_id=a.id JOIN bank_card_ledger l ON l.order_id=o.id WHERE a.id=2`).Scan(&date, &start, &end, &postedAt); err != nil {
 		t.Fatal(err)
 	}
 	wantStart, wantEnd := chargedOrderPeriod(postedAt, 1)
-	if start != wantStart || end != wantEnd || unset != nil {
-		t.Fatal("无日期账号的订单从扣款当天起算，续订日期仍为空", start, end, unset)
+	if start != wantStart || end != wantEnd || date != wantEnd {
+		t.Fatal("无日期账号应从扣款当天起算一个月并设置续订日期", start, end, date)
 	}
-	// 逾期和当天录入同样保留续订日期；不能依赖日期是否过期决定是否改写。
+	// 晚一天录入仍从原续订日顺延；当天录入同样按原日期计算。
 	for _, id := range []int{3, 4} {
 		if err = db.QueryRow("SELECT renewal_date::text FROM chatgpt_accounts WHERE id=$1", id).Scan(&date); err != nil {
 			t.Fatal(err)
@@ -100,28 +99,39 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 		input["request_key"], input["reference"] = fmt.Sprintf("quick-month-date-%d", id), fmt.Sprintf("quick-month-date-reference-%d", id)
 		call("POST", "/api/orders/record", input, 1, 201)
 		var stored string
-		if err = db.QueryRow("SELECT renewal_date::text FROM chatgpt_accounts WHERE id=$1", id).Scan(&stored); err != nil || stored != date {
-			t.Fatal("订单改写了续订日期", id, date, stored, err)
+		previous, _ := time.Parse("2006-01-02", date)
+		want := addMonthsClamped(previous, 1).Format("2006-01-02")
+		if err = db.QueryRow("SELECT renewal_date::text FROM chatgpt_accounts WHERE id=$1", id).Scan(&stored); err != nil || stored != want {
+			t.Fatal("续订日期必须从原日期顺延，不能因晚录入而推迟", id, want, stored, err)
 		}
 	}
-	call("PATCH", "/api/accounts/1/renewal-date", map[string]any{"renewal_date": "2030-02-28"}, 1, 200)
-	input["account_id"], input["expected_renewal_date"] = 1, "2030-01-31"
+	call("PATCH", "/api/accounts/1/renewal-date", map[string]any{"renewal_date": "2030-03-22"}, 1, 200)
+	input["account_id"], input["expected_renewal_date"] = 1, "2030-02-28"
 	input["request_key"], input["reference"] = "quick-after-manual-date", "quick-after-manual-reference"
 	call("POST", "/api/orders/record", input, 1, 409)
-	input["expected_renewal_date"] = "2030-02-28"
+	input["expected_renewal_date"] = "2030-03-22"
 	call("POST", "/api/orders/record", input, 1, 201)
 	call("POST", "/api/orders/record", input, 1, 200)
-	if err = db.QueryRow("SELECT renewal_date::text,(SELECT count(*) FROM renewal_date_audit) FROM chatgpt_accounts WHERE id=1").Scan(&date, &audits); err != nil || date != "2030-02-28" || audits != 1 {
-		t.Fatal("只有手动调整能变更续订日期并生成日期审计", date, audits, err)
+	if err = db.QueryRow("SELECT renewal_date::text,(SELECT count(*) FROM renewal_date_audit) FROM chatgpt_accounts WHERE id=1").Scan(&date, &audits); err != nil || date != "2030-04-22" || audits != 6 {
+		t.Fatal("手动设置后应按新的续订日顺延，重放不能重复生成审计", date, audits, err)
 	}
 }
 
 func TestQuickMonthPeriod(t *testing.T) {
-	for _, pair := range [][2]string{{"2028-01-31", "2028-02-29"}, {"2030-01-31", "2030-02-28"}, {"2030-12-31", "2031-01-31"}, {"2020-09-18", "2020-10-18"}} {
-		previous, _ := time.Parse("2006-01-02", pair[0])
-		start, end := recordedOrderPeriod(time.Now(), 1, &previous, true)
-		if start != pair[0] || end != pair[1] {
-			t.Fatal("必须按现有续订日期加一个月并截断月末", pair, start, end)
+	for _, tc := range []struct{ posted, previous, next string }{
+		{"2026-10-23T02:00:00Z", "2026-10-22", "2026-11-22"},
+		{"2026-10-20T02:00:00Z", "2026-10-22", "2026-11-22"},
+		{"2026-10-22T02:00:00Z", "2026-10-22", "2026-11-22"},
+		{"2026-11-23T02:00:00Z", "2026-11-22", "2026-12-22"},
+		{"2028-02-01T02:00:00Z", "2028-01-31", "2028-02-29"},
+		{"2030-02-01T02:00:00Z", "2030-01-31", "2030-02-28"},
+		{"2031-01-01T02:00:00Z", "2030-12-31", "2031-01-31"},
+	} {
+		posted, _ := time.Parse(time.RFC3339, tc.posted)
+		previous, _ := time.Parse("2006-01-02", tc.previous)
+		start, end := recordedOrderPeriod(posted, 1, &previous, true)
+		if start != tc.previous || end != tc.next {
+			t.Fatal("必须按原续订日顺延一个月，录入时间不改变基准日", tc, start, end)
 		}
 	}
 }

@@ -314,7 +314,7 @@ export default function Dashboard({ user, token, accounts, setAccounts, route })
     </section>}
     {batchAccounts && admin && <BatchSessionRefresh accounts={batchAccounts} userID={user.id} token={token} onStatus={localBrowsers.update} onUpdated={updateAccount} onClose={() => setBatchAccounts(null)} />}
     {quickOrderAccount && admin && <RechargeManager key={quickOrderAccount.id} token={token} quickAccount={quickOrderAccount} onQuickClose={() => setQuickOrderAccount(null)} onQuickCreated={() => {
-      setQuickOrderAccount(null); setMessage('月订单已创建，账号续订日期保持不变');
+      setQuickOrderAccount(null); setMessage('月订单已创建，续订日期已按原日期顺延一个月');
       request('/accounts', token).then(data => { setAccounts(data.accounts); setError(''); }).catch(error => setError('订单已创建，账号列表刷新失败：' + error.message));
     }} />}
     {ownerAccount && admin && <AccountOwnerBinding account={ownerAccount} token={token} onBound={value => { updateAccount(ownerAccount.id, value); refreshGroups().catch(error => setError('账号已绑定，但分组刷新失败：' + error.message)); }} onClose={() => setOwnerAccount(null)} />}

@@ -203,6 +203,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
               order.received_usd_minor=input.received_currency==='CNY'?Math.round(order.received_amount_minor/7):order.received_amount_minor;
               order.profit={usd_minor:order.received_usd_minor-order.sale_usd_minor,received_minor:order.received_amount_minor-(input.received_currency==='CNY'?order.sale_usd_minor*7:order.sale_usd_minor),rate_percent:((order.received_usd_minor-order.sale_usd_minor)/order.received_usd_minor*100).toFixed(2),cost_usd_minor:order.sale_usd_minor,estimated:true};
             }
+            if(input.quick_month) account.renewal_date = '2026-11-22';
             if(input.action==='record'){order.order_source=input.order_source || order.order_source || '';order.cost_usd_minor=order.sale_usd_minor;order.fulfillment_status='completed';if(order.profit)order.profit.estimated=false}
             if(input.action==='refund_note'){order.order_status='refunded';order.profit=null}
             if(input.action==='discard'){order.order_status='discarded';order.profit=null}
@@ -1980,7 +1981,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   await wait('document.body.innerText.includes("工作账号")');
   assert.equal(await evaluate('Array.from(document.querySelectorAll(".account-actions button")).some(button => button.textContent === "打开账号")'), true);
   // 从账号快速创建月订单，仅填写实收、来源、交易号和凭据。
-  Object.assign(account, { subscription_package_id: null, renewal_date: '2030-01-31', payment_card_id: 9, payment_card_available: true, payment_card_label: '运营测试卡', payment_card_last4: '4242' });
+  Object.assign(account, { subscription_package_id: null, renewal_date: '2026-10-22', payment_card_id: 9, payment_card_available: true, payment_card_label: '运营测试卡', payment_card_last4: '4242' });
   rechargePackages = [{ id: 1, name: '快捷月套餐', region: 'PH', months: 1, enabled: true, price_ready: true, sale_usd_minor: 20000 }];
   rechargeOrders = [];
   await cdp.send('Page.reload', {}, sessionId);
@@ -2004,8 +2005,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate('document.querySelector("input[aria-label=收款币种]").value'), 'CNY 人民币');
   assert.equal(await evaluate('document.querySelector("input[aria-label=订单付款卡]").value'), '运营测试卡 · •••• 4242');
   assert.equal(await evaluate(`document.querySelector('input[aria-label="扣款 USD"]').value`), '200.00');
-  assert.ok(await evaluate('document.querySelector(".quick-order-period").textContent.includes("2030-01-31 → 2030-02-28")'));
-  assert.ok(await evaluate('document.querySelector(".quick-order-period").textContent.includes("账号续订日期：2030-01-31，仅通过“设置日期”手动调整")'));
+  assert.ok(await evaluate('document.querySelector(".quick-order-period").textContent.includes("2026-10-22 → 2026-11-22")'));
+  assert.ok(await evaluate('document.querySelector(".quick-order-period").textContent.includes("续订日期更新为 2026-11-22，按原续订日顺延一个月")'));
   assert.equal(await evaluate('Boolean(document.querySelector("dialog textarea[name=notes]"))'), false);
   await fill('input[aria-label=实收金额]', '1680.00');
   await wait('Boolean(document.querySelector(".collection-preview"))');
@@ -2018,17 +2019,17 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   quickOrderFail = true;
   await click('确认录入并记账');
   await wait('document.querySelector("dialog").innerText.includes("模拟月订单记账失败")');
-  assert.equal(account.renewal_date, '2030-01-31');
+  assert.equal(account.renewal_date, '2026-10-22');
   assert.equal(await evaluate('document.querySelector("input[aria-label=实收金额]").value'), '1680.00');
   assert.equal(await evaluate('document.querySelector("input[name=reference]").value'), 'quick-month-ui-reference');
   quickOrderFail = false;
   await click('确认录入并记账');
-  await wait('!document.querySelector("dialog") && document.body.innerText.includes("月订单已创建") && document.querySelector(".account-row").innerText.includes("2030-01-31")');
-  assert.equal(account.renewal_date, '2030-01-31');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("月订单已创建") && document.querySelector(".account-row").innerText.includes("2026-11-22")');
+  assert.equal(account.renewal_date, '2026-11-22');
   const quickInput = operationWrites.at(-1);
   assert.equal(quickInput.request_key, failedQuickInput.request_key);
   assert.equal(quickInput.quick_month, true);
-  assert.equal(quickInput.expected_renewal_date, '2030-01-31');
+  assert.equal(quickInput.expected_renewal_date, '2026-10-22');
   assert.equal(quickInput.account_id, account.id);
   assert.equal(quickInput.package_id, 1);
   assert.equal(quickInput.card_id, 9);
