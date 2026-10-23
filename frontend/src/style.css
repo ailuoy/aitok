@@ -358,7 +358,11 @@ button,input,textarea{font-family:inherit}
 .account-selection input[type=checkbox]{width:18px;height:18px;margin:0;vertical-align:middle;accent-color:var(--accent);cursor:pointer}
 .account-actions-heading{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .batch-session-results{display:grid;gap:10px;padding:0;list-style:none;max-height:240px;overflow:auto}
-.batch-session-results li{display:grid;gap:4px;margin:0;overflow-wrap:anywhere}
+.workspace-dialog-heading.has-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;padding-right:36px;margin-bottom:20px}
+.workspace-dialog-heading.has-actions h2{margin:0}
+.batch-session-results li{display:flex;align-items:center;gap:12px;margin:0;overflow-wrap:anywhere}
+.batch-session-result-details{display:grid;gap:4px;flex:1;min-width:0}
+.batch-session-results li>button{flex-shrink:0}
 .table-sort{display:inline-flex;align-items:center;gap:6px;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:inherit;white-space:nowrap;cursor:pointer}
 .table-sort:hover,.table-sort:focus-visible{color:var(--accent)}
 .table-sort:focus-visible{outline:2px solid currentColor;outline-offset:4px;border-radius:2px}
