@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import { accountProxyPage } from '../../frontend/src/accountProxyPage.mjs';
 import { matchesRenewalStatus, renewalDays } from '../../frontend/src/accountRenewalStatus.mjs';
 
+test('废弃账号在默认代理排序中隐藏，独立筛选后再排序分页', () => {
+  const accounts = [1, 2, 3, 4].map(id => ({ id, label: '账号', email: `user${id}@test.local`, usage_status: id % 2 ? 'in_use' : 'discarded', group_id: 1, payment_card_id: 9, renewal_date: '2026-10-10' }));
+  const options = { query: '', group: 'all', direction: 'asc', pageSize: 1, page: 1, today: '2026-10-10' };
+  for (const [usageStatus, ids] of [[undefined, [3, 1]], ['discarded', [4, 2]]]) {
+    const pages = ids.map((_, index) => accountProxyPage(accounts, { ...options, usageStatus, page: index + 1 }));
+    assert.deepEqual(pages.flatMap(page => page.accounts.map(account => account.id)), ids);
+    assert.ok(pages.every(page => page.total === ids.length));
+  }
+  assert.deepEqual(accountProxyPage(accounts, { ...options, usageStatus: 'discarded', query: 'USER2', group: '1', paymentCard: '9', renewalStatus: 'soon' }).accounts.map(account => account.id), [2]);
+});
+
 test('付款卡筛选在 SOCKS5 排序分页前生效，并与分组、关键词和续费筛选组合', () => {
   const accounts = [1, 2, 3, 4].map(id => ({ id, label: '测试账号', email: `user${id}@test.local`, group_id: 1, payment_card_id: id < 3 ? 9 : null, renewal_date: '2026-10-10' }));
   const options = { environmentID: String, query: '', group: 'all', direction: 'asc', pageSize: 1, page: 1, today: '2026-10-10' };

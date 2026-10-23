@@ -138,7 +138,7 @@ export default function RechargeManager({ token, packagesOnly = false, quickAcco
         <label>账号<input aria-label="月订单账号" value={orderAccount?.email || quickAccount.email} readOnly /></label>
         <label>套餐<input aria-label="月订单套餐" value={selectedPackage ? `${formatPackageName(selectedPackage.name)} · ${selectedPackage.region} · ${formatCardUSD(selectedPackage.sale_usd_minor)} / ${selectedPackage.months}个月` : '请先设置账号产品选型'} readOnly /></label>
         {!accountsLoading && !quickReady && <p className="error" role="alert">请先在账号产品选型中选择已上架且价格可用的一个月套餐。</p>}
-        <p className="muted quick-order-period">续订日期：{quickStart} → {quickEnd}（记账成功后更新）</p>
+        <p className="muted quick-order-period">订单周期：{quickStart} → {quickEnd}。账号续订日期：{orderAccount?.renewal_date || '未设置'}，仅通过“设置日期”手动调整。</p>
       </> : <><label>账号<Select disabled={accountsLoading || busy} label="订单账号" value={draft.account_id || ''} onChange={v => field('account_id', v)} options={[{ value: '', label: '请选择账号' }, ...orderAccounts.map(a => ({ value: String(a.id), label: a.email }))]} /></label><label>套餐<Select label="订单套餐" value={draft.package_id || ''} onChange={v => field('package_id', v)} options={[{ value: '', label: '请选择上架套餐' }, ...packages.filter(p => p.enabled && p.price_ready !== false).map(p => ({ value: String(p.id), label: `${formatPackageName(p.name)} · ${formatCardUSD(p.sale_usd_minor)} / ${p.months}个月` }))]} /></label><label>订单备注<textarea name="notes" rows={2} maxLength={2000} /></label></>)}
 
       {['create', 'record'].includes(dialog.type) && <><label>付款卡（账号已绑定）<input aria-label="订单付款卡" value={boundCardText} readOnly />{!accountsLoading && orderAccount && !boundCardReady && <small className="danger">请先在账号管理中绑定可用的付款卡，再重新打开此窗口。</small>}</label>

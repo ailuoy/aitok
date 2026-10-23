@@ -112,7 +112,7 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 	if err = db.QueryRow(`SELECT (SELECT count(*) FROM recharge_orders),(SELECT count(*) FROM bank_card_ledger),(SELECT balance_usd_minor FROM bank_cards WHERE id=1)`).Scan(&orders, &ledger, &balance); err != nil || orders != 1 || ledger != 1 || balance != 80000 {
 		t.Fatal("交易号重复未整体回滚", orders, ledger, balance, err)
 	}
-	if err = db.QueryRow(`SELECT (SELECT count(*) FROM chatgpt_accounts WHERE verified_at IS NOT NULL),(SELECT count(*) FROM renewal_date_audit)`).Scan(&activated, &audits); err != nil || activated != 1 || audits != 1 {
+	if err = db.QueryRow(`SELECT (SELECT count(*) FROM chatgpt_accounts WHERE verified_at IS NOT NULL),(SELECT count(*) FROM renewal_date_audit)`).Scan(&activated, &audits); err != nil || activated != 1 || audits != 0 {
 		t.Fatal("交易号重复不能开通其他账号", activated, audits, err)
 	}
 	input["account_id"], input["request_key"] = 1, "unified-create-0001"
@@ -193,11 +193,11 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 		t.Fatal("订单和扣款重复或缺失", orders, ledger, balance, err)
 	}
 	var consistent int
-	err = db.QueryRow(`SELECT count(*) FROM recharge_orders o JOIN bank_card_ledger l ON l.order_id=o.id JOIN chatgpt_accounts a ON a.id=o.account_id WHERE o.fulfillment_status='completed' AND o.period_start=(l.created_at AT TIME ZONE 'Asia/Shanghai')::date AND o.period_end=(o.period_start+INTERVAL '1 month')::date AND l.period_start=o.period_start AND l.period_end=o.period_end AND o.verified_at=l.created_at AND a.verified_at=o.verified_at AND a.verified_plan='plus' AND a.subscription_package_id=o.package_id AND a.subscription_ends_at=o.period_end AND a.renewal_date=o.period_end`).Scan(&consistent)
+	err = db.QueryRow(`SELECT count(*) FROM recharge_orders o JOIN bank_card_ledger l ON l.order_id=o.id JOIN chatgpt_accounts a ON a.id=o.account_id WHERE o.fulfillment_status='completed' AND o.period_start=(l.created_at AT TIME ZONE 'Asia/Shanghai')::date AND o.period_end=(o.period_start+INTERVAL '1 month')::date AND l.period_start=o.period_start AND l.period_end=o.period_end AND o.verified_at=l.created_at AND a.verified_at=o.verified_at AND a.verified_plan='plus' AND a.subscription_package_id=o.package_id AND a.subscription_ends_at=o.period_end AND a.renewal_date IS NULL`).Scan(&consistent)
 	if err != nil || consistent != 3 {
 		t.Fatal("订单、流水和账号须按实际扣款时间同步开通", consistent, err)
 	}
-	if err = db.QueryRow(`SELECT count(*) FROM renewal_date_audit`).Scan(&audits); err != nil || audits != 3 {
+	if err = db.QueryRow(`SELECT count(*) FROM renewal_date_audit`).Scan(&audits); err != nil || audits != 0 {
 		t.Fatal("重复请求不能重复开通或写入续费审计", audits, err)
 	}
 	var wallets int

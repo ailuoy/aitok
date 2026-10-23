@@ -203,7 +203,6 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
               order.received_usd_minor=input.received_currency==='CNY'?Math.round(order.received_amount_minor/7):order.received_amount_minor;
               order.profit={usd_minor:order.received_usd_minor-order.sale_usd_minor,received_minor:order.received_amount_minor-(input.received_currency==='CNY'?order.sale_usd_minor*7:order.sale_usd_minor),rate_percent:((order.received_usd_minor-order.sale_usd_minor)/order.received_usd_minor*100).toFixed(2),cost_usd_minor:order.sale_usd_minor,estimated:true};
             }
-            if(input.quick_month) account.renewal_date = '2030-02-28';
             if(input.action==='record'){order.order_source=input.order_source || order.order_source || '';order.cost_usd_minor=order.sale_usd_minor;order.fulfillment_status='completed';if(order.profit)order.profit.estimated=false}
             if(input.action==='refund_note'){order.order_status='refunded';order.profit=null}
             if(input.action==='discard'){order.order_status='discarded';order.profit=null}
@@ -358,10 +357,13 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
         const matchesStatus=!status || (Number.isFinite(days) && (status==='safe' ? days>10 : status==='soon' ? days>=0 && days<=10 : days<0));
         const paymentCard=url.searchParams.get('payment_card_id');
         const matchesCard=!paymentCard || (paymentCard==='none' ? !account.payment_card_id : String(account.payment_card_id)===paymentCard);
-        const accountRows=matchesCard && matchesStatus && (!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
+        const usageStatus=url.searchParams.get('usage_status') || 'in_use';
+        const matchesUsage=row => !url.searchParams.has('paged') || !['admin','super_admin'].includes(user.role) || (row.usage_status || 'in_use') === usageStatus;
+        const matchesQuery=row => (row.label+' '+row.email).toLowerCase().includes((url.searchParams.get('q') || '').toLowerCase());
+        const accountRows=matchesUsage(account) && matchesQuery(account) && matchesCard && matchesStatus && (!group || (group==='none' ? !account.group_id : String(account.group_id)===group)) ? [account] : [];
         data = { accounts: accountRows, account, total:accountRows.length, page:1, page_size:20 };
         if (batchRows) {
-          const rows = batchRows.filter(row => row.email.includes(url.searchParams.get('q') || ''));
+          const rows = batchRows.filter(row => matchesUsage(row) && matchesQuery(row));
           data = { accounts: rows, total: rows.length, page: 1, page_size: 20 };
         }
       } else if (url.pathname === '/api/wallet') data = walletData;
@@ -585,26 +587,46 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate('document.querySelector("textarea[name=discard_reason]").value'), discardReason);
   accountSettingsFail = false;
   await click('确认废弃');
-  await wait('!document.querySelector(".account-status-dialog") && document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
+  await wait('!document.querySelector(".account-status-dialog") && !document.querySelector(".account-row")');
+  await click('废弃账号');
+  await wait('document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
   assert.equal(account.discard_reason, discardReason);
   assert.equal(await evaluate('document.querySelector(".account-discard-reason").textContent'), discardReason);
   assert.equal(await evaluate('Boolean(document.querySelector(".account-discard-reason script"))'), false);
   await cdp.send('Page.reload', {}, sessionId);
+  await wait('document.querySelector(".account-status-tabs button[aria-selected=true]")?.textContent === "使用中账号" && document.body.innerText.includes("暂无使用中账号")');
+  await click('废弃账号');
   await wait('document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
+  await click('SOCKS5');
+  await wait('document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
+  await fill('input[aria-label=搜索账号]', 'missing-account');
+  await wait('!document.querySelector(".account-row") && document.body.innerText.includes("没有匹配的账号")');
+  await fill('input[aria-label=搜索账号]', 'chat@example.com');
+  await wait('document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
+  await fill('input[aria-label=搜索账号]', '');
+  assert.ok(requests.some(value => { const url = new URL(value); return url.pathname === '/api/accounts/payment-cards' && url.searchParams.get('usage_status') === 'discarded'; }));
+  assert.equal(await evaluate('document.querySelector("input[aria-label=全选当前页账号]").disabled'), true);
+  await click('账号');
   await click('编辑废弃理由');
   await fill('textarea[name=discard_reason]', '已补充理由', 'HTMLTextAreaElement');
   await click('保存理由');
   await wait('!document.querySelector(".account-status-dialog") && document.querySelector(".account-discard-reason")?.textContent === "已补充理由"');
   await select(statusSelector, '使用中');
+  await wait('!document.querySelector(".account-row") && document.body.innerText.includes("暂无废弃账号")');
+  await click('使用中账号');
   await wait('document.querySelector(".account-usage-status")?.dataset.status === "in_use" && !document.querySelector(".account-usage-status button[role=combobox]").disabled');
   assert.equal(account.discard_reason, '已补充理由');
   assert.equal(await evaluate('Boolean(document.querySelector(".account-discard-reason"))'), false);
   await select(statusSelector, '废弃');
   await fill('textarea[name=discard_reason]', '', 'HTMLTextAreaElement');
   await click('确认废弃');
-  await wait('!document.querySelector(".account-status-dialog") && document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
+  await wait('!document.querySelector(".account-status-dialog") && !document.querySelector(".account-row")');
+  await click('废弃账号');
+  await wait('document.querySelector(".account-usage-status")?.dataset.status === "discarded"');
   assert.equal(account.discard_reason, '');
   await select(statusSelector, '使用中');
+  await wait('!document.querySelector(".account-row") && document.body.innerText.includes("暂无废弃账号")');
+  await click('使用中账号');
   await wait('document.querySelector(".account-usage-status")?.dataset.status === "in_use" && !document.querySelector(".account-usage-status button[role=combobox]").disabled');
   const productLabel = `PLUS · ${rechargePackages[0].name} · ${rechargePackages[0].region} · ${rechargePackages[0].months}个月`;
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll(".accounts-table th")).slice(2, 6).map(th => th.textContent.trim())'), ['累计消费 USD', '所属用户', '产品选型', '分组']);
@@ -1983,6 +2005,7 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate('document.querySelector("input[aria-label=订单付款卡]").value'), '运营测试卡 · •••• 4242');
   assert.equal(await evaluate(`document.querySelector('input[aria-label="扣款 USD"]').value`), '200.00');
   assert.ok(await evaluate('document.querySelector(".quick-order-period").textContent.includes("2030-01-31 → 2030-02-28")'));
+  assert.ok(await evaluate('document.querySelector(".quick-order-period").textContent.includes("账号续订日期：2030-01-31，仅通过“设置日期”手动调整")'));
   assert.equal(await evaluate('Boolean(document.querySelector("dialog textarea[name=notes]"))'), false);
   await fill('input[aria-label=实收金额]', '1680.00');
   await wait('Boolean(document.querySelector(".collection-preview"))');
@@ -2000,7 +2023,8 @@ test('账号导入、后台管理与本机打开页面桌面、移动端冒烟�
   assert.equal(await evaluate('document.querySelector("input[name=reference]").value'), 'quick-month-ui-reference');
   quickOrderFail = false;
   await click('确认录入并记账');
-  await wait('!document.querySelector("dialog") && document.querySelector(".account-row").innerText.includes("2030-02-28")');
+  await wait('!document.querySelector("dialog") && document.body.innerText.includes("月订单已创建") && document.querySelector(".account-row").innerText.includes("2030-01-31")');
+  assert.equal(account.renewal_date, '2030-01-31');
   const quickInput = operationWrites.at(-1);
   assert.equal(quickInput.request_key, failedQuickInput.request_key);
   assert.equal(quickInput.quick_month, true);

@@ -64,7 +64,10 @@ UPDATE users SET deleted_at=NOW(),updated_at=NOW() WHERE id=3;`); err != nil {
 	if err := db.QueryRow(`SELECT EXISTS(SELECT 1 FROM operation_events WHERE before_data::text LIKE '%账号暂时停用%' OR after_data::text LIKE '%账号暂时停用%')`).Scan(&leaked); err != nil || leaked {
 		t.Fatal("审计不得复制废弃理由正文", err)
 	}
-	for _, url := range []string{"/api/accounts", "/api/accounts?paged=1"} {
+	if page := call("GET", "/api/accounts?paged=1", nil, 1, 200); page["total"] != float64(0) {
+		t.Fatal("默认管理列表不应显示废弃账号", page)
+	}
+	for _, url := range []string{"/api/accounts", "/api/accounts?paged=1&usage_status=discarded"} {
 		admin := call("GET", url, nil, 1, 200)["accounts"].([]any)[0].(map[string]any)
 		if admin["usage_status"] != "discarded" || admin["discard_reason"] != reason {
 			t.Fatal("管理员列表缺少状态或理由", admin)
@@ -94,6 +97,12 @@ UPDATE users SET deleted_at=NOW(),updated_at=NOW() WHERE id=3;`); err != nil {
 	result = call("PATCH", path, map[string]any{"usage_status": "in_use"}, 1, 200)
 	if result["discard_reason"] != reason {
 		t.Fatal("恢复使用应保留最近废弃理由")
+	}
+	if page := call("GET", "/api/accounts?paged=1", nil, 1, 200); page["total"] != float64(1) {
+		t.Fatal("恢复使用后必须回到默认列表", page)
+	}
+	if page := call("GET", "/api/accounts?paged=1&usage_status=discarded", nil, 1, 200); page["total"] != float64(0) {
+		t.Fatal("恢复使用后必须移出废弃列表", page)
 	}
 	// 可不填写理由，也可在废弃后补充、修改或清空。
 	call("PATCH", path, map[string]any{"usage_status": "discarded", "discard_reason": ""}, 1, 200)

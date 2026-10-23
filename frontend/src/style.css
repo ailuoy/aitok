@@ -349,6 +349,7 @@ button,input,textarea{font-family:inherit}
 .data-table .account-product .custom-select{width:120px}
 .data-table .account-status-cell{min-width:150px;width:170px}
 .account-usage-status{display:grid;gap:5px}
+.account-status-tabs{margin:0 0 16px}
 .account-usage-status[data-status=discarded] .select-trigger{color:var(--danger)}
 .account-usage-status>.text-btn{justify-self:start;padding:0;font-size:11px}
 .account-discard-reason{margin:0;max-width:220px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted);font-size:11px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}

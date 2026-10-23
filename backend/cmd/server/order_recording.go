@@ -153,11 +153,8 @@ func recordOrderPosting(r *http.Request, tx *sql.Tx, user int64, o *RechargeOrde
 	if in.OrderSource != "" {
 		o.OrderSource = in.OrderSource
 	}
-	// 复用历史订阅字段保存开通结果，账号有效期与扣款同事务提交。
-	if _, err := tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET verified_plan=$2,verified_at=$3,subscription_ends_at=$4,renewal_date=$4,subscription_package_id=$5,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, o.AccountID, o.Package.Plan, postedAt, end, subscriptionPackageID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(r.Context(), `INSERT INTO renewal_date_audit(account_id,admin_id,previous_date,renewal_date) VALUES($1,$2,$3,$4)`, o.AccountID, user, previous, end); err != nil {
+	// 开通结果与扣款同事务提交；续订日期仅由管理员手动设置，记账不改写。
+	if _, err := tx.ExecContext(r.Context(), `UPDATE chatgpt_accounts SET verified_plan=$2,verified_at=$3,subscription_ends_at=$4,subscription_package_id=$5,updated_at=NOW() WHERE id=$1 AND deleted_at IS NULL`, o.AccountID, o.Package.Plan, postedAt, end, subscriptionPackageID); err != nil {
 		return err
 	}
 	o.VerifiedAt = &postedAt

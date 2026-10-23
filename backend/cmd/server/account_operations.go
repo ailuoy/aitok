@@ -41,7 +41,7 @@ func (s *Server) insertAccount(ctx context.Context, user int64, label, email, en
 	return a, err
 }
 
-// accountFilter 统一列表与付款卡预算的筛选范围，预算不受分页影响。
+// accountFilter 统一分页列表、导出与付款卡预算的筛选范围，预算不受分页影响。
 func accountFilter(r *http.Request, user int64, admin bool) (string, []any, error) {
 	if len([]rune(r.URL.Query().Get("q"))) > 200 {
 		return "", nil, fmt.Errorf("搜索关键词过长")
@@ -49,6 +49,10 @@ func accountFilter(r *http.Request, user int64, admin bool) (string, []any, erro
 	group := r.URL.Query().Get("group")
 	card := r.URL.Query().Get("payment_card_id")
 	renewalStatus := r.URL.Query().Get("renewal_status")
+	usageStatus := r.URL.Query().Get("usage_status")
+	if usageStatus != "" && usageStatus != "in_use" && usageStatus != "discarded" {
+		return "", nil, fmt.Errorf("账号使用状态无效")
+	}
 	if renewalStatus != "" && (renewalStatus != "safe" && renewalStatus != "soon" && renewalStatus != "overdue") {
 		return "", nil, fmt.Errorf("续费时间状态无效")
 	}
@@ -67,6 +71,14 @@ func accountFilter(r *http.Request, user int64, admin bool) (string, []any, erro
 		}
 	}
 	filter := ` FROM chatgpt_accounts a JOIN users u ON u.id=a.user_id AND u.deleted_at IS NULL LEFT JOIN account_groups g ON g.id=a.group_id AND g.deleted_at IS NULL LEFT JOIN bank_cards c ON c.id=a.payment_card_id AND c.deleted_at IS NULL LEFT JOIN addresses b ON b.id=a.billing_address_id AND b.deleted_at IS NULL WHERE a.deleted_at IS NULL AND (a.user_id=$1 OR $2) AND strpos(lower(a.label||' '||a.email),lower($3))>0 AND ($4::bigint=-1 OR COALESCE(a.group_id,0)=$4)`
+	// 使用状态属于管理筛选，普通用户仍按账号归属读取，不暴露管理标记。
+	if admin {
+		if usageStatus == "discarded" {
+			filter += ` AND COALESCE(to_jsonb(a)->>'usage_status','in_use')='discarded'`
+		} else {
+			filter += ` AND COALESCE(to_jsonb(a)->>'usage_status','in_use')<>'discarded'`
+		}
+	}
 	// 与前端倒计时一致，按北京时间自然日筛选，并复用于总数、分页、导出和付款卡续费预算。
 	const today = `(NOW() AT TIME ZONE 'Asia/Shanghai')::date`
 	switch renewalStatus {
