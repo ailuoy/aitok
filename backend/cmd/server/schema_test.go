@@ -195,6 +195,9 @@ INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,
 (2,9002,'closed-charge-1','subscription',-100,900,101,'closed@test.local','2030-01-01','2030-02-01','closed-charge-1'),
 (2,9002,'closed-charge-2','subscription',-100,800,102,'closed@test.local','2030-01-01','2030-02-01','closed-charge-2'),
 (2,9002,'closed-charge-3','subscription',-100,700,103,'closed@test.local','2030-01-01','2030-02-01','closed-charge-3');`
+	overlappingOrders := `INSERT INTO recharge_orders(order_no,user_id,account_id,account_email,package_id,package_snapshot,period_start,period_end,sale_usd_minor,request_key) VALUES
+('overlap-one',1,1,'overlap@test.local',1,'{}','2030-01-01','2030-02-01',100,'overlap-one'),
+('overlap-two',1,1,'overlap@test.local',1,'{}','2030-01-01','2030-02-01',100,'overlap-two');`
 	for _, scenario := range []struct {
 		name    string
 		scripts []string
@@ -202,6 +205,7 @@ INSERT INTO bank_card_ledger(card_id,actor_id,request_key,kind,amount_usd_minor,
 		{"截图旧版八表增量升级", []string{read(files[0]), read(files[1]), read(files[2]), legacyUpgrade}},
 		{"截图旧版八表增量重复升级", []string{read(files[0]), read(files[1]), read(files[2]), legacyUpgrade, legacyUpgrade}},
 		{"退款废弃后同周期重建并重复升级", []string{snapshot, closedOrders, release, release}},
+		{"正常订单周期重叠后重复升级", []string{snapshot, overlappingOrders, release, release}},
 		{"人民币汇率历史后重复升级", []string{snapshot, `INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at) VALUES('PHP','USD',0.01589,'test',NOW()),('PHP','CNY',0.1067,'test',NOW());`, release, release}},
 		{"多周期与冲正历史后重复升级", []string{snapshot, multiCycleHistory, release, release}},
 		{"编号迁移", []string{chain.String()}},

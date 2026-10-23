@@ -333,11 +333,11 @@ CREATE TABLE IF NOT EXISTS recharge_orders (
     OR (received_currency IN ('CNY','USD') AND received_amount_minor>0 AND received_usd_minor>0 AND received_exchange_rate IS NOT NULL AND jsonb_typeof(received_exchange_rate)='object' AND received_at IS NOT NULL)
   )
 );
-CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_cycle_unique ON recharge_orders(user_id,account_email,period_start,period_end) WHERE order_status='active' AND payment_status<>'refunded' AND fulfillment_status<>'cancelled';
+CREATE INDEX IF NOT EXISTS recharge_orders_cycle_idx ON recharge_orders(user_id,account_email,period_start,period_end) WHERE order_status='active' AND payment_status<>'refunded' AND fulfillment_status<>'cancelled';
 CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_payment_reference_unique ON recharge_orders(payment_reference) WHERE payment_reference<>'';
 CREATE UNIQUE INDEX IF NOT EXISTS recharge_orders_purchase_reference_unique ON recharge_orders(purchase_reference) WHERE purchase_reference<>'';
 CREATE INDEX IF NOT EXISTS recharge_orders_owner_idx ON recharge_orders(user_id,id DESC);
-COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存订单来源、下单 SKU 和汇率快照、CNY/USD 实收及收款汇率快照；来源可自定义并从未删除订单汇总为下拉选项；毛利按实收减成本计算，历史未知实收不推算；退款或废弃释放周期且禁止继续操作，金额均为对应币种的分。';
+COMMENT ON TABLE recharge_orders IS 'GPT 充值订单：保存订单来源、下单 SKU 和汇率快照、CNY/USD 实收及收款汇率快照；录入及补录允许独立订单周期重叠，请求键、订单扣款和交易号继续防重；来源从未删除订单汇总，毛利按实收减成本计算，历史未知实收不推算；退款或废弃后禁止继续操作，金额均为对应币种的分。';
 
 CREATE TABLE IF NOT EXISTS operation_events (
   id BIGSERIAL PRIMARY KEY,

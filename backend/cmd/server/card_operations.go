@@ -83,8 +83,8 @@ func postCardEntry(r *http.Request, tx *sql.Tx, actor, cardID int64, p cardPosti
 			return err
 		}
 		var overlaps bool
-		// 新订单可接替已结束订单的周期，原支出和交易号仍保留；无订单的直接扣款不放宽防重。
-		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM bank_card_ledger l WHERE kind='subscription' AND account_email=$1 AND period_start<$3::date AND period_end>$2::date AND reversed_at IS NULL AND NOT ($4 AND EXISTS(SELECT 1 FROM recharge_orders o WHERE o.id=l.order_id AND o.order_status IN ('refunded','discarded'))))`, p.AccountEmail, p.PeriodStart, p.PeriodEnd, p.OrderID != nil).Scan(&overlaps)
+		// 独立订单允许周期重叠，由订单和交易号唯一约束防重；无订单流水仍严格按周期防重。
+		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM bank_card_ledger l WHERE kind='subscription' AND account_email=$1 AND period_start<$3::date AND period_end>$2::date AND reversed_at IS NULL AND NOT ($4 AND l.order_id IS NOT NULL))`, p.AccountEmail, p.PeriodStart, p.PeriodEnd, p.OrderID != nil).Scan(&overlaps)
 		if err != nil {
 			return err
 		}

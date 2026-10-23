@@ -337,12 +337,12 @@ func (s *Server) createRechargeOrder(w http.ResponseWriter, r *http.Request, use
 		operationError(w, err)
 		return
 	}
-	// 同一邮箱可能来自旧版本重复导入，按业务身份串行检查重叠周期。
+	// 同一邮箱可能来自旧版本重复导入，继续按业务身份串行处理订单。
 	_, err = tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('recharge-cycle'),hashtext($1))`, strconv.FormatInt(owner, 10)+":"+email)
 	end := addMonthsClamped(start, pkg.Months)
 	var overlaps bool
-	if err == nil {
-		// 防重读取完整历史，不能通过软删除绕开仍有效的订单。
+	if err == nil && !recording {
+		// 旧下单入口仍按周期防重；录入实际交易允许独立订单的周期重叠。
 		err = tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM recharge_orders WHERE user_id=$1 AND account_email=$2 AND order_status='active' AND payment_status<>'refunded' AND fulfillment_status<>'cancelled' AND period_start<$4 AND period_end>$3)`, owner, email, start, end).Scan(&overlaps)
 	}
 	if err != nil {

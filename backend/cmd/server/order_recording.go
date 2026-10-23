@@ -134,14 +134,7 @@ func recordOrderPosting(r *http.Request, tx *sql.Tx, user int64, o *RechargeOrde
 	if _, err := tx.ExecContext(r.Context(), `SELECT pg_advisory_xact_lock(hashtext('recharge-cycle'),hashtext($1))`, strconv.FormatInt(o.UserID, 10)+":"+o.AccountEmail); err != nil {
 		return err
 	}
-	var overlaps bool
-	// 保留完整历史防重语义，排除本单，防止补录改期覆盖其他有效订单。
-	if err := tx.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM recharge_orders WHERE user_id=$1 AND account_email=$2 AND id<>$3 AND order_status='active' AND payment_status<>'refunded' AND fulfillment_status<>'cancelled' AND period_start<$5::date AND period_end>$4::date)`, o.UserID, o.AccountEmail, o.ID, start, end).Scan(&overlaps); err != nil {
-		return err
-	}
-	if overlaps {
-		return errors.New("扣款日期与已有订单周期重叠")
-	}
+	// 实际交易按订单和交易号防重，录入及补录允许与其他订单周期重叠。
 	o.PeriodStart, o.PeriodEnd = start, end
 	if err := postCardEntry(r, tx, user, in.CardID, cardPosting{Kind: "subscription", Amount: -o.SaleUSDMinor, OrderID: &o.ID, AccountID: &o.AccountID, AccountEmail: o.AccountEmail, AccountLabel: o.AccountEmail, PeriodStart: o.PeriodStart, PeriodEnd: o.PeriodEnd, Currency: o.Package.Currency, OriginalAmount: o.Package.OriginalAmountMinor, Reference: strings.TrimSpace(in.Reference), Notes: evidenceSummary(in.Evidence), Key: key}, true); err != nil {
 		return err

@@ -176,8 +176,8 @@ func TestPurchaseReversalAndReplacementOrder(t *testing.T) {
 	purchase = strings.ReplaceAll(purchase, "original-purchase", "corrected-purchase")
 	call("/api/orders/1", purchase, 200)
 	purchase = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(purchase, `"version":1`, `"version":0`), "correct-purchase-key", "next-purchase-key"), "corrected-purchase", "next-purchase")
-	call("/api/orders/2", purchase, 409)
-	// 两笔今日扣款占同一周期，原订单废弃后才允许新订单扣款开通。
+	// 不同订单的实际交易即使同周期也可分别扣款；废弃原单后重放仍不能重复扣款。
+	call("/api/orders/2", purchase, 200)
 	call("/api/orders/1", `{"action":"discard","reason":"重新开通","version":2,"request_key":"discard-corrected-order"}`, 200)
 	call("/api/orders/2", purchase, 200)
 	var balance, sum int64

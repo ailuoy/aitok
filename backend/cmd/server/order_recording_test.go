@@ -141,10 +141,6 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 		}
 	}
 	call("POST", op, 1, map[string]any{"action": "verify", "success": true, "plan": "plus", "period_end": "2030-02-01", "evidence": "旧核验请求", "request_key": "verify-without-receipt", "version": 0}, 409)
-	input["request_key"] = "overlapping-new-record"
-	input["reference"] = "overlapping-new-payment"
-	input["period_start"] = "2099-01-01"
-	call("POST", "/api/orders/record", 1, input, 409)
 	quote := call("GET", "/api/orders/collection-quote?package_id=1&currency=CNY&amount=1680.00", 1, nil, 200)
 	delete(input, "period_start")
 	input["account_id"] = 2
@@ -179,12 +175,14 @@ INSERT INTO exchange_rates(base_currency,quote_currency,rate,source,effective_at
 		t.Fatal("补录不能指定非绑定卡", failed)
 	}
 	delete(record, "card_id")
-	// 旧订单补录改为今日生效时，也必须重新检查订单周期，不能覆盖未扣款的有效订单。
+	// 补录允许与未扣款订单周期重叠，保留该订单，不要求先退款或废弃。
 	blocker := call("POST", "/api/orders", 1, map[string]any{"account_id": 3, "package_id": 1, "period_start": order["period_start"], "request_key": "legacy-current-blocker"}, 201)
-	call("POST", thirdPath, 1, record, 409)
-	call("POST", fmt.Sprintf("/api/orders/%.0f", blocker["id"]), 1, map[string]any{"action": "discard", "reason": "重复订单", "request_key": "discard-current-blocker", "version": 0}, 200)
 	call("POST", thirdPath, 1, record, 200)
 	call("POST", thirdPath, 1, record, 200)
+	unchanged := call("GET", fmt.Sprintf("/api/orders/%.0f", blocker["id"]), 1, nil, 200)["order"].(map[string]any)
+	if unchanged["order_status"] != "active" || unchanged["cost_usd_minor"] != float64(0) {
+		t.Fatal("补录不能修改周期重叠的其他订单", unchanged)
+	}
 	order = call("GET", thirdPath, 1, nil, 200)["order"].(map[string]any)
 	if order["received_usd_minor"] != float64(25000) || order["payment_reference"] != "legacy-receipt" {
 		t.Fatal("补录不应覆盖原收款")

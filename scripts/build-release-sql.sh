@@ -33,7 +33,9 @@ for source_file in "${sources[@]}"; do
   # 合并现有迁移的事务边界，避免中途 COMMIT 导致部分结构已上线。
   # 003/004 的旧全量唯一索引已由 012 的活跃记录索引替代。
   # 重放时不能先重建旧索引，否则软删除后允许的同名记录会导致升级失败。
+  # 036 允许独立订单周期重叠，019 的旧周期唯一索引也不能在重放时重建。
   sed '/^[[:space:]]*BEGIN;[[:space:]]*$/d; /^[[:space:]]*COMMIT;[[:space:]]*$/d' "$source_file" | awk '
+    /^CREATE UNIQUE INDEX (IF NOT EXISTS )?recharge_orders_cycle_unique([[:space:]]|$)/ { obsolete = 1 }
     /^CREATE UNIQUE INDEX IF NOT EXISTS (addresses_location_unique|account_groups_user_name_unique|bank_card_ledger_subscription_idx|recharge_orders_cycle_unique|bank_card_ledger_cycle_unique)([[:space:]]|$)/ { obsolete = 1 }
     obsolete { if ($0 ~ /;[[:space:]]*$/) obsolete = 0; next }
     { print }
